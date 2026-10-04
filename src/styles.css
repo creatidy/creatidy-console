@@ -1,0 +1,62 @@
+:root {
+  font-family: system-ui, sans-serif;
+  color: #162f46;
+  background: #edf3f8;
+  font-synthesis: none;
+  line-height: 1.6;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 16rem;
+}
+
+main {
+  max-width: 48rem;
+  margin: clamp(2rem, 10vh, 7rem) auto;
+  padding: clamp(1.25rem, 5vw, 3rem);
+  border-top: 0.4rem solid #225c86;
+}
+
+.eyebrow {
+  color: #36576d;
+  font-family: ui-monospace, monospace;
+  font-size: 0.875rem;
+  letter-spacing: 0.04em;
+}
+
+h1 {
+  margin: 0.5rem 0 1.5rem;
+  max-width: 16ch;
+  font-size: clamp(2rem, 7vw, 3.75rem);
+  font-weight: 650;
+  line-height: 1.1;
+  letter-spacing: -0.035em;
+}
+
+p {
+  max-width: 60ch;
+  overflow-wrap: anywhere;
+}
+
+.scope {
+  font-size: 1.125rem;
+}
+
+a {
+  color: #154f7c;
+  text-underline-offset: 0.2em;
+}
+
+a:hover {
+  text-decoration-thickness: 0.15em;
+}
+
+a:focus-visible {
+  outline: 0.15rem solid #154f7c;
+  outline-offset: 0.25rem;
+}
