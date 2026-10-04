@@ -28,10 +28,8 @@ owner-provided metadata, not separately verified content. The self-contained
 owner mandate supplies the requirements used here. English prose is authored for
 Console; the source documents are not copied wholesale.
 
-The earlier name `creatidy-router` was a typo for Scarcity Router. Kernel
-remains Kernel; no fifth product is introduced. Source implementation does not
-override accepted intent: divergences are recorded in [contracts](contracts.md)
-and tracked in [roadmap](roadmap.md).
+Source implementation does not override accepted intent: divergences are
+recorded in [contracts](contracts.md) and tracked in [roadmap](roadmap.md).
 
 ## Ownership and Flows
 

@@ -68,7 +68,7 @@ requirements.
 
 | Requirement group                                                                                          | Home and present evidence / actual work                                                           |
 | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| 1: mission/name, English, four decision categories, source/typo clarification                              | [Product](product.md), source checksum verified; #1                                               |
+| 1: mission/name, English, four decision categories, source provenance and product terminology              | [Product](product.md), source checksum verified; #1                                               |
 | 2: canonical/mirror/public Apache identity, minimal seed, develop/PR, no duplicate/private copy            | README/LICENSE/NOTICE/[Contributing](../CONTRIBUTING.md); actual seed and existing mirror; #1/#14 |
 | 2/10/13: locked versions/help/check/static/tests/docs/secrets/CI/artifact, finite native review            | Contributing/[Decisions](decisions.md); delivered tooling/scaffold only; #1/#12/#14               |
 | 3: ownership/control-inference-knowledge flow, public dependencies/no private-onprem requirement           | Product/[Contracts](contracts.md); #2-#7/#11, producer Gxx links above                            |
