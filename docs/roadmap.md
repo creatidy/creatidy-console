@@ -114,3 +114,11 @@ Implementation can progress behind stable contracts, but evidence gates are not
 removed by parallel work. Numeric freshness/performance/client bounds belong to
 producer policy or an explicit measured proposal, never invented bootstrap
 limits.
+
+Console #2's bounded [read/auth inventory](contracts.md) concludes with exact
+missing producer contracts, not an approved live topology. Completion of that
+design exit does not satisfy the supported-read/auth prerequisite for downstream
+issues. Kernel #57, Router #183 and MI #13/#16 still need their actual contract
+and conformance evidence; Router #140's current `wontfix` disposition is not
+implementation proof. Keep those gates until authenticated reads are evidenced,
+without opening an invented client/proxy or treating issue closure as support.
