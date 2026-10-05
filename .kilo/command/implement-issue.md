@@ -17,16 +17,25 @@ autonomous selection itself. Resolve/fetch the actual issue via Forgejo MCP
 before planning/editing. Confirm its goal, scope, acceptance and constraints;
 seek only genuine decisions, not routine reversible choices.
 
+Apply `.kilo/rules/30-implementation-discipline.md` before returning a blocker:
+Class A engineering/execution failures require bounded technical
+self-remediation; Class B genuine owner commitments require the documented
+decision contract. Record diagnosis, finite budget, changed execution condition
+and result in the excluded ledger. Ordinary safe isolation/tool repair does not
+need owner input.
+
 1. Verify canonical remote/access and inspect local status/files/branches.
    Require a clean safe normal checkout. Never stash/reset unrelated changes; if
-   they prevent safe switching, stop with a precise blocker. Fetch current
-   canonical develop and record its exact SHA; switch/update local develop
-   safely, with no guessed reconciliation of divergence.
+   they prevent safe switching, first attempt safe temporary isolation under the
+   shared contract. Fetch current canonical develop and record its exact SHA;
+   switch/update local develop safely, with no guessed reconciliation of
+   divergence.
 2. Create an ordinary `issue-<number>-<short-topic>` branch from that exact SHA
-   in the SAME checkout. For an existing current authorized issue PR, continue
-   its fetched branch/HEAD under finish-pr's safe checkout rules rather than
-   creating a replacement. Do not use git worktree or alternate checkout
-   management.
+   in the primary implementation checkout. For an existing current authorized
+   issue PR, continue its fetched branch/HEAD under finish-pr's safe checkout
+   rules rather than creating a replacement. Temporary worktree/checkout
+   isolation may remediate execution problems; preserve one mutator, the same
+   branch/PR and ledger.
 3. Implement only accepted scope; use reuse-first and product-boundary rules.
    Track short local progress when needed, excluded through .git/info/exclude.
 4. Run focused checks and final `make check`. Inspect intended diff/status/full

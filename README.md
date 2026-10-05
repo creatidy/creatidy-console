@@ -35,9 +35,10 @@ Repository-local commands: `/implement-issue`, `/review-pr`, `/finish-pr` and
 read-only; finish remediates but never merges. Only an explicit owner `/loop`
 invocation authorizes deterministic canonical issue selection and exact-approved
 Forgejo PR integration into `develop`, verified acceptance/issue closure, then
-selection again. It uses one normal checkout and a persistent excluded review
-ledger, not a second controller or Scarcity Router operation. Main, promotion,
-release and deployment remain outside this authority. See
+selection again. It uses one primary implementation checkout and a persistent
+excluded review ledger, with bounded temporary isolation/technical remediation
+before owner escalation, not a second controller or Scarcity Router operation.
+Main, promotion, release and deployment remain outside this authority. See
 [contribution guidance](CONTRIBUTING.md) and [agent entry point](AGENTS.md).
 
 ## Authoritative Context

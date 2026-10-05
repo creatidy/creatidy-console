@@ -20,8 +20,15 @@
   invocation ID where applicable, issue/PR/branch, frozen base/HEAD, ordinal
   reserved BEFORE dispatch, result, commits/checks and terminal state. Recover
   it across reentry or model/session changes; never reset a counter or erase
-  earlier delivery history. Missing/ambiguous recovery is BLOCKED. This bounds
-  operation, not issue authority:
+  earlier delivery history. Missing/ambiguous recovery after bounded durable
+  recovery is BLOCKED. This bounds operation, not issue authority:
   eligibility/priority/dependencies/acceptance/current state come from refreshed
   canonical evidence, never from the ledger. Do not introduce a controller
   database.
+- In the same excluded ledger record Class A/B blocker classification,
+  diagnosis, finite technical attempt/time limits, paths considered, changed
+  condition and result for every remediation. Preserve failed/COMMENT ordinals
+  and technical attempts across reentry and temporary execution environments.
+  Before decision/blocker escalation record the complete contracts from
+  `30-implementation-discipline.md`; never record secret values. Reviewers do
+  not read the ledger or previous findings.

@@ -25,10 +25,12 @@
   registration is authorized merely to keep `/loop` running.
 - Verify the canonical remote, fetch current `develop`, record its exact SHA and
   inspect files/status/branches. Demonstrate access by successful operations.
-  Use one normal checkout, never `git worktree` or alternate checkout management
-  and only one mutator at a time. Preserve unrelated changes/branches; never
-  stash/reset others' work. If unrelated changes prevent safe switching, stop
-  with a precise blocker.
+  Use one primary implementation checkout and only one mutator at a time.
+  Temporary worktree/checkout isolation is allowed for technical remediation
+  under `30-implementation-discipline.md`; preserve the same branch/PR/ledger.
+  Preserve unrelated changes/branches; never stash/reset others' work. If
+  unrelated changes prevent safe switching, diagnose safe isolation before
+  reporting an exhausted blocker.
 - Create an ordinary branch named `issue-<number>-<short-topic>` from that
   recorded fetched SHA in this checkout. Use normal Git transport. Never
   implement directly on `develop`; never target, modify, merge into or promote
@@ -54,8 +56,9 @@
   `/loop` may continue through its separate merge/completion gates. At the bound
   return STOP_REVISE with new defects versus incomplete fixes and recurring
   architectural/semantic patterns. Material scope/architecture decisions yield
-  OWNER_DECISION_NEEDED; unavailable tools yield a precise finite BLOCKED. In
-  `/loop` map OWNER_DECISION_NEEDED to STOP_AND_ASK; stop, never skip selected
-  work.
+  OWNER_DECISION_NEEDED; unavailable tools require bounded technical
+  self-remediation before a precise finite BLOCKED. Classify A/B and fulfill the
+  shared decision/blocker ledger contracts before owner escalation. In `/loop`
+  map OWNER_DECISION_NEEDED to STOP_AND_ASK; stop, never skip selected work.
 
 <!-- Adapted from Model Intelligence 013cbb43e11d7f698d359db5a456d26d8075e34e: Console repository identity; see NOTICE. -->

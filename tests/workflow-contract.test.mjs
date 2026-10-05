@@ -92,23 +92,34 @@ describe("ported Model Intelligence workflow contract", () => {
       expect(loop).toContain(requirement);
   });
 
-  test("independent review is reused and its adapted definition frozen", () => {
-    // Git blob pins for the reviewed Console identity/Node-validation adaptation.
-    // Upstream pins remain documented by the original reference test and NOTICE.
-    for (const [path, expected] of [
-      [
-        ".kilo/agents/pr-reviewer.md",
-        "94b6142201dd5907420b5d6052af71fb43b9e136",
-      ],
-      [
-        ".kilo/command/review-pr.md",
-        "d3558e5e7df4cb90d72d612b39fa6e597d788f21",
-      ],
-    ]) {
-      const data = readFileSync(resolve(root, path));
-      const blob = Buffer.concat([Buffer.from(`blob ${data.length}\0`), data]);
-      expect(createHash("sha1").update(blob).digest("hex")).toBe(expected);
-    }
+  test("independent review retains frozen permissions/model and JSON schema", () => {
+    const raw = readFileSync(
+      resolve(root, ".kilo/agents/pr-reviewer.md"),
+      "utf8",
+    );
+    // Freeze security/model configuration, not prose that this mandate updates.
+    expect(createHash("sha256").update(raw.split("---")[1]).digest("hex")).toBe(
+      "2fe21aebef14cab6dfc709822b9d3a356fb01eceb3923758ef7d892bae919a3b",
+    );
+    const schema = JSON.parse(raw.split("```json\n")[1].split("```")[0]);
+    expect(Object.keys(schema)).toEqual([
+      "reviewed_head",
+      "reviewed_base",
+      "verdict",
+      "findings",
+      "limitations",
+      "checks_run",
+    ]);
+    expect(Object.keys(schema.findings[0])).toEqual([
+      "severity",
+      "file",
+      "line_start",
+      "line_end",
+      "evidence",
+      "consequence",
+      "required_remediation",
+    ]);
+    expect(schema.verdict).toBe("APPROVE | REQUEST_CHANGES | COMMENT");
     const loop = text(".kilo/command/loop.md");
     expect(loop).toContain(
       "Use `.kilo/command/finish-pr.md` in this SAME primary context",
@@ -140,7 +151,7 @@ describe("ported Model Intelligence workflow contract", () => {
       "INCLUDING the initial review, COMMENT, invalidated reviews and corrected retries",
       "Before EVERY task dispatch reserve/persist the next review ordinal",
       "Reinvoking `/finish-pr`, changing phase, reviewer task, model or session MUST reuse the same delivery counter",
-      "prior dispatch/count recovery is ambiguous or unavailable, BLOCKED",
+      "attempt bounded recovery from durable evidence; unresolved recovery is BLOCKED",
       "Never dispatch review 11",
       "without patches that cannot receive a fresh review",
       "not a target: stop as soon as an owner decision is clearly required",
@@ -159,7 +170,7 @@ describe("ported Model Intelligence workflow contract", () => {
     for (const requirement of [
       "ordinal reserved BEFORE dispatch",
       "never reset a counter or erase earlier delivery history",
-      "Missing/ambiguous recovery is BLOCKED",
+      "Missing/ambiguous recovery after bounded durable recovery is BLOCKED",
       "canonical evidence, never from the ledger",
     ])
       expect(progress).toContain(requirement);
@@ -239,7 +250,7 @@ describe("ported Model Intelligence workflow contract", () => {
       "verify actual closed state",
       "Already-merged stale-open issues require the same ancestry/acceptance evidence",
       "Closure/reporting failure is BLOCKED",
-      "return this SAME checkout to current develop",
+      "return this SAME primary checkout to current develop",
       "only fast-forward a nondivergent local develop",
       "Then SELECT again with a fresh canonical queue",
     ])
@@ -263,9 +274,9 @@ describe("ported Model Intelligence workflow contract", () => {
       "incompatible acceptance",
       "material scope expansion",
       "explicitly owner-reserved decisions",
-      "exactly one normal checkout",
+      "exactly one primary implementation checkout",
       "Only one context may mutate it at a time",
-      "No git worktree, alternate checkouts, stash/reset of unrelated owner work",
+      "No stash/reset of unrelated owner work",
       "second controller",
       "Do not use Scarcity Router for model selection, execution, orchestration, telemetry or operation",
       "No mutation outside Creatidy/creatidy-console",
@@ -275,6 +286,106 @@ describe("ported Model Intelligence workflow contract", () => {
       "Do not create speculative issues",
     ])
       expect(loop).toContain(requirement);
+  });
+
+  test("all command entry points apply bounded technical self-remediation", () => {
+    for (const path of [
+      ".kilo/command/loop.md",
+      ".kilo/command/implement-issue.md",
+      ".kilo/command/finish-pr.md",
+      ".kilo/command/review-pr.md",
+      ".kilo/agents/pr-reviewer.md",
+      "AGENTS.md",
+    ]) {
+      expect(text(path)).toContain("30-implementation-discipline.md");
+      expect(text(path)).not.toMatch(
+        /No git worktree|Do not use git worktree|one diagnosed corrected retry|unchanged .*pr-reviewer/u,
+      );
+    }
+    const shared = text(".kilo/rules/30-implementation-discipline.md");
+    for (const requirement of [
+      "A blocker is not automatically an owner decision",
+      "Class A, engineering/execution",
+      "Class B, genuine owner decision",
+      "at most three technical remediation attempts per distinct obstacle across reentry",
+      "finite attempt/time limit",
+      "do not rename the same obstacle to reset its budget",
+      "every dispatched whole-PR review, including failed/COMMENT attempts, consumes the next ordinal",
+      "same relevant inputs and environment",
+      "Record the changed hypothesis or execution condition before each attempt",
+      "An ephemeral Docker container is an execution/isolation mechanism, not architectural adoption",
+      "not Docker automatically",
+      "No new persistent service or product dependency",
+      "temporary worktree/checkout",
+      "mount the repository read-only",
+      "only required paths",
+      "No privileged mode, Docker socket",
+      "existing locked/approved development mechanism",
+      "the same branch/PR/ledger",
+      "no parallel writers or second controller",
+    ])
+      expect(shared).toContain(requirement);
+  });
+
+  test("secret-safe inheritance and independent public evidence are mandatory", () => {
+    const shared = text(".kilo/rules/30-implementation-discipline.md");
+    for (const requirement of [
+      "inherit synthetic test values, not the owner's ambient credentials",
+      "allowlisted explicit environment",
+      "sanitizing HOME alone is insufficient",
+      "synthetic HOME, cache and temporary directories",
+      "Never mount SSH, cloud, provider, model, Forge, browser",
+      "Never copy secrets into images or print environment values",
+      "record names or categories instead",
+      "Do not silently broaden network, repository or secret access",
+      "record the specific evidence gap",
+      "credentials are actually required for the selected acceptance",
+      "first try an alternative available read path, then isolated fetch/clone of the exact public revision",
+      "verify specific material claims and preserve pin/provenance",
+      "An implementer's report is not independent verification",
+      "neither an implementation finding nor an owner choice",
+    ])
+      expect(shared).toContain(requirement);
+    const reviewer = text(".kilo/agents/pr-reviewer.md");
+    expect(reviewer).toContain("without exceeding this allowlist");
+    expect(reviewer).toContain(
+      "you do not gain Docker or arbitrary execution permission",
+    );
+    expect(reviewer).toContain(
+      "implementer research is not independent evidence",
+    );
+  });
+
+  test("failover preserves ordinals and escalation requires durable classification", () => {
+    const shared = text(".kilo/rules/30-implementation-discipline.md");
+    for (const requirement of [
+      "review finding",
+      "review infrastructure failure",
+      "reviewer disagreement/uncertainty",
+      "Automatically use an available authorized independent path within both budgets",
+      "No parent self-review, resumed reviewer, silent model fallback or permissions expansion",
+      "never previous findings, implementer reasoning or a desired verdict",
+      "the exact unresolved decision",
+      "why it is Class B rather than engineering",
+      "reasonable autonomous paths considered",
+      "why they cannot resolve it without changing authority",
+      "the smallest set of materially distinct owner choices",
+      "Do not fabricate alternatives",
+      "BLOCKED requires no authorized technical remediation path remaining",
+      "unchangeable external condition with no authorized workaround",
+      "External conditions need a factual report, not an artificial question",
+      "never issue review 11",
+    ])
+      expect(shared).toContain(requirement);
+    expect(text(".kilo/command/finish-pr.md")).toContain(
+      "Keep failed/COMMENT ordinals",
+    );
+    expect(text(".kilo/command/review-pr.md")).toContain(
+      "reserve/persist the next ordinal before every whole-PR dispatch",
+    );
+    expect(text(".kilo/rules/40-local-search.md")).toContain(
+      "Preserve failed/COMMENT ordinals and technical attempts across reentry",
+    );
   });
 });
 
