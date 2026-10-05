@@ -12,9 +12,9 @@ public mirror, not a second development workflow.
 
 Repository foundation only: English product/architecture context, registered
 integration backlog, development tooling and a non-operational web scaffold.
-There are no producer connections, live task views, commands, notifications or
-product installation guarantees. The scaffold does not simulate healthy
-resources.
+There are no producer connections, live task views, product commands,
+notifications or product installation guarantees. The scaffold does not simulate
+healthy resources.
 
 Console presents producer-owned facts and delivers authorized commands to their
 owners. It is not a scheduler, harness, inference gateway, model catalog, shared
@@ -29,7 +29,16 @@ produces a local static artifact, not a production deployment. See
 
 `develop` is the integration/default branch. Normal work uses one selected
 issue, one focused branch and one independently reviewed PR into `develop`.
-Merge, promotion, release and deployment remain owner-controlled.
+
+Repository-local commands: `/implement-issue`, `/review-pr`, `/finish-pr` and
+`/loop`. Standalone implementation requires owner issue selection; review is
+read-only; finish remediates but never merges. Only an explicit owner `/loop`
+invocation authorizes deterministic canonical issue selection and exact-approved
+Forgejo PR integration into `develop`, verified acceptance/issue closure, then
+selection again. It uses one normal checkout and a persistent excluded review
+ledger, not a second controller or Scarcity Router operation. Main, promotion,
+release and deployment remain outside this authority. See
+[contribution guidance](CONTRIBUTING.md) and [agent entry point](AGENTS.md).
 
 ## Authoritative Context
 
@@ -48,6 +57,10 @@ Merge, promotion, release and deployment remain owner-controlled.
 holds delivery/review evidence. GitHub issues are disabled to avoid a parallel
 backlog. Source guidance is host-neutral; canonical issue and PR creation remain
 usable.
+
+[Workflow migration #16](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/16)
+records the owner-authorized development command migration, not Console runtime
+or producer integration functionality.
 
 Licensed under Apache-2.0. See [LICENSE](LICENSE), [NOTICE](NOTICE) and the
 [reuse record](docs/decisions.md). No proprietary DemandTrace code/assets are
