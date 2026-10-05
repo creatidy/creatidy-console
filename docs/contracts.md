@@ -11,7 +11,16 @@ These are verified source gaps, not newly delivered Console functionality.
 | Router historical source inventory is not live connection; static admin resource views omit derived resources; report generation time is not observation freshness | P2 before resource view: [Router #140](https://forgejo.creatidy.com/BioMedical-IT/scarcity-router/issues/140) + [Console #5](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/5); close with honest producer facts and display conformance                     |
 | No verified delegated Console read/command principal, public replay/history contract or unified correlation across products                                        | P1 design: Kernel #57, Router #183, [MI #16](https://forgejo.creatidy.com/Creatidy/model-intelligence/issues/16), Console #2/#3/#7; close with independently supported owner contracts, not a guessed common schema/proxy                                                   |
 | MI synthetic proof is now integrated, but no real publication/operational feed; projection deltas do not reconstruct causes                                        | P2 before knowledge view: [MI #13](https://forgejo.creatidy.com/Creatidy/model-intelligence/issues/13)/#16 + [Console #6](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/6); close with actual versioned evidence cut and producer-consumer receipt          |
-| No branch-protection rules observed and no runner containment or private security intake attested                                                                  | P1 before operational delivery: [Console #14](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/14); close with repository-scoped owner settings/runner/security evidence, not YAML claims                                                                      |
+
+The bootstrap's branch-protection/runner observations are historical, not an
+integration risk gate. Console #14 is closed **NOT_REQUIRED / owner-resolved**
+under the
+[owner decision](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/14#issuecomment-14723).
+Administrative inspection is not a development, integration or operational
+delivery prerequisite. See [contribution guidance](../CONTRIBUTING.md) for the
+owner/operations boundary and new-explicit-owner-task requirement; YAML/CI still
+does not prove infrastructure security. Actual producer/browser gates below
+remain required.
 
 ## Revision Inventory
 

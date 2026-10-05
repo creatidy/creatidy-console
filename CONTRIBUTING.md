@@ -88,11 +88,24 @@ verified immutable official action revisions; no GitHub PR CI, provider
 credentials, publication or privileged deployment step is configured.
 
 Repository YAML does not prove runner isolation, allowed network, secret
-absence, administrative branch protection or deployment safety. Initial
-repository admin inspection found no branch-protection rules; runner governance
-and protection requirements are registered operations work, not silently altered
-by this bootstrap. Passing CI is validation evidence only, not permission to
-merge.
+absence, administrative branch protection or deployment safety. The bootstrap
+observation of no branch-protection rules is historical, not current settings
+evidence. Passing CI is validation evidence only, not permission to merge;
+required checks and server-enforced protection remain binding.
+
+Per the
+[owner decision on #14](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/14#issuecomment-14723),
+issue #14 is closed **NOT_REQUIRED / owner-resolved**. Repository protection,
+runner administration and Forgejo administrative inspection are owner/operations
+concerns outside the agent workflow, not prerequisites for Console development,
+agent operation, integration, operational delivery or loop continuation. No
+administrative escalation, alternative/private API, private infrastructure
+inspection or protection-inspection implementation is required or permitted for
+this purpose. Missing administrative evidence cannot make another issue
+ineligible. A future administrative-evidence requirement needs a **new explicit
+owner task**, not implicit resurrection of #14. This does not certify
+infrastructure or weaken browser/product security, producer contracts,
+validation, review or live-integration gates.
 
 ## Independent Review and Budget
 

@@ -9,21 +9,30 @@ contracts; P3 = conditional research, not preapproved client implementation.
 These are priorities, not invented product spending/performance limits.
 Bootstrap #1 remains distinct from future features.
 
-| Issue / exact title                                                                                                                                              | Priority and intended result                                                   | Principal dependencies                                      |
-| ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ | ----------------------------------------------------------- |
-| [#2 Define supported producer reads and the browser authentication boundary](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/2)                    | P1: conclusive local read/auth topology, version/cost/capability inventory     | Kernel #57, Router #140/#183, MI #13/#16                    |
-| [#3 Implement resilient snapshot and progress projections with honest reconnect gaps](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/3)           | P1: namespaced rebuildable views, bounded progress, truthful history/resync    | #2; producer view/event contracts                           |
-| [#4 Deliver cross-product overview and exact Kernel task evidence drill-down](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/4)                   | P2: immediate overview and exact intent-to-outcome lineage                     | #3/#8/#10/#12; Kernel #47/#49/#51-#59                       |
-| [#5 Present Router decisions, shared quotas and full-cost uncertainty faithfully](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/5)               | P2: source-owned resource identity, freshness, costs and uncertainty           | #3/#8/#10/#12; Router #140/#177/#183; Kernel #56/#58        |
-| [#6 Inspect referenced MI knowledge snapshots, validity and conflicts](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/6)                          | P2: exact referenced knowledge, not entitlement/ranking                        | #3/#10/#12; MI #12-#16/#18; Router #176; Kernel #55         |
-| [#7 Deliver revision-bound owner responses with uncertain-effect reconciliation](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/7)                | P1 design before writes: real command receipt/effect distinction               | #2/#12; actual owner-command contracts                      |
-| [#8 Reuse Router administration, Forgejo and supported harness navigation safely](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/8)               | P2: specialist top-level navigation, no duplicated control UI                  | #2/#10; Router #140/#183; Kernel #47/#53                    |
-| [#9 Deliver meaningful deduplicated attention without changing producer blockers](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/9)               | P2: condition-based attention/preferences, no approval by dismissal            | #3/#7/#10/#11; producer event contracts                     |
-| [#10 Validate accessible responsive views and semantic agreement with producer CLI](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/10)            | P2: keyboard/AT/responsive acceptance for operational views                    | #2; view and producer conformance, no CLI business rewrite  |
-| [#11 Prove public local installation, trusted connections and compatible upgrades](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/11)             | P2: clean public artifact, settings/cache migration/rollback                   | #2/#12/#14; Kernel #62, Router #185, MI #18/#19             |
-| [#12 Establish producer conformance, browser and security acceptance with explicit live gates](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/12) | P1 acceptance design: fixture/source/CI/live evidence separated                | #2; every feature contract; Kernel #60, Router #186, MI #19 |
-| [#13 Evaluate explicit remote access and conditional PWA, IDE and native surfaces](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/13)             | P3: benefit/constraint decision and exact implementation trigger               | #2/#8/#9/#11; Kernel #47/#53; separate remote authority     |
-| [#14 Verify repository protection, development runner containment and security operations](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/14)     | P1 before operational delivery: actual administrative/runner/security evidence | Repository-scoped owner setup/access, not YAML assumptions  |
+| Issue / exact title                                                                                                                                              | Priority and intended result                                                | Principal dependencies                                      |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| [#2 Define supported producer reads and the browser authentication boundary](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/2)                    | P1: conclusive local read/auth topology, version/cost/capability inventory  | Kernel #57, Router #140/#183, MI #13/#16                    |
+| [#3 Implement resilient snapshot and progress projections with honest reconnect gaps](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/3)           | P1: namespaced rebuildable views, bounded progress, truthful history/resync | #2; producer view/event contracts                           |
+| [#4 Deliver cross-product overview and exact Kernel task evidence drill-down](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/4)                   | P2: immediate overview and exact intent-to-outcome lineage                  | #3/#8/#10/#12; Kernel #47/#49/#51-#59                       |
+| [#5 Present Router decisions, shared quotas and full-cost uncertainty faithfully](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/5)               | P2: source-owned resource identity, freshness, costs and uncertainty        | #3/#8/#10/#12; Router #140/#177/#183; Kernel #56/#58        |
+| [#6 Inspect referenced MI knowledge snapshots, validity and conflicts](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/6)                          | P2: exact referenced knowledge, not entitlement/ranking                     | #3/#10/#12; MI #12-#16/#18; Router #176; Kernel #55         |
+| [#7 Deliver revision-bound owner responses with uncertain-effect reconciliation](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/7)                | P1 design before writes: real command receipt/effect distinction            | #2/#12; actual owner-command contracts                      |
+| [#8 Reuse Router administration, Forgejo and supported harness navigation safely](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/8)               | P2: specialist top-level navigation, no duplicated control UI               | #2/#10; Router #140/#183; Kernel #47/#53                    |
+| [#9 Deliver meaningful deduplicated attention without changing producer blockers](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/9)               | P2: condition-based attention/preferences, no approval by dismissal         | #3/#7/#10/#11; producer event contracts                     |
+| [#10 Validate accessible responsive views and semantic agreement with producer CLI](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/10)            | P2: keyboard/AT/responsive acceptance for operational views                 | #2; view and producer conformance, no CLI business rewrite  |
+| [#11 Prove public local installation, trusted connections and compatible upgrades](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/11)             | P2: clean public artifact, settings/cache migration/rollback                | #2/#12; Kernel #62, Router #185, MI #18/#19                 |
+| [#12 Establish producer conformance, browser and security acceptance with explicit live gates](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/12) | P1 acceptance design: fixture/source/CI/live evidence separated             | #2; every feature contract; Kernel #60, Router #186, MI #19 |
+| [#13 Evaluate explicit remote access and conditional PWA, IDE and native surfaces](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/13)             | P3: benefit/constraint decision and exact implementation trigger            | #2/#8/#9/#11; Kernel #47/#53; separate remote authority     |
+| [#14 Verify repository protection, development runner containment and security operations](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/14)     | Historical: closed NOT_REQUIRED / owner-resolved                            | None; not an active dependency, gate or evidence obligation |
+
+The
+[owner decision on #14](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/14#issuecomment-14723)
+retires its former administrative-inspection prerequisites, including for #11.
+Lack of repository-protection, runner-administration or Forgejo administrative
+evidence cannot block development, integration, operational delivery or the
+loop. Only a new explicit owner task can establish such a requirement again. See
+[contribution guidance](../CONTRIBUTING.md); this disposition does not certify
+infrastructure or remove actual producer/browser security and live-read gates.
 
 Native same-repository dependency edges are registered for the read gate and
 core projections/installation. Cross-repository dependencies use actual links
@@ -46,19 +55,19 @@ shorthand to Console #10.
 | G06 MI integration        | Real referenced snapshot/provenance/validity #6                                    | [MI #13](https://forgejo.creatidy.com/Creatidy/model-intelligence/issues/13), [Router #176](https://forgejo.creatidy.com/BioMedical-IT/scarcity-router/issues/176), [Kernel #55](https://forgejo.creatidy.com/Creatidy/creatidy-kernel/issues/55)                                                                                                            |
 | G07 outcome feedback      | Authorized private evidence/export inspection #4/#5/#12                            | [Kernel #58](https://forgejo.creatidy.com/Creatidy/creatidy-kernel/issues/58), [Router #177](https://forgejo.creatidy.com/BioMedical-IT/scarcity-router/issues/177), [MI #17](https://forgejo.creatidy.com/Creatidy/model-intelligence/issues/17) opt-in only                                                                                                |
 | G08 observability         | Core #2-#10/#12: projections, views, failures, reconnect, attention                | [Kernel #57](https://forgejo.creatidy.com/Creatidy/creatidy-kernel/issues/57), [Router #183](https://forgejo.creatidy.com/BioMedical-IT/scarcity-router/issues/183) and [#182 producer CLI readability](https://forgejo.creatidy.com/BioMedical-IT/scarcity-router/issues/182), [MI #16](https://forgejo.creatidy.com/Creatidy/model-intelligence/issues/16) |
-| G09 isolation/security    | Browser/session/render/command boundary #2/#7/#12/#14                              | [Kernel #50](https://forgejo.creatidy.com/Creatidy/creatidy-kernel/issues/50), [Router #180](https://forgejo.creatidy.com/BioMedical-IT/scarcity-router/issues/180); execution isolation remains producer/harness/host                                                                                                                                       |
+| G09 isolation/security    | Browser/session/render/command boundary #2/#7/#12                                  | [Kernel #50](https://forgejo.creatidy.com/Creatidy/creatidy-kernel/issues/50), [Router #180](https://forgejo.creatidy.com/BioMedical-IT/scarcity-router/issues/180); execution isolation remains producer/harness/host                                                                                                                                       |
 | G10 identity/protocols    | Faithful identities/unknown/compatibility #2/#4/#5/#6                              | Kernel #52, [Router #179](https://forgejo.creatidy.com/BioMedical-IT/scarcity-router/issues/179)/#181, [MI #14](https://forgejo.creatidy.com/Creatidy/model-intelligence/issues/14)                                                                                                                                                                          |
 | G11 concurrency           | Multiple viewers/instances/stale commands #3/#7/#9, no shared SQL/control takeover | [Kernel #59](https://forgejo.creatidy.com/Creatidy/creatidy-kernel/issues/59)/#61; Router admission/restart semantics #174/#183                                                                                                                                                                                                                              |
 | G12 end-to-end budget     | Separate costs/shared pools/unknown attribution #5                                 | [Kernel #56](https://forgejo.creatidy.com/Creatidy/creatidy-kernel/issues/56), [Router #184](https://forgejo.creatidy.com/BioMedical-IT/scarcity-router/issues/184)                                                                                                                                                                                          |
-| G13 versions/distribution | Compatibility/cache/settings/install/browser #2/#3/#11-#14                         | [Kernel #62](https://forgejo.creatidy.com/Creatidy/creatidy-kernel/issues/62), [Router #185](https://forgejo.creatidy.com/BioMedical-IT/scarcity-router/issues/185), [MI #18](https://forgejo.creatidy.com/Creatidy/model-intelligence/issues/18)/#19                                                                                                        |
+| G13 versions/distribution | Compatibility/cache/settings/install/browser #2/#3/#11-#13                         | [Kernel #62](https://forgejo.creatidy.com/Creatidy/creatidy-kernel/issues/62), [Router #185](https://forgejo.creatidy.com/BioMedical-IT/scarcity-router/issues/185), [MI #18](https://forgejo.creatidy.com/Creatidy/model-intelligence/issues/18)/#19                                                                                                        |
 
 Producer scopes were inspected, including active alignment work, before deciding
 not to create duplicates. No concrete uncovered producer request remains
 unregistered; future contract conclusions must recheck concurrent coverage
 before creating one. Counterpart comments on Kernel #57, Router #183 and MI #16
-link actual Console children without changing their scope or implementation.
-Known Console work is registered #2-#14; no TODO/roadmap-only task is
-substituted for registration.
+link actual Console children without changing their scope or implementation. The
+bootstrap registered Console #2-#13 plus the now owner-resolved historical #14;
+no TODO/roadmap-only task is substituted for registration.
 
 ## Requirement Coverage
 
@@ -66,26 +75,26 @@ Bootstrap prompt section numbers are the accepted source references. Grouping
 keeps one authoritative home; it does not omit failure/security/delivery
 requirements.
 
-| Requirement group                                                                                          | Home and present evidence / actual work                                                           |
-| ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| 1: mission/name, English, four decision categories, source provenance and product terminology              | [Product](product.md), source checksum verified; #1                                               |
-| 2: canonical/mirror/public Apache identity, minimal seed, develop/PR, no duplicate/private copy            | README/LICENSE/NOTICE/[Contributing](../CONTRIBUTING.md); actual seed and existing mirror; #1/#14 |
-| 2/10/13: locked versions/help/check/static/tests/docs/secrets/CI/artifact, finite native review            | Contributing/[Decisions](decisions.md); delivered tooling/scaffold only; #1/#12/#14               |
-| 3: ownership/control-inference-knowledge flow, public dependencies/no private-onprem requirement           | Product/[Contracts](contracts.md); #2-#7/#11, producer Gxx links above                            |
-| 4: all seven journeys, scope-to-outcome/workspace, resources/MI/action/return/module independence          | [UX](ux.md); #3-#10/#12, no claimed live screens                                                  |
-| 5: complementary CLI/TUI/web/optional PWA/IDE/native, Router/Forgejo reuse, no hidden reasoning            | Product/UX/Decisions; #4/#8/#9/#13                                                                |
-| 6: state/progress/telemetry, discovery/revision/freshness/correlation, replay/gap/bounds/partial outages   | Contracts/UX; #2/#3/#12, Kernel #57/Router #183/MI #16                                            |
-| 6: exclusive SQLite, bounded collection/cache/backoff/no paid refresh, CLI revision parity                 | Contracts/UX; source evidence above, #2/#3/#10/#12                                                |
-| 7: recommendation/admission/completion, precise identity/opaque variant/pin/fallback                       | Contracts/UX; #4/#5, producer G04/G10                                                             |
-| 7: multidimensional cost/shared pools/full lifecycle/unknown usage/no PAYG policy/promotions/no best claim | Product/UX; #5/#6, producer G06/G07/G12                                                           |
-| 8: owner APIs/read-vs-write/principal/revision/idempotency/effect/audit/denied/stale/unknown               | Contracts/[Security](../SECURITY.md); #2/#7/#12, producer command dependencies                    |
-| 8: untrusted content/XSS/CSRF/rebinding/origin/session/revocation/secrets/proxy/privacy                    | Security; #2/#7/#11/#12/#14                                                                       |
-| 8/9: local default, justified thin boundary, remote decision not assumed                                   | Product/Security/Decisions; #2/#11/#13                                                            |
-| 9: reuse order/exact license/semantics/rights/update/test/alternatives, one reversible toolchain           | Decisions/NOTICE/lockfile; #1/#2/#8/#11-#14, unverified candidates labeled                        |
-| 10: concise indexed docs, truthful small scaffold/no fabricated operations, appropriate tests              | [Index](README.md)/Product/Contributing; #1, future #2-#14 not started                            |
-| 11: actual deduplicated complete issues, G01-G13/ownership/behavior/security/migration/reuse/priority      | This roadmap + actual #2-#14 and linked producer issues; counterpart comments                     |
-| 12: negative/empty/offline/gap/shared-pool/version/permission/injection/stale-command/browser tests        | UX/Security/Contracts; #3/#5/#7/#10/#12, future tests not reported passed                         |
-| 13/14: exact subject/independent review/native relay/platform distinction/terminal no merge                | Contributing; #1/PR delivery receipts, #14 infrastructure limitations                             |
+| Requirement group                                                                                          | Home and present evidence / actual work                                                                        |
+| ---------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| 1: mission/name, English, four decision categories, source provenance and product terminology              | [Product](product.md), source checksum verified; #1                                                            |
+| 2: canonical/mirror/public Apache identity, minimal seed, develop/PR, no duplicate/private copy            | README/LICENSE/NOTICE/[Contributing](../CONTRIBUTING.md); actual seed and existing mirror; #1                  |
+| 2/10/13: locked versions/help/check/static/tests/docs/secrets/CI/artifact, finite native review            | Contributing/[Decisions](decisions.md); delivered tooling/scaffold only; #1/#12                                |
+| 3: ownership/control-inference-knowledge flow, public dependencies/no private-onprem requirement           | Product/[Contracts](contracts.md); #2-#7/#11, producer Gxx links above                                         |
+| 4: all seven journeys, scope-to-outcome/workspace, resources/MI/action/return/module independence          | [UX](ux.md); #3-#10/#12, no claimed live screens                                                               |
+| 5: complementary CLI/TUI/web/optional PWA/IDE/native, Router/Forgejo reuse, no hidden reasoning            | Product/UX/Decisions; #4/#8/#9/#13                                                                             |
+| 6: state/progress/telemetry, discovery/revision/freshness/correlation, replay/gap/bounds/partial outages   | Contracts/UX; #2/#3/#12, Kernel #57/Router #183/MI #16                                                         |
+| 6: exclusive SQLite, bounded collection/cache/backoff/no paid refresh, CLI revision parity                 | Contracts/UX; source evidence above, #2/#3/#10/#12                                                             |
+| 7: recommendation/admission/completion, precise identity/opaque variant/pin/fallback                       | Contracts/UX; #4/#5, producer G04/G10                                                                          |
+| 7: multidimensional cost/shared pools/full lifecycle/unknown usage/no PAYG policy/promotions/no best claim | Product/UX; #5/#6, producer G06/G07/G12                                                                        |
+| 8: owner APIs/read-vs-write/principal/revision/idempotency/effect/audit/denied/stale/unknown               | Contracts/[Security](../SECURITY.md); #2/#7/#12, producer command dependencies                                 |
+| 8: untrusted content/XSS/CSRF/rebinding/origin/session/revocation/secrets/proxy/privacy                    | Security; #2/#7/#11/#12                                                                                        |
+| 8/9: local default, justified thin boundary, remote decision not assumed                                   | Product/Security/Decisions; #2/#11/#13                                                                         |
+| 9: reuse order/exact license/semantics/rights/update/test/alternatives, one reversible toolchain           | Decisions/NOTICE/lockfile; #1/#2/#8/#11-#13, unverified candidates labeled                                     |
+| 10: concise indexed docs, truthful small scaffold/no fabricated operations, appropriate tests              | [Index](README.md)/Product/Contributing; #1 foundation, #2 design exit complete; #3-#13 pending actual gates   |
+| 11: actual deduplicated complete issues, G01-G13/ownership/behavior/security/migration/reuse/priority      | This roadmap + actual #2-#13 and linked producer issues; counterpart comments; #14 historical owner resolution |
+| 12: negative/empty/offline/gap/shared-pool/version/permission/injection/stale-command/browser tests        | UX/Security/Contracts; #3/#5/#7/#10/#12, future tests not reported passed                                      |
+| 13/14: exact subject/independent review/native relay/platform distinction/terminal no merge                | Contributing; #1/PR delivery receipts; source/CI evidence is not infrastructure certification                  |
 
 ## Evidence-Based Sequence
 
@@ -104,9 +113,9 @@ requirements.
 5. **Authorized decisions/attention:** #7/#9 after owner semantics, stale
    revision, uncertain effect and reconnection/security conformance; not
    permanent read-only retreat.
-6. **Professional public delivery:** #11/#14 and composed #12,
-   installation/update/ rollback/browser/privacy/support evidence; no
-   release/deploy authority in bootstrap.
+6. **Professional public delivery:** #11 and composed #12, installation/update/
+   rollback/browser/privacy/support evidence; no release/deploy authority in
+   bootstrap.
 7. **Conditional surfaces:** #13 only with demonstrated benefit and explicit
    trust decision; not three additional applications approved in parallel.
 
