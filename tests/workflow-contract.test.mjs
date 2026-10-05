@@ -1,7 +1,6 @@
 // Adapted from Model Intelligence tests/test_workflow_contract.py at
 // 013cbb43e11d7f698d359db5a456d26d8075e34e (Apache-2.0); see NOTICE.
 // Offline command consistency guards, not proof of runtime loop execution.
-import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -92,15 +91,56 @@ describe("ported Model Intelligence workflow contract", () => {
       expect(loop).toContain(requirement);
   });
 
-  test("independent review retains frozen permissions/model and JSON schema", () => {
+  test("independent review retains security permissions, unpinned binding and JSON schema", () => {
     const raw = readFileSync(
       resolve(root, ".kilo/agents/pr-reviewer.md"),
       "utf8",
     );
-    // Freeze security/model configuration, not prose that this mandate updates.
-    expect(createHash("sha256").update(raw.split("---")[1]).digest("hex")).toBe(
-      "2fe21aebef14cab6dfc709822b9d3a356fb01eceb3923758ef7d892bae919a3b",
-    );
+    // Freeze the security/binding contract semantically: the reviewer stays a
+    // read-only subagent with deny-by-default permissions and the
+    // inheritance/provider-affinity policy, while permitted non-security
+    // fields may evolve without invalidating an otherwise valid change.
+    const frontmatter = raw.split("---")[1];
+    expect(frontmatter).toContain("mode: subagent");
+    expect(frontmatter).toContain('permission:\n  "*": deny\n');
+    for (const denied of [
+      "external_directory: deny",
+      "edit: deny",
+      "write: deny",
+      "apply_patch: deny",
+      "task: deny",
+      '"*.env*": deny',
+      '"*.task_progress.md": deny',
+    ]) {
+      expect(frontmatter).toContain(denied);
+    }
+    for (const allowed of [
+      '"forgejo-mcp_get_*": allow',
+      '"forgejo-mcp_list_*": allow',
+      '"forgejo-mcp_search_*": allow',
+      "git ls-remote https://forgejo.creatidy.com/Creatidy/creatidy-console",
+      '"kilo debug agent pr-reviewer": allow',
+      "npm_config_offline=true npm run typecheck",
+      "npm_config_offline=true npm test",
+      "npm_config_offline=true make check",
+    ]) {
+      expect(frontmatter).toContain(allowed);
+    }
+    expect(frontmatter).not.toMatch(/^model:/mu);
+    expect(frontmatter).not.toMatch(/^variant:/mu);
+    expect(frontmatter).not.toContain("gpt-6.1-sol");
+    const reviewer = text(".kilo/agents/pr-reviewer.md");
+    for (const requirement of [
+      "## Reviewer binding",
+      "intentionally does not pin a provider, model, model version or reasoning/thinking variant",
+      "inherits the implementation session's effective provider family, model and reasoning/thinking configuration",
+      "an OpenAI implementation is reviewed by an OpenAI reviewer",
+      "a z.ai implementation is reviewed by a z.ai reviewer",
+      "Never silently substitute a provider, model, version or reasoning/thinking configuration",
+      "must never delegate review",
+    ]) {
+      expect(reviewer).toContain(requirement);
+    }
     const schema = JSON.parse(raw.split("```json\n")[1].split("```")[0]);
     expect(Object.keys(schema)).toEqual([
       "reviewed_head",
