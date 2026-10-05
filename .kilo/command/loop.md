@@ -13,30 +13,52 @@ progress memory.
 
 ## Invocation and Safety
 
-Use exactly one normal checkout and ordinary issue branches. Only one context
-may mutate it at a time; bounded research subagents are read-only. No git
-worktree, alternate checkouts, stash/reset of unrelated owner work, second
-controller, service, scheduler, daemon, external orchestration or persistent
-controller database. Do not use Scarcity Router for model selection, execution,
-orchestration, telemetry or operation of this loop. No mutation outside
-Creatidy/creatidy-console: Kernel, Router, Model Intelligence, creatidy-onprem
-and other repositories are out of scope. Read-only external contract inspection
-is allowed only when the selected Console issue genuinely requires it, never
-external mutation. Never touch main, release or deploy. Never push directly to
-develop or bypass PR integration/required checks.
+Use exactly one primary implementation checkout and ordinary issue branches.
+Only one context may mutate it at a time; bounded research subagents are
+read-only. Temporary worktree/checkout isolation is allowed under
+`.kilo/rules/30-implementation-discipline.md`, not parallel implementation. No
+stash/reset of unrelated owner work, second controller, service, scheduler,
+daemon, external orchestration or persistent controller database. Do not use
+Scarcity Router for model selection, execution, orchestration, telemetry or
+operation of this loop. No mutation outside Creatidy/creatidy-console: Kernel,
+Router, Model Intelligence, creatidy-onprem and other repositories are out of
+scope. Read-only external contract inspection is allowed only when the selected
+Console issue genuinely requires it, never external mutation. Never touch main,
+release or deploy. Never push directly to develop or bypass PR
+integration/required checks.
 
 Verify canonical remote/access and clean status. Never overwrite others' work or
-guess reconciliation of divergence. An unsafe checkout/access/tool failure is
-BLOCKED. Do not create speculative issues to sustain the queue.
+guess reconciliation of divergence. Diagnose an unsafe checkout/access/tool
+failure under the shared technical self-remediation contract before BLOCKED. Do
+not create speculative issues to sustain the queue.
 
 Before dispatching work, verify `.task_progress.md` is excluded via the local
 Git exclude mechanism in `.kilo/rules/40-local-search.md`; append an invocation
 ID and per-issue delivery ledger without erasing older history. Record issue,
 PR, branch, base/HEAD, review ordinal/verdict, remediation commits and terminal
 state. Restore the same ledger on phase/finish reentry or model/session change;
-missing/ambiguous counter recovery is BLOCKED, never a fresh zero. Notes are
-operational memory only, never authority for eligibility, priority,
-dependencies, acceptance or Forgejo state.
+missing/ambiguous counter recovery after bounded recovery is BLOCKED, never a
+fresh zero. Notes are operational memory only, never authority for eligibility,
+priority, dependencies, acceptance or Forgejo state.
+
+## Blocker Classification
+
+Apply `.kilo/rules/30-implementation-discipline.md` at every phase, including
+validation, review, merge and completion failures. Class A engineering/execution
+obstacles require bounded autonomous technical remediation before escalation;
+only Class B genuine owner decisions normally yield STOP_AND_ASK. Record
+diagnosis, finite attempt/time limit, changed condition and outcome in the same
+ledger. Do not ask the owner to choose equivalent test/review mechanisms or
+relay public evidence. Use the minimum sufficient safe mechanism, not Docker
+automatically. No silent security, permission, acceptance or authority
+expansion.
+
+Before STOP_AND_ASK record the exact decision, why it is owner-controlled,
+autonomous paths considered, why they cannot resolve it within existing
+authority, and the smallest materially distinct choices. Before BLOCKED record
+the exact missing capability/external dependency and why no authorized remedy
+remains (including exhausted budgets). A reviewer tool/environment failure alone
+does not meet either contract while authorized alternatives remain.
 
 ## SELECT
 
@@ -98,11 +120,11 @@ autonomous, not owner questions.
 
 Use `.kilo/command/finish-pr.md` in this SAME primary context, not a second
 orchestrator. Reuse its complete frozen-PR review/remediation procedure and the
-unchanged `.kilo/agents/pr-reviewer.md` contract used by `/review-pr`. Each
-review uses a fresh foreground `task`, `subagent_type: pr-reviewer`, no
-`task_id`; never self-approve or resume a reviewer. Parent makes no edits/branch
-switches while it runs. Do not feed past findings, reasoning or desired verdict
-to the reviewer.
+stable `.kilo/agents/pr-reviewer.md` result/security contract used by
+`/review-pr`. Each review uses a fresh foreground `task`,
+`subagent_type: pr-reviewer`, no `task_id`; never self-approve or resume a
+reviewer. Parent makes no edits/branch switches while it runs. Do not feed past
+findings, reasoning or desired verdict to the reviewer.
 
 Maximum 10 whole-PR review invocations per issue delivery, INCLUDING the initial
 review, COMMENT, invalidated reviews and corrected retries. Reserve/persist each
@@ -110,19 +132,22 @@ ordinal BEFORE dispatch in the shared delivery ledger; `/finish-pr` reentry,
 internal phases, new tasks and model/session changes cannot reset it. This is a
 safety ceiling, not a target; stop immediately for a genuine material decision.
 Fresh reviews inspect the COMPLETE PR, exact HEAD/base/merge base, read-only in
-a fresh isolated context, and return the existing structured JSON
+a fresh isolated context, using an authorized execution path under the shared
+self-remediation contract, and return the existing structured JSON
 verdict/result. Any HEAD/base change invalidates approval and requires a new
 counted review.
 
 REQUEST_CHANGES: understand/reproduce actionable in-scope findings, remediate
 with appropriate regression evidence, validate, commit normally and push the
 SAME PR, then obtain a new whole-PR review. Never amend, squash, force-push or
-rewrite history to clean the loop. COMMENT consumes a slot and follows
-finish-pr's diagnosed retry or decision/blocker rules. READY_TO_MERGE is
-internal, not loop termination. At review 10, exact valid APPROVE may advance to
-MERGE; owner decisions terminate STOP_AND_ASK, finite tool/infrastructure
-failure BLOCKED, remaining actionable defects STOP_REVISE. No review 11 or
-unreviewable further patches.
+rewrite history to clean the loop. COMMENT and failed review dispatches consume
+a slot: distinguish findings, infrastructure failure and disagreement; diagnose
+and change environment/strategy, automatically using another available
+authorized independent path within both budgets. Preserve all ordinals.
+READY_TO_MERGE is internal, not loop termination. At review 10, exact valid
+APPROVE may advance to MERGE; owner decisions terminate STOP_AND_ASK, exhausted
+infrastructure paths or review budget yield BLOCKED, remaining actionable
+defects STOP_REVISE. No review 11 or unreviewable further patches.
 
 ## MERGE
 
@@ -154,10 +179,12 @@ with the SAME counter (or terminate at the bound); never merge stale approval.
 Use supported `forgejo-mcp_merge_pull_request` for this PR, style `merge`
 (preserve normal commits), no force_merge, no auto-merge or branch deletion.
 Respect protection and server checks. Unavailable supported merge operation is
-BLOCKED; never invent direct Git/REST integration or push to develop. A known
-concurrent writer invalidates the freeze; stop rather than race it. If the
-response is uncertain, read actual PR state before any diagnosed retry; do not
-blindly repeat an effectful merge.
+BLOCKED only after bounded diagnosis finds no authorized supported remedy; never
+invent direct Git/REST integration or push to develop. A known concurrent writer
+invalidates the freeze; do not race it. Re-establish currentness and obtain
+fresh counted review within budget when safe. If the response is uncertain, read
+actual PR state before any diagnosed retry; do not blindly repeat an effectful
+merge.
 
 ## COMPLETE
 
@@ -166,20 +193,20 @@ merged, its recorded merge commit is present in develop, develop advanced from
 the approved base as expected and approved HEAD is its ancestor (merge style
 preserves it). Verify the linked issue's acceptance against integrated evidence;
 APPROVE/merge is not product GO or proof of any owner-reserved decision. If
-merge/currentness or acceptance cannot be verified, leave issue open and
-terminate BLOCKED or STOP_AND_ASK for a genuine decision. Do not continue the
-queue with incomplete work.
+merge/currentness or acceptance cannot be verified, leave issue open and apply
+bounded technical remediation before BLOCKED or STOP_AND_ASK for a genuine
+decision. Do not continue the queue with incomplete work.
 
 Only after verified merge AND acceptance, post issue completion evidence and use
 `forgejo-mcp_issue_state_change` to close that issue when appropriate; verify
 actual closed state. Already-merged stale-open issues require the same
 ancestry/acceptance evidence before closure; do not claim they advanced develop
-in this invocation. Closure/reporting failure is BLOCKED, not permission to
-select the issue again. Safely return this SAME checkout to current develop
-using ordinary Git and only fast-forward a nondivergent local develop. Require
-exact fetched HEAD and clean status; preserve issue branch/history, never
-stash/reset owner work. Then SELECT again with a fresh canonical queue, not a
-PR-derived backlog.
+in this invocation. Closure/reporting failure is BLOCKED only after bounded
+technical remediation, not permission to select the issue again. Safely return
+this SAME primary checkout to current develop using ordinary Git and only
+fast-forward a nondivergent local develop. Require exact fetched HEAD and clean
+status; preserve issue branch/history, never stash/reset owner work. Then SELECT
+again with a fresh canonical queue, not a PR-derived backlog.
 
 ## Terminal Reporting
 
@@ -198,12 +225,12 @@ destructive/irreversible operations, incompatible acceptance, material scope
 expansion or explicitly owner-reserved decisions. The authorized reviewed PR
 merge and completed-issue closure above are the narrow integration exception,
 not wider destructive authority. Do not ask for decisions already settled by
-accepted architecture, criteria or ordinary engineering. Report exact issue, PR
-if any, HEAD, concrete evidence, why existing requirements do not settle it, 2-3
-concrete alternatives where appropriate, consequences/tradeoffs and a
-recommended option. Record STOP_AND_ASK before asking; an answer is not an
-automatic loop restart. Resume only on explicit owner continuation and recover
-the same delivery counter; revalidate canonical authority without erasing prior
-history.
+accepted architecture, criteria or ordinary engineering. Complete the shared
+STOP_AND_ASK ledger contract first. Report exact issue, PR if any, HEAD,
+concrete evidence, why existing requirements do not settle it, the smallest set
+of materially distinct choices, consequences/tradeoffs and a recommended option.
+Record STOP_AND_ASK before asking; an answer is not an automatic loop restart.
+Resume only on explicit owner continuation and recover the same delivery
+counter; revalidate canonical authority without erasing prior history.
 
 <!-- Adapted from Model Intelligence 013cbb43e11d7f698d359db5a456d26d8075e34e: Console product and repository identity only; see NOTICE. -->

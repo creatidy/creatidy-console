@@ -30,9 +30,9 @@ external controller exists.
 
 Only an explicit owner `/loop` invocation delegates autonomous selection and
 approved PR merge to develop/completed-issue closure. Its primary context is the
-sole orchestrator, reusing implement-issue/finish-pr and the unchanged reviewer.
-Read `.kilo/command/loop.md`: refresh all canonical open issues each cycle,
-exclude exact invalid/wontfix/duplicate labels case-insensitively, verify
+sole orchestrator, reusing implement-issue/finish-pr and the stable reviewer
+contract. Read `.kilo/command/loop.md`: refresh all canonical open issues each
+cycle, exclude exact invalid/wontfix/duplicate labels case-insensitively, verify
 explicit gates, then order by explicit priority, required ordering and oldest
 registration. Issues, not open PRs, are planning authority. Stop the entire
 invocation for STOP_AND_ASK, STOP_REVISE or BLOCKED; no eligible issues yields
@@ -48,18 +48,25 @@ architecture, producer/browser security boundaries and public/private license
 distinctions. Documentation approval is not verified consumer integration or
 live task readiness.
 
-Use one normal checkout and ordinary issue branches. Do not use `git worktree`
-or alternate checkout management. Only one context may mutate the checkout.
-Review the exact frozen Git objects/current clean PR branch read-only in this
-checkout; the parent must not edit or switch branches while the reviewer task is
-running. Never stash/reset unrelated changes to make branch switching possible.
+Use one primary implementation checkout and ordinary issue branches. Temporary
+worktree/checkout or ephemeral container isolation is allowed for bounded
+technical remediation under `.kilo/rules/30-implementation-discipline.md`. Only
+one context may mutate the implementation checkout. Review the exact frozen Git
+objects/current clean PR branch read-only in this checkout; the parent must not
+edit or switch branches while the reviewer task is running. Never stash/reset
+unrelated changes to make branch switching possible.
 
 `.kilo/command/*` and `.kilo/agents/*` are loaded by the Kilo workspace runtime;
 availability is not dynamically guaranteed when files appear. After adding or
 changing commands, a VS Code/Kilo workspace reload may be required. The current
 repository checkout supplies its local commands/agents/rules. A missing native
-agent/task is a finite tool blocker, not permission to substitute parent
-self-review or external orchestration.
+agent/task requires diagnosed authorized independent failover before a finite
+tool blocker, never parent self-review or external orchestration. Class A
+engineering failures must be self-remediated within finite budgets before owner
+escalation; Class B owner commitments alone normally cause STOP_AND_ASK.
+Preserve failed/COMMENT review ordinals, exact-HEAD approval and the shared
+durable decision/BLOCKED contracts. Never expose ambient secrets for fixture
+inheritance or weaken acceptance/permissions to make progress.
 
 Policy origin: current owner workflow-migration mandate and current Model
 Intelligence reference; product boundaries remain Console-owned. Earlier

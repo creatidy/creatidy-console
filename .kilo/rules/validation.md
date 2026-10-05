@@ -3,8 +3,10 @@
 - Node 24.19.0/npm 11.17.0, TypeScript/React/Vite and existing Vitest tooling.
   Maintain package-lock.json with intentional dependency changes; do not
   regenerate it to conceal a locked-install failure. Prepare installed
-  dependencies with `make install` in the primary before offline review;
-  reviewer never installs.
+  dependencies with `make install` in the primary's prepared execution
+  environment before offline review; reviewer never installs. Apply bounded
+  technical self-remediation under `30-implementation-discipline.md` for
+  runtime, dependency or isolation failures, never weaken gates.
 - Final gate is `make check`. Makefile/package scripts own formatting, Markdown
   lint, local AST links, current-public secretlint, strict TypeScript,
   deterministic Vitest scaffold/tooling/workflow contracts and an actual
@@ -25,14 +27,20 @@
 - Handoff includes issue/PR URLs, exact base/head SHAs, substantive files, exact
   executed validation/results and genuine unresolved decisions/blockers. No
   claim of passing checks, push or PR creation without successful evidence.
-- Parent uses the current normal checkout on the exact clean PR HEAD and
-  prepares its offline locked development environment before invoking a
-  reviewer. No additional checkout or branch switching during review. Reviewer
-  verifies HEAD and clean status before/after checks and inspects frozen Git
-  objects/full base delta. Ignored validation artifacts are allowed;
-  tracked-file edits and Git/Forgejo mutations are not. Read checks before
-  running them; permission allowlists do not make arbitrary repository code
-  safe. Preserve unrelated work.
+- Parent uses a prepared checkout on the exact clean PR HEAD and prepares its
+  offline locked development environment before invoking a reviewer. Temporary
+  worktree/checkout or ephemeral container preparation is permitted before
+  dispatch under the shared technical contract; no tracked edits or branch
+  switching during review. Reviewer verifies HEAD and clean status before/after
+  checks and inspects frozen Git objects/full base delta. Ignored validation
+  artifacts are allowed; tracked-file edits and Git/Forgejo mutations are not.
+  Read checks before running them; permission allowlists do not make arbitrary
+  repository code safe. Preserve unrelated work. Tests observing inherited state
+  use only a clean explicit environment with synthetic values, synthetic
+  HOME/cache/temp paths and minimum operational variables, not owner secrets.
+  Independently verify public pins/provenance; an unavailable read path requires
+  technical recovery, not acceptance of implementer claims or an invented
+  defect.
 - `/finish-pr` records each reviewed HEAD/base/verdict, normal remediation
   commits, regression/check results and final currentness. Only an exact
   matching native reviewer result plus a final MCP currentness check can yield

@@ -16,12 +16,15 @@ selection and approved PR merge/verified acceptance/issue closure under
 orchestrator. No second service, scheduler, daemon or external controller
 exists.
 
-Use one normal checkout, no `git worktree` or alternate checkout, with one
-mutator at a time. Preserve unrelated changes/history; never stash/reset owner
-work or guess branch-divergence reconciliation. Merge only through the supported
-canonical Forgejo PR operation under explicit `/loop`; never push directly to
-`develop`. Do not touch `main`, promote, tag, release, publish or deploy. This
-development workflow never uses Scarcity Router for model selection, execution,
+Use one primary implementation checkout with one mutator at a time. Temporary
+worktree/checkout or ephemeral container isolation is permitted for bounded
+technical remediation under
+[the shared contract](.kilo/rules/30-implementation-discipline.md). Preserve
+unrelated changes/history; never stash/reset owner work or guess
+branch-divergence reconciliation. Merge only through the supported canonical
+Forgejo PR operation under explicit `/loop`; never push directly to `develop`.
+Do not touch `main`, promote, tag, release, publish or deploy. This development
+workflow never uses Scarcity Router for model selection, execution,
 orchestration, telemetry or operation and cannot mutate another repository.
 
 Commands: `/implement-issue <number|URL|unambiguous title>`,
@@ -102,10 +105,10 @@ delivery**, including initial, COMMENT, invalidated reviews and corrected
 retries. Persist the next ordinal before every dispatch in the excluded
 `.task_progress.md` ledger, keyed by issue/PR and loop invocation when
 applicable. Recover the same counter across finish/phase/task/model/session
-changes. Missing/ambiguous recovery is BLOCKED; no reset and no review 11. At
-the bound exact valid APPROVE can proceed; owner decisions stop, finite
-infrastructure failures are BLOCKED and remaining actionable findings
-STOP_REVISE. Do not patch when no fresh-review slot remains.
+changes. Missing/ambiguous recovery after bounded recovery is BLOCKED; no reset
+and no review 11. At the bound exact valid APPROVE can proceed; owner decisions
+stop, finite infrastructure paths or review budget yield BLOCKED and remaining
+actionable findings STOP_REVISE. Do not patch when no fresh-review slot remains.
 
 Freeze exact HEAD/base/merge-base and clean source. Every complete PR review is
 a fresh foreground isolated read-only `pr-reviewer`; never resume it,
@@ -114,8 +117,9 @@ verdict. Parent makes no edits/branch switches while it runs. The unchanged
 structured JSON result is the native handoff, not owner copy/paste or a platform
 review comment. The reviewer definition retains Model Intelligence's GPT-6.1 Sol
 High selection, deny-by-default permissions and exact-subject contract, with
-only Console URL and offline Node validation adaptations. A changed HEAD/base
-invalidates approval.
+Console URL, offline Node validation and technical self-remediation guidance.
+Its permissions and stable JSON result schema remain unchanged. A changed
+HEAD/base invalidates approval.
 
 Only explicit `/loop` may integrate an open/unmerged develop PR after fresh
 issue/gate/label/authority and exact approval/currentness/check revalidation.
@@ -134,10 +138,42 @@ QUEUE_EMPTY, not product completion or permission to invent work.
 
 Commands/agents are workspace-runtime configuration; adding files does not prove
 they are loaded. Reload may be needed. A missing native reviewer/tool is a
-finite blocker, never permission to use parent self-review, another controller
-or a silent model fallback. Offline contract tests do not execute `/loop`.
+technical remediation/failover case before a finite blocker, never permission to
+use parent self-review, another controller or a silent model fallback. Offline
+contract tests do not execute `/loop`.
 
 Record substantive native verdict separately from stored Forgejo state.
 Shared-author COMMENT is not formal APPROVED; publication is optional, never
 orchestration state, and cannot bypass branch protection or prove live
 readiness.
+
+## Technical Blockers
+
+A blocker is not automatically an owner decision. Apply the shared contract to
+implementation, loop, review and remediation: diagnose Class A execution/tool/
+environment failures and attempt the smallest safe authorized remedy before
+owner escalation. Class B architecture, authority, security, scope, cost or
+other owner commitments retain STOP_AND_ASK. Record the exact decision, why it
+is owner-controlled, considered autonomous paths and why they cannot resolve it,
+plus the smallest materially distinct choices before asking. BLOCKED requires
+exhausted authorized paths/budgets or an external condition without a
+workaround; report the exact capability, not an artificial owner question.
+
+Default technical remediation is capped at three attempts per distinct obstacle
+across reentry with a recorded finite time limit. Each retry changes a diagnosed
+condition. Failed/COMMENT whole-PR dispatches still consume the next of 10
+review ordinals. Prefer explicit sanitized synthetic environments, approved
+locked tool repair, temporary exact-object checkouts, or ephemeral containers as
+needed, not Docker automatically. Containers do not authorize persistent
+services, broader network/secret access or product dependency adoption. Do not
+expose credential directories or real inherited secrets; environment-inheritance
+tests inherit synthetic values. Reviewer permissions remain deny-by-default.
+
+Distinguish defects from infrastructure failure and judgment uncertainty. Use
+another available authorized fresh independent reviewer/tool path automatically
+within budget, with unchanged whole-PR/JSON/exact-SHA requirements.
+Independently inspect public pinned source claims via alternative reads or
+isolated fetch/clone; an implementer's report cannot replace this proof. No
+owner relay, self-approval, silent model fallback, skipped validation or
+broadened scope. Text tests guard these instructions, not actual runtime
+isolation or automatic failover.

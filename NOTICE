@@ -20,6 +20,8 @@ validation.md; tests/test_workflow_contract.py.
 Console adaptations: repository/product/document identities and existing product
 boundaries; offline Node validation allowlist; Python contract assertions ported
 to Vitest in tests/workflow-contract.test.mjs; repository-required formatting and
-attribution notices. The loop model, reviewer isolation/result/model selection,
+attribution notices; owner-authorized bounded technical self-remediation,
+temporary execution isolation and blocker classification guidance. The loop
+model, reviewer independence/security/result/model selection,
 issue ordering/exclusions, persisted ceiling and merge/completion authority are
 preserved. No producer implementation or runtime model proof is copied.
