@@ -74,8 +74,8 @@ version or reasoning/thinking variant.
 
 Review independence is contextual. The reviewer must run in a fresh isolated
 session/context with no access to the implementation conversation,
-implementation reasoning, local recall, progress notes, prior review findings
-or desired verdict.
+implementation reasoning, local recall, progress notes, prior review findings or
+desired verdict.
 
 Unless the owner explicitly specifies a different reviewer binding for the
 current delivery, the reviewer inherits the implementation session's effective
@@ -91,17 +91,16 @@ protocol used to access it. An OpenAI-compatible transport does not make a
 z.ai-origin model an OpenAI model.
 
 The owner may explicitly override the reviewer model or reasoning/thinking
-configuration at the start of `/loop` or by direct instruction. Such an
-override remains within the implementation provider family unless the owner
-explicitly overrides provider-family affinity as well.
+configuration at the start of `/loop` or by direct instruction. Such an override
+remains within the implementation provider family unless the owner explicitly
+overrides provider-family affinity as well.
 
 Never silently substitute a provider, model, version or reasoning/thinking
 configuration.
 
 If the inherited or explicitly requested reviewer binding cannot be executed,
-report a precise review-infrastructure limitation. Model/runtime
-unavailability is not an implementation finding and is not by itself an owner
-decision.
+report a precise review-infrastructure limitation. Model/runtime unavailability
+is not an implementation finding and is not by itself an owner decision.
 
 The primary may repair the execution environment and retry the same binding.
 Changing provider or model is not technical remediation unless explicitly
