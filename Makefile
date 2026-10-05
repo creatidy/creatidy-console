@@ -6,7 +6,7 @@ help:
 	  'make install  Install exact locked public dependencies with npm ci' \
 	  'make dev      Start the bootstrap at http://127.0.0.1:5173' \
 	  'make preview  Inspect dist at http://127.0.0.1:4173 after make build' \
-	  'make test     Run deterministic scaffold and tooling tests' \
+	  'make test     Run deterministic scaffold, tooling and workflow tests' \
 	  'make check    Format, Markdown, local links, secrets, types, tests, temporary build' \
 	  'make build    Build dist with project and runtime dependency licenses'
 

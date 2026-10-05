@@ -3,6 +3,23 @@ Copyright 2026 Creatidy Console contributors
 
 Licensed under the Apache License, Version 2.0.
 
-No sibling or proprietary application source code has been copied into this
-foundation. External runtime dependencies retain their own licenses; local
-build artifacts include their applicable license texts.
+No proprietary application source code has been copied into this foundation.
+External runtime dependencies retain their own licenses; local build artifacts
+include their applicable license texts.
+
+Development workflow material adapted from Creatidy/model-intelligence:
+Copyright 2026 Creatidy
+Apache License, Version 2.0
+Source revision: 013cbb43e11d7f698d359db5a456d26d8075e34e
+
+Source files: AGENTS.md; .kilo/command/implement-issue.md, review-pr.md,
+finish-pr.md and loop.md; .kilo/agents/pr-reviewer.md; .kilo/rules/10-task-system.md,
+20-forgejo-mcp.md, 30-implementation-discipline.md, 40-local-search.md and
+validation.md; tests/test_workflow_contract.py.
+
+Console adaptations: repository/product/document identities and existing product
+boundaries; offline Node validation allowlist; Python contract assertions ported
+to Vitest in tests/workflow-contract.test.mjs; repository-required formatting and
+attribution notices. The loop model, reviewer isolation/result/model selection,
+issue ordering/exclusions, persisted ceiling and merge/completion authority are
+preserved. No producer implementation or runtime model proof is copied.
