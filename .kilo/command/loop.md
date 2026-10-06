@@ -105,6 +105,73 @@ STOP_AND_ASK. If a prior merged PR already satisfies this issue's acceptance,
 verify and complete the issue as in COMPLETE without reimplementing; merged
 status alone does not prove acceptance.
 
+## Post-Selection Eligibility Revalidation
+
+After selection, inspect the issue and required producer/contracts using fresh
+evidence BEFORE the first substantive implementation mutation. Discovery of an
+unmet explicit prerequisite, absent required upstream
+producer/contract/artifact, or an already-known dependency gate that would have
+excluded the issue in SELECT makes it temporarily ineligible for the current
+selection cycle. An unavailable inspection tool is not evidence of an absent
+producer: use technical remediation.
+
+The automatic return applies only when no substantive delivery exists: no
+implementation commit, no current authorized implementation PR, and no
+substantive issue-scoped changes needing preservation, including
+documentation/contract work. Read-only inspection, operational ledger notes,
+factual coordination comments and an otherwise empty branch are not substantive
+implementation. Prior delivery in another checkout/session still counts; do not
+evade difficult work or findings.
+
+For a proven pre-implementation gate:
+
+1. Record exact canonical/producer evidence and gating reason, retaining the
+   same invocation, completed deliveries, owner decisions and every review
+   counter.
+2. Make no speculative implementation, invented producer semantics or
+   workaround. Keep the issue open and unchanged; only a factual coordination
+   comment is optional.
+3. Safely retain/return the primary checkout to clean current develop using
+   COMPLETE's checkout-return rules only, never closure/reset/stash/history
+   cleanup. Temporary isolation never authorizes switching another active
+   checkout.
+4. Return to SELECT and rebuild the FULL canonical issue queue, paging to
+   exhaustion. Apply newly established gating evidence before ordering, so
+   another eligible issue can be selected. Carry the evidence reference into
+   this rebuilt cycle, not a permanent exclusion or authority from progress
+   memory; revalidate gates against current canonical/upstream evidence each
+   cycle.
+5. This transition is NONTERMINAL: a gated candidate alone never emits BLOCKED,
+   STOP_REVISE or STOP_AND_ASK. If all remaining issues are ineligible,
+   QUEUE_EMPTY reports their reasons. A single gated issue cannot block
+   unrelated eligible work.
+
+Classification precedes ordinary blocker escalation. History is retained on
+every path; this is a command contract, not a Console controller or product
+rule:
+
+| Evidence Class              | Delivery Not Started | Delivery Started  | History |
+| --------------------------- | -------------------- | ----------------- | ------- |
+| unmet_prerequisite          | SELECT               | PRESERVE_DELIVERY | retain  |
+| missing_producer            | SELECT               | PRESERVE_DELIVERY | retain  |
+| missing_contract_artifact   | SELECT               | PRESERVE_DELIVERY | retain  |
+| known_dependency_gate       | SELECT               | PRESERVE_DELIVERY | retain  |
+| all_ineligible_queue        | QUEUE_EMPTY          | NOT_APPLICABLE    | retain  |
+| genuine_owner_decision      | STOP_AND_ASK         | STOP_AND_ASK      | retain  |
+| eligible_execution_problem  | RECOVER              | RECOVER           | retain  |
+| exhausted_machinery_failure | BLOCKED              | BLOCKED           | retain  |
+| review_findings_at_bound    | NOT_APPLICABLE       | STOP_REVISE       | retain  |
+
+PRESERVE_DELIVERY means existing remediation/reconciliation/review and owner-
+decision rules, never silent abandonment. RECOVER is bounded technical
+remediation for an eligible issue. Genuine new owner decisions still stop the
+whole invocation; already-declared unmet owner prerequisites remain SELECT
+gates. BLOCKED is exhausted authorized loop/execution machinery or an execution
+dependency with no workaround, not a proven pre-implementation issue gate.
+STOP_REVISE stays review-bound. Producer/browser security, public/private
+licensing and validation are not waived; missing producer APIs never authorize
+shell/database substitutes or invented views.
+
 ## IMPLEMENT
 
 For the selected issue follow `.kilo/command/implement-issue.md` as though
