@@ -10,7 +10,108 @@ function text(path) {
   return readFileSync(resolve(root, path), "utf8").trim().replace(/\s+/gu, " ");
 }
 
+function eligibilityTransitions() {
+  const section = readFileSync(resolve(root, ".kilo/command/loop.md"), "utf8")
+    .split("## Post-Selection Eligibility Revalidation")[1]
+    .split("## IMPLEMENT")[0];
+  const rows = new Map();
+  for (const line of section.split("\n")) {
+    if (!line.startsWith("| ")) continue;
+    const cells = line
+      .slice(1, -1)
+      .split("|")
+      .map((cell) => cell.trim());
+    if (cells[0] === "Evidence Class" || /^:?-+:?$/u.test(cells[0])) continue;
+    if (cells.length !== 4 || rows.has(cells[0]))
+      throw new Error("classification rows must be unique four-column rules");
+    rows.set(cells[0], cells.slice(1));
+  }
+  return rows;
+}
+
 describe("ported Model Intelligence workflow contract", () => {
+  test("pre-delivery gates refresh full selection without stopping or resetting history", () => {
+    const transitions = eligibilityTransitions();
+    for (const gate of [
+      "unmet_prerequisite",
+      "missing_producer",
+      "missing_contract_artifact",
+      "known_dependency_gate",
+    ]) {
+      const [before, after, history] = transitions.get(gate);
+      expect([before, after, history]).toEqual([
+        "SELECT",
+        "PRESERVE_DELIVERY",
+        "retain",
+      ]);
+      const freshQueue = [3, 7];
+      const gatedThisCycle = new Set([3]);
+      expect(freshQueue.filter((issue) => !gatedThisCycle.has(issue))).toEqual([
+        7,
+      ]);
+      expect(["BLOCKED", "STOP_REVISE", "STOP_AND_ASK"]).not.toContain(before);
+      gatedThisCycle.add(7);
+      const eligible = freshQueue.filter((issue) => !gatedThisCycle.has(issue));
+      const outcome = eligible[0] ?? transitions.get("all_ineligible_queue")[0];
+      expect(outcome).toBe("QUEUE_EMPTY");
+    }
+    const section = text(".kilo/command/loop.md")
+      .split("## Post-Selection Eligibility Revalidation")[1]
+      .split("## IMPLEMENT")[0];
+    for (const invariant of [
+      "BEFORE the first substantive implementation mutation",
+      "no implementation commit, no current authorized implementation PR",
+      "including documentation/contract work",
+      "Prior delivery in another checkout/session still counts",
+      "Make no speculative implementation, invented producer semantics or workaround",
+      "Keep the issue open and unchanged",
+      "clean current develop",
+      "rebuild the FULL canonical issue queue, paging to exhaustion",
+      "not a permanent exclusion or authority from progress memory",
+      "revalidate gates against current canonical/upstream evidence each cycle",
+      "If all remaining issues are ineligible, QUEUE_EMPTY",
+      "a gated candidate alone never emits BLOCKED",
+    ])
+      expect(section).toContain(invariant);
+  });
+
+  test("started delivery and genuine stops cannot be evaded by issue gating", () => {
+    const transitions = eligibilityTransitions();
+    for (const evidence of [
+      [true, false, false],
+      [false, true, false],
+      [false, false, true],
+    ]) {
+      const phase = evidence.some(Boolean) ? 1 : 0;
+      expect(transitions.get("missing_producer")[phase]).toBe(
+        "PRESERVE_DELIVERY",
+      );
+    }
+    for (const [condition, expected] of [
+      ["genuine_owner_decision", "STOP_AND_ASK"],
+      ["eligible_execution_problem", "RECOVER"],
+      ["exhausted_machinery_failure", "BLOCKED"],
+    ])
+      expect(transitions.get(condition)).toEqual([
+        expected,
+        expected,
+        "retain",
+      ]);
+    expect(transitions.get("review_findings_at_bound")).toEqual([
+      "NOT_APPLICABLE",
+      "STOP_REVISE",
+      "retain",
+    ]);
+    expect(
+      [...transitions.values()].every((rule) => rule[2] === "retain"),
+    ).toBe(true);
+    for (const path of [
+      ".kilo/rules/10-task-system.md",
+      ".kilo/rules/30-implementation-discipline.md",
+    ])
+      expect(text(path)).toContain("post-selection eligibility revalidation");
+  });
+
   test("discovery and primary context authority", () => {
     const loop = text(".kilo/command/loop.md");
     for (const path of [

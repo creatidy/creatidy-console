@@ -61,6 +61,14 @@
 
 ## Technical Self-Remediation
 
+For `/loop`, first apply post-selection eligibility revalidation in loop.md.
+Confirmed pre-implementation prerequisite/producer/contract gates are issue
+ineligibility, not machinery failure or a new owner decision: retain history/
+counters and return nonterminal SELECT with a fresh full queue. Unavailable
+inspection is not proof of a gate; recover tools/access first. Substantive
+delivery remains protected, genuine new owner decisions still stop, and this
+exception never bypasses producer/browser security, licensing or review gates.
+
 This shared contract applies to implementation, loop, review and remediation. A
 blocker is not automatically an owner decision. Before returning control to the
 owner or emitting STOP_AND_ASK, OWNER_DECISION_NEEDED or BLOCKED, classify the
