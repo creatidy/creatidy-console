@@ -2,15 +2,16 @@
 
 ## Integration Risks First
 
-These are verified source gaps, not newly delivered Console functionality.
+These are verified source gaps at the inspected revisions, not newly delivered
+Console functionality or a refreshed inventory of current producer delivery.
 
-| Divergence / consequence                                                                                                                                           | Priority, owner and closure condition                                                                                                                                                                                                                                       |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Kernel offline `task_status`/export opens lifetime-exclusive SQLite; concurrent Console reader can conflict and startup can migrate/rebuild                        | P1 before live reads: [Kernel #57](https://forgejo.creatidy.com/Creatidy/creatidy-kernel/issues/57) + [Console #2](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/2); close with owner-served authorized view and concurrent conformance, not weaker locking |
-| Router `/v1/status` collects capacity every read; tabs/renders must not multiply collection or incidental recovery                                                 | P1 before reads: [Router #183](https://forgejo.creatidy.com/BioMedical-IT/scarcity-router/issues/183) + Console #2; close with documented collection/freshness/cache semantics and bounded read proof                                                                       |
-| Router historical source inventory is not live connection; static admin resource views omit derived resources; report generation time is not observation freshness | P2 before resource view: [Router #140](https://forgejo.creatidy.com/BioMedical-IT/scarcity-router/issues/140) + [Console #5](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/5); close with honest producer facts and display conformance                     |
-| No verified delegated Console read/command principal, public replay/history contract or unified correlation across products                                        | P1 design: Kernel #57, Router #183, [MI #16](https://forgejo.creatidy.com/Creatidy/model-intelligence/issues/16), Console #2/#3/#7; close with independently supported owner contracts, not a guessed common schema/proxy                                                   |
-| MI synthetic proof is now integrated, but no real publication/operational feed; projection deltas do not reconstruct causes                                        | P2 before knowledge view: [MI #13](https://forgejo.creatidy.com/Creatidy/model-intelligence/issues/13)/#16 + [Console #6](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/6); close with actual versioned evidence cut and producer-consumer receipt          |
+| Divergence / consequence                                                                                                                                           | Priority, owner and closure condition                                                                                                                                                                                                                                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Kernel offline `task_status`/export opens lifetime-exclusive SQLite; concurrent Console reader can conflict and startup can migrate/rebuild                        | P1 before live reads: [Kernel #57](https://forgejo.creatidy.com/Creatidy/creatidy-kernel/issues/57) + [Console #2](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/2); close with owner-served authorized view and concurrent conformance, not weaker locking                                                                                                                                              |
+| Router `/v1/status` collects capacity every read; tabs/renders must not multiply collection or incidental recovery                                                 | P1 before reads: [Router #183](https://forgejo.creatidy.com/BioMedical-IT/scarcity-router/issues/183) + Console #2; close with documented collection/freshness/cache semantics and bounded read proof                                                                                                                                                                                                                    |
+| Router historical source inventory is not live connection; static admin resource views omit derived resources; report generation time is not observation freshness | P2 before resource view: [Router #140](https://forgejo.creatidy.com/BioMedical-IT/scarcity-router/issues/140) + [Console #5](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/5); close with honest producer facts and display conformance                                                                                                                                                                  |
+| No verified delegated Console read/command principal, public replay/history contract or unified correlation across products                                        | P1 design: Kernel #57, Router #183, [MI #16](https://forgejo.creatidy.com/Creatidy/model-intelligence/issues/16), Console #2/#3/#7; close with independently supported owner contracts, not a guessed common schema/proxy                                                                                                                                                                                                |
+| At inspected MI revisions, synthetic proof is integrated but no publication/operational feed; projection deltas do not reconstruct causes                          | P2: [MI #16](https://forgejo.creatidy.com/Creatidy/model-intelligence/issues/16) owns the initial operator/export contract upstream of [Console #6](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/6); contract conformance precedes adapter/UI integration, which still needs actual publication ([MI #13](https://forgejo.creatidy.com/Creatidy/model-intelligence/issues/13)) and integration receipts |
 
 The bootstrap's branch-protection/runner observations are historical, not an
 integration risk gate. Console #14 is closed **NOT_REQUIRED / owner-resolved**
@@ -97,6 +98,53 @@ Transport (SSE/WebSocket/polling/other), production session boundary and numeric
 client limits are open until producer evidence supports them. No global event
 ordering, shared database, common ontology service or hidden producer shell/API
 is selected.
+
+## MI Producer-First Contract Decision
+
+**Accepted owner decision, 2026-10-08:**
+[Console #6 dependency decision](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/6#issuecomment-15766).
+MI, as producer, owns and publishes the initial versioned operator/export
+contract under
+[MI #16](https://forgejo.creatidy.com/Creatidy/model-intelligence/issues/16).
+Console, as consumer, defines requirements and validates/adopts that contract.
+MI #16 is upstream of Console #6; it does not require Console #6 to finish
+first. The semantic requirements above and in #6 remain consumer input, not
+approved wire fields or a competing Console-owned MI schema.
+
+Separate the two acceptance levels:
+
+- **Contract-level conformance:** offline, version-pinned portable fixtures may
+  validate the published MI-owned contract against consumer requirements without
+  a working Console adapter/UI. Identify the contract version, fixture
+  provenance, evidence set/revision and receipt limits. Cover exact
+  snapshot/acquisition-cut identity, provenance/rights, temporal
+  validity/conflicts, CLI/export parity, unsupported versions and explicit
+  history/gap semantics as applicable. Endpoint deltas do not become causal
+  replay. This is portable contract conformance, not an exercised Console
+  implementation or live/browser/installed acceptance.
+- **Console adapter/UI integration:** adopt a supported MI contract and prove
+  the actual consumer behavior. Preserve #3 projection infrastructure, the
+  supported read/auth boundary inventoried by #2, #10 accessible views/semantic
+  agreement and #12 browser/security and separately authorized installed
+  acceptance. MI publication/distribution (#13/#18) and Router #176/Kernel #55
+  remain applicable gates for the referenced, composed and operational
+  integration. Completed downstream components are not prerequisites merely to
+  define or validate the initial MI contract.
+
+A missing or incompatible field must produce a concrete Console consumer
+requirement: affected behavior, evidence/negative case and expected semantics.
+Request a versioned producer change from MI and validate the supported revised
+contract; never silently reinterpret fields or manufacture absent identity,
+freshness, history or authority. Unsupported security-critical semantics still
+fail closed; code licensing, data rights and service permissions remain
+separate.
+
+The #2 design inventory below and its exact revision evidence are preserved as
+historical receipts, not refreshed claims about current MI delivery. This
+decision adds ownership and sequencing, not implementation evidence. Reinspect
+current producer contracts before adoption. No #6 implementation, BFF, browser
+topology, live/private access or weaker security is authorized by this
+correction.
 
 ## Command Inventory Gate
 
@@ -237,8 +285,12 @@ checks can validate this documentation/scaffold, not discharge live acceptance.
 
 ## Conformance and Rights
 
-Version-pinned synthetic fixtures and consumer negative tests precede authorized
-installed read receipts; mutation and inference require separate
+Contract-level MI conformance may use offline, version-pinned portable fixtures
+before Console adapter/UI integration, without completed projections or browser
+authentication. It validates the MI-owned contract, not an invented Console
+schema, and does not discharge the downstream integration gates above.
+Version-pinned synthetic fixtures and actual consumer negative tests precede
+authorized installed read receipts; mutation and inference require separate
 authority/budgets. Never promote fixtures/unmerged PRs/HTTP200 to live
 readiness. Cache/schema/settings migrations preserve source meaning; unsupported
 security-critical fields fail closed. Private task metadata is sensitive even
