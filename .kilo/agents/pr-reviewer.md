@@ -126,6 +126,16 @@ worktree, commit, push or mutate Git/Forgejo state. Forgejo MCP credentials are
 tool-managed; never request, inspect, print, copy or expose tokens or credential
 material to model output or shell commands.
 
+Use only the individually allowed read-only Git commands in the permission
+allowlist, each as a separate command (do not combine commands with shell
+operators). Verify with `git status --short`, `git rev-parse HEAD`,
+`git show --no-patch <base-sha>`, `git show --no-patch <head-sha>`,
+`git merge-base <base-sha> <head-sha>` and
+`git diff <merge-base-sha> <head-sha>`. Substitute only the SHA values already
+obtained from MCP. If one of these commands is denied or the resulting evidence
+is incomplete, report the exact limitation; do not substitute anonymous remote
+enumeration or an unauthorized command.
+
 Read the linked issue and relevant referenced acceptance context, AGENTS.md and
 all applicable rules, and the COMPLETE merge-base-to-HEAD diff/current
 implementation. Review correctness, regressions, architecture, tests,
