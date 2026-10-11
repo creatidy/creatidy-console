@@ -105,6 +105,41 @@ STOP_AND_ASK. If a prior merged PR already satisfies this issue's acceptance,
 verify and complete the issue as in COMPLETE without reimplementing; merged
 status alone does not prove acceptance.
 
+## Dependency Evidence Checkpoints
+
+Before honoring an existing WAIT state or returning any terminal status
+(`BLOCKED`, `STOP_AND_ASK` or `QUEUE_EMPTY`), refresh canonical dependency and
+required producer/contract evidence for the affected open Console issue(s). Use
+the Forgejo dependency endpoints and current issue records/comments for
+`Creatidy/creatidy-console` only; inspect external producer evidence only when
+that Console issue explicitly requires it. Closed dependency state alone is not
+proof that its required evidence is delivered.
+
+For each candidate waiting on a dependency, follow explicit Console dependency
+edges backward recursively to the earliest predecessor whose required gates are
+not satisfied. Refresh every edge and gate on the traversed chain; do not stop
+at an intermediate issue. Report that earliest predecessor and its concrete
+verified gate. A missing edge/page, failed lookup, inaccessible producer record,
+or otherwise incomplete refresh makes the affected evidence `UNVERIFIED`, not
+ready and not a verified gate. Preserve the exact evidence gap and use bounded
+technical recovery; do not infer `QUEUE_EMPTY` or a terminal blocker from
+unknown data. If an explicit prerequisite is verified unmet, classify the
+dependent issue as gated, while continuing to evaluate unrelated issues in the
+full Console queue. One gated chain cannot suppress an independent eligible
+issue.
+
+After refresh, changed evidence supersedes stale observations for this cycle. A
+verified gate follows Post-Selection Eligibility Revalidation: an untouched
+issue returns nonterminally to fresh full `SELECT`, preserving delivery history;
+started delivery follows PRESERVE_DELIVERY. Only a fully refreshed queue with no
+eligible issue and no `UNVERIFIED` candidate can yield `QUEUE_EMPTY`.
+
+`RECOVER` progress/status narration is nonterminal. While authorized technical
+recovery or other eligible loop work remains in progress, report the current
+attempt and changed condition as progress only; do not return control, emit a
+terminal status, or treat the narration itself as a completed retry. Resume the
+same workflow and preserved history after the work result is available.
+
 ## Post-Selection Eligibility Revalidation
 
 After selection, inspect the issue and required producer/contracts using fresh

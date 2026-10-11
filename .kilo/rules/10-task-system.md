@@ -31,6 +31,13 @@
   implementation commits/current PRs/ substantive changes require preservation,
   not silent de-selection. Genuine new owner decisions still stop;
   eligible-issue execution failures use bounded recovery.
+- Before an existing WAIT or terminal loop outcome, refresh canonical Console
+  dependency edges and required producer/contract evidence; trace explicit
+  dependency chains backward to the earliest verified unmet predecessor. Missing
+  or inaccessible evidence is UNVERIFIED, not readiness or a gate, and cannot
+  establish QUEUE_EMPTY. Continue evaluating independent eligible Console
+  issues. Recovery progress narration is nonterminal while authorized work
+  continues; preserve issue history and bounded-recovery state.
 - Verify the canonical remote, fetch current `develop`, record its exact SHA and
   inspect files/status/branches. Demonstrate access by successful operations.
   Use one primary implementation checkout and only one mutator at a time.

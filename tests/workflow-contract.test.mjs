@@ -29,7 +29,151 @@ function eligibilityTransitions() {
   return rows;
 }
 
+function traceDependency(issueId, records, visited = new Set()) {
+  if (visited.has(issueId)) return { status: "UNVERIFIED" };
+  visited.add(issueId);
+  const issue = records.get(issueId);
+  if (
+    !issue ||
+    issue.repository !== "Creatidy/creatidy-console" ||
+    issue.available === false
+  )
+    return { status: "UNVERIFIED" };
+  if (issue.evidence === "unmet")
+    return { status: "GATED", predecessor: issueId };
+  if (issue.evidence === "unknown" || issue.dependenciesAvailable === false)
+    return { status: "UNVERIFIED" };
+  for (const dependency of issue.dependencies) {
+    const result = traceDependency(dependency, records, visited);
+    if (result.status !== "READY") return result;
+  }
+  return { status: "READY" };
+}
+
+function queueOutcome(records) {
+  const issues = [...records].filter(
+    ([, issue]) => issue.repository === "Creatidy/creatidy-console",
+  );
+  const outcomes = issues.map(([id]) => traceDependency(id, records));
+  if (outcomes.some(({ status }) => status === "UNVERIFIED")) return "RECOVER";
+  if (outcomes.some(({ status }) => status === "READY")) return "ELIGIBLE";
+  return "QUEUE_EMPTY";
+}
+
 describe("ported Model Intelligence workflow contract", () => {
+  test("terminal checkpoints trace refreshed Console dependency evidence", () => {
+    const records = new Map([
+      [
+        2,
+        {
+          repository: "Creatidy/creatidy-console",
+          dependencies: [],
+          evidence: "unmet",
+        },
+      ],
+      [
+        5,
+        {
+          repository: "Creatidy/creatidy-console",
+          dependencies: [2],
+          evidence: "satisfied",
+        },
+      ],
+      [
+        8,
+        {
+          repository: "Creatidy/creatidy-console",
+          dependencies: [5],
+          evidence: "satisfied",
+        },
+      ],
+      [
+        10,
+        {
+          repository: "Creatidy/creatidy-console",
+          dependencies: [],
+          evidence: "satisfied",
+        },
+      ],
+    ]);
+    expect(traceDependency(8, records)).toEqual({
+      status: "GATED",
+      predecessor: 2,
+    });
+    expect(traceDependency(10, records)).toEqual({ status: "READY" });
+
+    records.set(2, {
+      repository: "Creatidy/creatidy-console",
+      dependencies: [],
+      evidence: "satisfied",
+    });
+    expect(traceDependency(8, records)).toEqual({ status: "READY" });
+
+    records.get(2).available = false;
+    expect(traceDependency(8, records)).toEqual({ status: "UNVERIFIED" });
+    records.get(2).available = true;
+    records.get(2).evidence = "unknown";
+    expect(traceDependency(8, records)).toEqual({ status: "UNVERIFIED" });
+    expect(traceDependency(10, records)).toEqual({ status: "READY" });
+  });
+
+  test("unknown evidence cannot exhaust the repository-scoped queue", () => {
+    const records = new Map([
+      [
+        2,
+        {
+          repository: "Creatidy/creatidy-console",
+          dependencies: [],
+          evidence: "unknown",
+        },
+      ],
+      [
+        5,
+        {
+          repository: "Creatidy/creatidy-console",
+          dependencies: [2],
+          evidence: "satisfied",
+        },
+      ],
+      [99, { repository: "Other/other", dependencies: [], evidence: "unmet" }],
+    ]);
+    expect(queueOutcome(records)).toBe("RECOVER");
+
+    records.get(2).evidence = "unmet";
+    expect(queueOutcome(records)).toBe("QUEUE_EMPTY");
+    records.set(10, {
+      repository: "Creatidy/creatidy-console",
+      dependencies: [],
+      evidence: "satisfied",
+    });
+    expect(queueOutcome(records)).toBe("ELIGIBLE");
+    expect(text(".kilo/command/loop.md")).toContain(
+      "Only a fully refreshed queue with no eligible issue and no `UNVERIFIED` candidate can yield `QUEUE_EMPTY`",
+    );
+  });
+
+  test("recovery narration remains nonterminal while authorized work continues", () => {
+    const loop = text(".kilo/command/loop.md");
+    const checkpoint = loop
+      .split("## Dependency Evidence Checkpoints")[1]
+      .split("## Post-Selection Eligibility Revalidation")[0];
+    for (const requirement of [
+      "Before honoring an existing WAIT state or returning any terminal status",
+      "follow explicit Console dependency edges backward recursively",
+      "earliest predecessor whose required gates are not satisfied",
+      "A missing edge/page, failed lookup, inaccessible producer record",
+      "makes the affected evidence `UNVERIFIED`",
+      "One gated chain cannot suppress an independent eligible issue",
+      "changed evidence supersedes stale observations for this cycle",
+      "`RECOVER` progress/status narration is nonterminal",
+      "do not return control, emit a terminal status",
+    ])
+      expect(checkpoint).toContain(requirement);
+    expect(text(".kilo/rules/10-task-system.md")).toContain(
+      "Recovery progress narration is nonterminal while authorized work",
+    );
+  });
+
   test("pre-delivery gates refresh full selection without stopping or resetting history", () => {
     const transitions = eligibilityTransitions();
     for (const gate of [
