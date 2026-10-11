@@ -68,6 +68,12 @@ counters and return nonterminal SELECT with a fresh full queue. Unavailable
 inspection is not proof of a gate; recover tools/access first. Substantive
 delivery remains protected, genuine new owner decisions still stop, and this
 exception never bypasses producer/browser security, licensing or review gates.
+Before WAIT or a terminal loop outcome, refresh explicit same-repository
+dependency edges and required producer/contract evidence, tracing backward to
+the earliest verified unmet predecessor. Incomplete or inaccessible evidence is
+UNVERIFIED and requires bounded recovery; it cannot prove readiness, a gate, or
+queue exhaustion. Recovery progress narration stays nonterminal while authorized
+work continues.
 
 This shared contract applies to implementation, loop, review and remediation. A
 blocker is not automatically an owner decision. Before returning control to the
