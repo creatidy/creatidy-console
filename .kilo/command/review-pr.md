@@ -8,11 +8,14 @@ description:
 Review the exact Forgejo PR: $ARGUMENTS
 
 Run in the primary context; do not require a separate owner-opened session.
-Fetch actual PR metadata and its linked issue through `forgejo-mcp`. Require an
-open, unmerged canonical Creatidy/creatidy-console PR targeting `develop`. Read
-AGENTS.md and its rules, verify canonical remote, fetch current Git objects,
-freeze exact HEAD/base/merge-base and inspect status/branches. Do not edit the
-PR.
+Fetch actual repository, PR metadata and its linked issue through read-only
+`forgejo-mcp`. Require the canonical owning repository identity, an open,
+unmerged PR targeting `develop`, and exact head/base refs and SHAs from MCP
+metadata. Read AGENTS.md and its rules, verify canonical Git remote, fetch
+current Git objects, freeze exact HEAD/base/merge-base and inspect
+status/branches. Do not edit the PR. Anonymous `git ls-remote` is not required;
+the reviewer verifies canonical remote state via MCP and the prepared local
+exact objects.
 
 Use ONE prepared review checkout: safely switch to the fetched PR branch if
 needed, creating its local tracking branch at fetched HEAD only if absent.

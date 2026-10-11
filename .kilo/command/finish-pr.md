@@ -34,17 +34,18 @@ attempt/time limit, changed conditions and outcomes alongside preserved
 ordinals. Only a genuine commitment uses OWNER_DECISION_NEEDED and its durable
 decision contract; equivalent review execution choices are autonomous.
 
-1. Fetch actual PR metadata and linked issue via `forgejo-mcp`. Require an open,
-   unmerged canonical Creatidy/creatidy-console PR targeting `develop`. Verify
-   canonical remote, fetch current base/head and inspect status/branches. Use
-   ONE primary implementation checkout; safely switch to the existing PR branch,
-   or create its local tracking branch at the fetched PR HEAD if absent. Never
-   create a replacement branch. Temporary worktree/checkout isolation is
-   permitted under the shared contract, preserving one mutator and the same
-   PR/ledger. Never stash/reset or overwrite others' work. Unrelated uncommitted
-   changes preventing safe switching, local divergence or conflicting work
-   require diagnosis and safe isolation before a precise exhausted blocker or
-   genuine owner decision.
+1. Fetch actual PR metadata and linked issue via `forgejo-mcp`. Require the
+   canonical owning repository identity, an open, unmerged PR targeting
+   `develop`, and exact head/base refs and SHAs from MCP metadata. Verify the
+   canonical Git remote, fetch current base/head objects and inspect
+   status/branches. Use ONE primary implementation checkout; safely switch to
+   the existing PR branch, or create its local tracking branch at the fetched PR
+   HEAD if absent. Never create a replacement branch. Temporary
+   worktree/checkout isolation is permitted under the shared contract,
+   preserving one mutator and the same PR/ledger. Never stash/reset or overwrite
+   others' work. Unrelated uncommitted changes preventing safe switching, local
+   divergence or conflicting work require diagnosis and safe isolation before a
+   precise exhausted blocker or genuine owner decision.
 2. Require the current PR branch to be clean and match MCP HEAD. Freeze exact
    HEAD, base and merge base; run required `make check`, prepare its offline
    locked environment and inspect reviewer permissions. Review frozen
