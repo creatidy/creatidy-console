@@ -192,7 +192,7 @@ describe("ported Model Intelligence workflow contract", () => {
       expect(loop).toContain(requirement);
   });
 
-  test("independent review retains security permissions, unpinned binding and JSON schema", () => {
+  test("independent review binds canonical MCP metadata to exact local objects", () => {
     const raw = readFileSync(
       resolve(root, ".kilo/agents/pr-reviewer.md"),
       "utf8",
@@ -219,7 +219,6 @@ describe("ported Model Intelligence workflow contract", () => {
       '"forgejo-mcp_get_*": allow',
       '"forgejo-mcp_list_*": allow',
       '"forgejo-mcp_search_*": allow',
-      "git ls-remote https://forgejo.creatidy.com/Creatidy/creatidy-console",
       '"kilo debug agent pr-reviewer": allow',
       "npm_config_offline=true npm run typecheck",
       "npm_config_offline=true npm test",
@@ -227,11 +226,32 @@ describe("ported Model Intelligence workflow contract", () => {
     ]) {
       expect(frontmatter).toContain(allowed);
     }
+    expect(frontmatter).not.toContain("git ls-remote https://");
+    for (const denied of [
+      '"git ls-remote * -*": deny',
+      `'git ls-remote *"-*': deny`,
+      `"git ls-remote *'-*": deny`,
+    ]) {
+      expect(frontmatter).toContain(denied);
+    }
     expect(frontmatter).not.toMatch(/^model:/mu);
     expect(frontmatter).not.toMatch(/^variant:/mu);
     expect(frontmatter).not.toContain("gpt-6.1-sol");
     const reviewer = text(".kilo/agents/pr-reviewer.md");
     for (const requirement of [
+      "read-only Forgejo MCP",
+      "repository identity is exactly `Creatidy/creatidy-console`",
+      "open, unmerged, and targets `develop`",
+      "exact `head.sha` / `base.sha` values",
+      "Do not use anonymous `git ls-remote` as a prerequisite",
+      "both exact commit objects available locally",
+      "Independently calculate the merge base",
+      "complete merge-base-to-HEAD diff",
+      "each as a separate command (do not combine commands with shell operators)",
+      "`git status --short`, `git rev-parse HEAD`",
+      "`git show --no-patch <base-sha>`, `git show --no-patch <head-sha>`",
+      "missing refs/SHAs or a merge-base mismatch mean COMMENT",
+      "never request, inspect, print, copy or expose tokens",
       "## Reviewer binding",
       "intentionally does not pin a provider, model, model version or reasoning/thinking variant",
       "inherits the implementation session's effective provider family, model and reasoning/thinking configuration",
@@ -242,6 +262,21 @@ describe("ported Model Intelligence workflow contract", () => {
     ]) {
       expect(reviewer).toContain(requirement);
     }
+    for (const path of [
+      ".kilo/command/finish-pr.md",
+      ".kilo/command/review-pr.md",
+    ]) {
+      const command = text(path);
+      expect(command).toContain(
+        "exact head/base refs and SHAs from MCP metadata",
+      );
+    }
+    expect(text(".kilo/command/review-pr.md")).toContain(
+      "Anonymous `git ls-remote` is not required",
+    );
+    expect(text(".kilo/rules/20-forgejo-mcp.md")).toContain(
+      "Anonymous `git ls-remote` is optional corroboration, never a prerequisite",
+    );
     const schema = JSON.parse(raw.split("```json\n")[1].split("```")[0]);
     expect(Object.keys(schema)).toEqual([
       "reviewed_head",

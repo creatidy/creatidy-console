@@ -30,12 +30,6 @@ permission:
     "git show *": allow
     "git diff *": allow
     "git ls-tree *": allow
-    ? "git ls-remote https://forgejo.creatidy.com/Creatidy/creatidy-console
-      refs/heads/develop refs/heads/*"
-    : allow
-    ? "git ls-remote https://forgejo.creatidy.com/Creatidy/creatidy-console.git
-      refs/heads/develop refs/heads/*"
-    : allow
     "kilo debug agent pr-reviewer": allow
     "npm_config_offline=true npm run typecheck": allow
     "npm_config_offline=true npm test": allow
@@ -109,16 +103,38 @@ authorized by the owner.
 The reviewer itself must never change its provider, model, reasoning level,
 permissions or execution path, and must never delegate review.
 
-First fetch current PR metadata via Forgejo MCP, then query the canonical HTTPS
-repository with `git ls-remote`, using `refs/heads/develop` and the exact head
-ref from metadata. Do not guess branch names, use alternate transports or add
-options. Require open/unmerged develop target and exact expected HEAD/base.
-Mismatch means COMMENT with actual SHAs; do not review a different range.
-Require the supplied prepared checkout to be clean at expected HEAD. Inspect
-exact frozen Git objects/current branch read-only; do not create another
-checkout. The primary owns Git fetch, safe branch switching and any temporary
-isolation. You must not fetch, switch/create branches, use git worktree, commit,
-push or mutate Git/Forgejo state.
+First fetch the repository and current PR metadata through read-only Forgejo
+MCP. Verify that the repository identity is exactly `Creatidy/creatidy-console`,
+and that the PR is the supplied canonical PR, open, unmerged, and targets
+`develop`. Read its head/base refs and exact `head.sha` / `base.sha` values from
+the metadata; require them to match the supplied expected HEAD/base. Require the
+head repository to be the owning repository, not a similarly named fork. Missing
+or inconsistent metadata means COMMENT with observed identities; do not approve
+or review a different subject. Do not use anonymous `git ls-remote` as a
+prerequisite; it is unavailable for private repositories and is unnecessary when
+canonical MCP metadata is complete. No MCP write/mutation tool is permitted.
+
+Require the supplied prepared checkout to be clean at the expected HEAD, with
+both exact commit objects available locally. Independently calculate the merge
+base from the metadata base/head SHAs and require it to match the PR merge-base
+metadata when supplied. Inspect those frozen Git objects read-only and the
+complete merge-base-to-HEAD diff. Missing objects, dirty/mismatched checkout,
+missing refs/SHAs or a merge-base mismatch mean COMMENT, never an inferred or
+partial approval. The primary owns Git fetch, safe branch switching and any
+temporary isolation. You must not fetch, switch/create branches, use git
+worktree, commit, push or mutate Git/Forgejo state. Forgejo MCP credentials are
+tool-managed; never request, inspect, print, copy or expose tokens or credential
+material to model output or shell commands.
+
+Use only the individually allowed read-only Git commands in the permission
+allowlist, each as a separate command (do not combine commands with shell
+operators). Verify with `git status --short`, `git rev-parse HEAD`,
+`git show --no-patch <base-sha>`, `git show --no-patch <head-sha>`,
+`git merge-base <base-sha> <head-sha>` and
+`git diff <merge-base-sha> <head-sha>`. Substitute only the SHA values already
+obtained from MCP. If one of these commands is denied or the resulting evidence
+is incomplete, report the exact limitation; do not substitute anonymous remote
+enumeration or an unauthorized command.
 
 Read the linked issue and relevant referenced acceptance context, AGENTS.md and
 all applicable rules, and the COMPLETE merge-base-to-HEAD diff/current

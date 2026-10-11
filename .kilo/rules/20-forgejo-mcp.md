@@ -16,6 +16,12 @@
   is read-only; `/finish-pr` cannot merge/close issues. Never substitute curl,
   wget, custom HTTP scripts or direct REST when MCP supports the required
   operation. Read repository contents locally.
+- Independent reviewers use read-only Forgejo MCP metadata as the canonical
+  source for repository identity, PR open/unmerged state, target/head/base refs
+  and exact commit SHAs. Verify the supplied clean checkout, exact local
+  objects, merge base and full diff independently. Anonymous `git ls-remote` is
+  optional corroboration, never a prerequisite; no reviewer MCP writes or
+  credential exposure to model output or shell is permitted.
 - Implementation commits/pushes use normal Git under Adrian's Git identity:
   `Adrian Tkacz <adrian.tkacz@creatidy.com>`, Forgejo user `adrian.tkacz`.
   `forgejo-mcp` handles platform operations, not implementation authorship.
