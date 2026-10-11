@@ -31,7 +31,8 @@ function eligibilityTransitions() {
 
 function traceDependency(issueId, records, visited = new Set()) {
   if (visited.has(issueId)) return { status: "UNVERIFIED" };
-  visited.add(issueId);
+  const path = new Set(visited);
+  path.add(issueId);
   const issue = records.get(issueId);
   if (
     !issue ||
@@ -44,7 +45,7 @@ function traceDependency(issueId, records, visited = new Set()) {
   if (issue.evidence === "unknown" || issue.dependenciesAvailable === false)
     return { status: "UNVERIFIED" };
   for (const dependency of issue.dependencies) {
-    const result = traceDependency(dependency, records, visited);
+    const result = traceDependency(dependency, records, path);
     if (result.status !== "READY") return result;
   }
   return { status: "READY" };
@@ -108,6 +109,39 @@ describe("ported Model Intelligence workflow contract", () => {
       evidence: "satisfied",
     });
     expect(traceDependency(8, records)).toEqual({ status: "READY" });
+
+    records.set(11, {
+      repository: "Creatidy/creatidy-console",
+      dependencies: [12, 13],
+      evidence: "satisfied",
+    });
+    records.set(12, {
+      repository: "Creatidy/creatidy-console",
+      dependencies: [14],
+      evidence: "satisfied",
+    });
+    records.set(13, {
+      repository: "Creatidy/creatidy-console",
+      dependencies: [14],
+      evidence: "satisfied",
+    });
+    records.set(14, {
+      repository: "Creatidy/creatidy-console",
+      dependencies: [],
+      evidence: "satisfied",
+    });
+    expect(traceDependency(11, records)).toEqual({ status: "READY" });
+    records.set(15, {
+      repository: "Creatidy/creatidy-console",
+      dependencies: [16],
+      evidence: "satisfied",
+    });
+    records.set(16, {
+      repository: "Creatidy/creatidy-console",
+      dependencies: [15],
+      evidence: "satisfied",
+    });
+    expect(traceDependency(15, records)).toEqual({ status: "UNVERIFIED" });
 
     records.get(2).available = false;
     expect(traceDependency(8, records)).toEqual({ status: "UNVERIFIED" });
