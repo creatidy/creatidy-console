@@ -234,10 +234,10 @@ ordinal BEFORE dispatch in the shared delivery ledger; `/finish-pr` reentry,
 internal phases, new tasks and model/session changes cannot reset it. This is a
 safety ceiling, not a target; stop immediately for a genuine material decision.
 Fresh reviews inspect the COMPLETE PR, exact HEAD/base/merge base, read-only in
-a fresh isolated context, using an authorized execution path under the shared
-self-remediation contract, and return the existing structured JSON
-verdict/result. Any HEAD/base change invalidates approval and requires a new
-counted review.
+a fresh conversation under AGENTS.md's conversational-independence policy, using
+an authorized execution path under the shared self-remediation contract, and
+return the existing structured JSON verdict/result. Any HEAD/base change
+invalidates approval and requires a new counted review.
 
 REQUEST_CHANGES: understand/reproduce actionable in-scope findings, remediate
 with appropriate regression evidence, validate, commit normally and push the

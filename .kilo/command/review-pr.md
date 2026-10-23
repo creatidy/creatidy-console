@@ -37,8 +37,9 @@ Invoke `task` with `subagent_type: pr-reviewer`, `background: false`, no
 `task_id`. Pass only the PR number/URL, expected HEAD/base and fresh whole-PR
 review instructions including this checkout path and neutral execution/evidence
 locations if needed. Do not pass implementation reasoning, previous findings or
-desired verdict. The agent definition owns the JSON result contract and GPT-6.1
-Sol High selection. Never resume a past reviewer.
+desired verdict. Follow AGENTS.md's conversational-independence policy. The
+agent definition owns the JSON result contract and inherited model binding.
+Never resume a past reviewer.
 
 Preserve the same delivery ledger and 10-review ceiling used by finish-pr:
 reserve/persist the next ordinal before every whole-PR dispatch, including

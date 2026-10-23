@@ -123,16 +123,17 @@ and no review 11. At the bound exact valid APPROVE can proceed; owner decisions
 stop, finite infrastructure paths or review budget yield BLOCKED and remaining
 actionable findings STOP_REVISE. Do not patch when no fresh-review slot remains.
 
-Freeze exact HEAD/base/merge-base and clean source. Every complete PR review is
-a fresh foreground isolated read-only `pr-reviewer`; never resume it,
-self-approve or feed it prior findings, implementation reasoning or a desired
-verdict. Parent makes no edits/branch switches while it runs. The unchanged
-structured JSON result is the native handoff, not owner copy/paste or a platform
-review comment. The reviewer definition retains Model Intelligence's GPT-6.1 Sol
-High selection, deny-by-default permissions and exact-subject contract, with
-Console URL, offline Node validation and technical self-remediation guidance.
-Its permissions and stable JSON result schema remain unchanged. A changed
-HEAD/base invalidates approval.
+Follow the authoritative conversational-independence policy in
+[AGENTS.md](AGENTS.md). Freeze exact HEAD/base/merge-base and clean source.
+Every complete PR review is a fresh foreground read-only `pr-reviewer` session;
+never resume it, self-approve or feed it prior findings, implementation
+reasoning or a desired verdict. Parent makes no edits/branch switches while it
+runs. The unchanged structured JSON result is the native handoff, not owner
+copy/paste or a platform review comment. The reviewer definition owns its
+inherited model binding, deny-by-default permissions and exact-subject contract,
+with Console URL, offline Node validation and technical self-remediation
+guidance. Its permissions and stable JSON result schema remain unchanged. A
+changed HEAD/base invalidates approval.
 
 Only explicit `/loop` may integrate an open/unmerged develop PR after fresh
 issue/gate/label/authority and exact approval/currentness/check revalidation.
