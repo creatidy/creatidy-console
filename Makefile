@@ -24,7 +24,10 @@ test:
 	npm test
 
 check:
-	npm run check
+	@tmp=$$(mktemp -d /tmp/creatidy-check.XXXXXXXX) || exit 1; trap 'rm -rf "$$tmp"' EXIT; \
+	  env -i PATH="$(PATH)" HOME="$$tmp" TMPDIR="$$tmp" \
+	  npm_config_cache="$$tmp/cache" npm_config_userconfig=/dev/null \
+	  npm_config_globalconfig="$$tmp/global-npmrc" npm_config_offline=true npm run check
 
 build:
 	npm run build

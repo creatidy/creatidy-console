@@ -394,7 +394,17 @@ describe("authenticated application", () => {
       expect(response.statusCode).toBe(200);
       two = String(response.headers["set-cookie"]).split(";")[0]!;
     }
-    now += 48 * 60_000;
+    for (const minutes of [28, 19]) {
+      now += minutes * 60_000;
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/application",
+        headers: { ...headers, cookie: two },
+      });
+      expect(response.statusCode).toBe(200);
+      two = String(response.headers["set-cookie"]).split(";")[0]!;
+    }
+    now += 60_000;
     expect(
       (
         await app.inject({
