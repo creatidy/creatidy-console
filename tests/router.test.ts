@@ -138,18 +138,25 @@ async function upstream() {
         response.writeHead(400).end("{}");
         return;
       }
-      if (mode === "held" && request.method === "POST") {
-        held = () =>
-          response.end(
-            JSON.stringify({
-              schema_version: 1,
-              cursor: cursor(2),
-              events: [],
-              resync: null,
-              resync_reason: null,
-              provenance_current: true,
-            }),
-          );
+      if (
+        (mode === "held" || mode === "held-denied") &&
+        request.method === "POST"
+      ) {
+        const deny = mode === "held-denied";
+        held = () => {
+          if (deny) response.writeHead(401).end();
+          else
+            response.end(
+              JSON.stringify({
+                schema_version: 1,
+                cursor: cursor(2),
+                events: [],
+                resync: null,
+                resync_reason: null,
+                provenance_current: true,
+              }),
+            );
+        };
         signalHeld();
         return;
       }
@@ -398,6 +405,40 @@ describe("Router observer", () => {
     expect(result.status).toBe("connected");
     expect(result.facts?.resource_count).toBe(201);
     expect(result.facts?.resources).toHaveLength(200);
+  });
+
+  it("coalesces concurrent refreshes until denial clears old facts", async () => {
+    const fixture = await upstream();
+    const dir = directory();
+    writeConfig(dir, fixture.origin);
+    const observer = createRouterObserver(dir);
+    expect((await observer.refresh()).status).toBe("connected");
+    fixture.setMode("held-denied");
+    const first = observer.refresh();
+    try {
+      await Promise.race([
+        fixture.waiting,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("Fixture timed out")), 3000),
+        ),
+      ]);
+      const second = observer.refresh();
+      let settled = false;
+      void second.then(() => {
+        settled = true;
+      });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(settled).toBe(false);
+      fixture.release();
+      const [one, two] = await Promise.all([first, second]);
+      expect(one.status).toBe("denied");
+      expect(two.status).toBe("denied");
+      expect(one.facts).toBeNull();
+      expect(two.facts).toBeNull();
+      expect(fixture.calls).toHaveLength(2);
+    } finally {
+      fixture.release();
+    }
   });
 
   it("clears facts when provenance refresh is denied and when config is removed during replay", async () => {

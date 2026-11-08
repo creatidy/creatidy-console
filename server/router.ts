@@ -285,7 +285,7 @@ export function createRouterObserver(directory: string) {
   let status: RouterStatus = "unconfigured";
   let gap: string | null = null;
   let origin: string | null = null;
-  let pending = false;
+  let pending: Promise<ReturnType<typeof view>> | null = null;
 
   function configuration() {
     let config: RouterConfig | null;
@@ -325,9 +325,19 @@ export function createRouterObserver(directory: string) {
   async function refresh() {
     const config = configuration();
     if (!config) return view();
-    if (pending) return view();
-    pending = true;
-    const initialFingerprint = fingerprint;
+    if (pending) return await pending;
+    const active = refreshOnce(config, fingerprint);
+    pending = active;
+    try {
+      return await active;
+    } finally {
+      if (pending === active) pending = null;
+    }
+  }
+  async function refreshOnce(
+    config: RouterConfig,
+    initialFingerprint: string | null,
+  ) {
     try {
       let rejectedReplay = false;
       let nextGap = gap;
@@ -479,8 +489,6 @@ export function createRouterObserver(directory: string) {
         gap = null;
       } else status = "disconnected";
       return view();
-    } finally {
-      pending = false;
     }
   }
   return { view, refresh };
