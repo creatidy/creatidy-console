@@ -2,7 +2,8 @@
 
 ## Product and Reuse
 
-- Own only Console cross-product views, navigation, presentation preferences,
+- Own Console application authentication, server-side sessions and connection
+  configuration, cross-product views, navigation, presentation preferences,
   rebuildable UI projections and delivery of owner-authorized producer commands.
   Kernel owns task authority/lifecycle, workspaces, harness control and outcome
   evidence; Scarcity Router owns execution resources, private account/quota
@@ -38,10 +39,13 @@
   amend, force-push, or rewrite published history merely to reduce commit count.
 - Make the smallest coherent accepted change. No unrelated refactors,
   speculative abstractions, invented APIs/fields, empty future layers, silent
-  vocabulary changes or excessive documentation. No new live connection,
-  server/proxy, persistence layer or surface until a selected issue and accepted
-  producer/security contract require one. Preserve local-first boundaries; no
-  implicit public/LAN exposure.
+  vocabulary changes or excessive documentation. The owner approved a
+  Console-owned Node/TypeScript application server, durable sessions and SQLite
+  direction on 2026-11-08; implement them under a selected issue and the
+  security requirements. A live producer connection or additional surface still
+  requires selected scope and its accepted producer/security contract. No
+  general forwarding proxy. Preserve local-first boundaries; no implicit
+  public/LAN exposure.
 - A selected issue authorizes ordinary safe/reversible scoped operations. State
   a safe assumption and proceed; diagnose ordinary bugs/test/tool failures
   without asking for routine permission. Ask only for genuine authority,

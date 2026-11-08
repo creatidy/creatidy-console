@@ -47,20 +47,65 @@ clearly labeled and never wired into normal operational views.
 
 ## Runnable Commands
 
+The authenticated application server is tracked in
+[#31](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/31). The
+current implementation is not proof of external security or installed producer
+acceptance.
+
 Use Node `24.19.0` and npm `11.17.0` as declared in runtime/package
 configuration. Dependencies are exact-version locked; `make install` uses
 `npm ci`, not an unreviewed upgrade or unlocked install. No provider credentials
-are needed.
+are needed. The security test suite also requires the `openssl` executable to
+generate a temporary synthetic certificate; no certificate authority setup or
+external service is required. The browser acceptance test uses
+`/usr/bin/google-chrome` when present; if absent it is reported as skipped. It
+uses sandboxed headless Chrome, a temporary profile and synthetic local state,
+not external accounts. An installed browser that cannot run with its sandbox
+causes the test to fail. It builds and runs from a checkout with prepared locked
+dependencies; it is not a packaged installation or producer-integration receipt.
 
-| Command        | Actual purpose                                                       |
-| -------------- | -------------------------------------------------------------------- |
-| `make help`    | Show supported developer commands                                    |
-| `make install` | Install lockfile-exact development dependencies                      |
-| `make dev`     | Loopback Vite scaffold development server on port 5173               |
-| `make preview` | Loopback inspection of built `dist` on port 4173                     |
-| `make test`    | Deterministic scaffold/tooling/workflow contract tests               |
-| `make build`   | Local static artifact with project/runtime dependency license texts  |
-| `make check`   | Authoritative local/CI gate, including temporary artifact validation |
+| Command          | Actual purpose                                                       |
+| ---------------- | -------------------------------------------------------------------- |
+| `make help`      | Show supported developer commands                                    |
+| `make install`   | Install lockfile-exact development dependencies                      |
+| `make dev`       | Loopback Vite development server; no authenticated API on its own    |
+| `make preview`   | Loopback inspection of built `dist` on port 4173                     |
+| `make test`      | Deterministic server, UI, tooling and workflow contract tests        |
+| `make build`     | Local static artifact with project/runtime dependency license texts  |
+| `make check`     | Authoritative local/CI gate, including temporary artifact validation |
+| `make bootstrap` | Issue short-lived local first-owner authority                        |
+| `make start`     | Serve the built UI and authenticated API from one origin             |
+
+`make bootstrap` creates `bootstrap-token` in the private state directory with
+mode 0600, expires in 15 minutes, and refuses once an owner exists. Read it only
+from the trusted local machine and enter it in the setup form; do not commit,
+share or log it. After an expired or abandoned setup, remove that token file
+locally before issuing a replacement. Successful setup consumes the database
+authority and removes the token file. `CONSOLE_STATE_DIR` selects a private
+owner-only directory; the default is `~/.local/share/creatidy-console`.
+
+`make start` defaults to loopback HTTP at `http://127.0.0.1:4173`; local HTTP is
+not confidential against untrusted local users or processes. `CONSOLE_ORIGIN`
+sets the exact browser origin; HTTPS requires `CONSOLE_TLS_KEY` and
+`CONSOLE_TLS_CERT` paths and never falls back to HTTP. `CONSOLE_BIND_HOST`
+defaults to `127.0.0.1`; HTTP binds only loopback. Explicit non-loopback HTTPS
+exposure still needs appropriate network, certificate and operational security.
+`CONSOLE_STATIC_DIR` optionally selects the built UI directory instead of
+`dist`. The application does not trust forwarded headers. Sessions have
+30-minute idle and 24-hour absolute limits; logout revokes the current browser
+session. An observed backward system-clock change revokes all sessions and
+outstanding setup authority, including after restart; sign in again or issue
+fresh setup authority. The application cannot detect a clock change that occurs
+entirely between observations. Keep the host clock reliable.
+
+For a consistent backup stop the server and copy the complete owner-only state
+directory into protected storage. Restoring old state can resurrect revoked
+sessions. With the server stopped, run
+`node server/bootstrap.ts revoke-sessions` against the restored state before
+restarting; this deletes all sessions and rotates the cookie signing key.
+Backups contain password hashes and signing material and must be protected like
+credentials. A schema version newer than the application fails closed; do not
+modify SQLite by hand as an upgrade path.
 
 The check covers formatting, Markdown lint, deterministic local links using an
 adopted Markdown parser, current-public-file secret scanning, strict TypeScript,

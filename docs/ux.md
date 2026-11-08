@@ -35,6 +35,24 @@ states disable consequential actions pending a supported resynchronization.
 
 ## Journeys and Failure Cases
 
+The accepted authentication journeys below are target behavior, not claims that
+the current scaffold implements them. First installation uses explicit local
+bootstrap authority to create the only owner account, with no default password
+or open registration. Login opens the protected application; logout revokes the
+server session. An idle or absolute expiration returns to login with an
+accessible explanation when the session is next checked, without confusing a
+disconnected producer with a logged-out owner. After restart the account and
+valid sessions follow the documented durable session policy; expired or revoked
+sessions never return to life.
+
+Initial Router setup identifies the trusted endpoint and separately scoped
+observer credential without exposing it to browser storage, URLs or logs. The
+view must distinguish unconfigured, connected, denied, disconnected, stale and
+unsupported states using the vocabulary below. A disconnect retains only
+appropriately labeled last-known evidence; recovery uses the producer's opaque
+cursor and explicitly displays gaps and resynchronization. Kernel and MI are
+optional for Router-only use.
+
 | Journey              | Normal behavior                                                                                                          | Empty/stale/disconnected/denied/unsupported behavior                                                                                                                    |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Quick overview       | Active work, actual blockers, readiness/freshness by producer, owner action first                                        | No work differs from no observation; one producer never blanks peers; unconfigured modules optional; denied readiness hidden explicitly                                 |

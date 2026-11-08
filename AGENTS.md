@@ -1,8 +1,9 @@
 # Repository Guidance
 
-Creatidy Console is the public local-first operator interface, currently a
-repository foundation/non-operational scaffold, not a live cross-product
-console. Read README.md, docs/product.md (ownership/decision authority),
+Creatidy Console is the public local-first operator interface. The current
+scaffold is not a live cross-product console; the owner has approved a
+Console-owned authenticated application server and durable sessions as the next
+architecture. Read README.md, docs/product.md (ownership/decision authority),
 docs/contracts.md (producer evidence), SECURITY.md, docs/roadmap.md (registered
 gaps), CONTRIBUTING.md and the following rules before work; do not rely on
 automatic nested discovery:

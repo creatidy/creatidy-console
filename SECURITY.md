@@ -2,27 +2,26 @@
 
 ## Reporting and Current Status
 
-No operational product/authentication is implemented by the bootstrap scaffold.
-Development servers are loopback-only conveniences, not hardened production
-listeners. No public/LAN/mobile exposure, remote task control or production
-security certification is implied. Report non-sensitive defects in canonical
-Forgejo; do not post secrets/private metadata. A private reporting channel and
-incident policy must be established before operational distribution, tracked in
-the roadmap.
+The authenticated application foundation is in development; its controls and
+test evidence do not establish production security certification. No
+public/LAN/mobile exposure or remote task control is implied. Report
+non-sensitive defects in canonical Forgejo; do not post secrets/private
+metadata. A private reporting channel and incident policy must be established
+before operational distribution, tracked in the roadmap.
 
 ## Trust and Threat Model
 
-| Threat / asset                                                                | Required control and proof before feature support                                                                                                                                                                                          |
-| ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Untrusted task text, logs, Markdown, diffs/model output, external MI evidence | Escape text by default; no raw HTML injection; vetted Markdown sanitizer if required; limit sizes; reject executable/dangerous URL schemes; no trusted instruction/authority from content                                                  |
-| XSS and malicious navigation                                                  | CSP for chosen production server, safe link handling and no token-bearing links; test script-like/HTML payloads and links; do not infer safety from React escaping alone                                                                   |
-| CSRF, DNS rebinding, cross-origin sessions                                    | Exact origin/host allowlist, authenticated reads/writes, CSRF protection for cookie mutations; reject hostile/missing origins as topology requires; no permissive CORS/forwarded-host trust; test browser attack cases                     |
-| Authority, revocation and multiple clients                                    | Owner API enforces principal/scope, subject and reviewed revision; revoked/expired sessions fail closed; stale approvals conflict; command receipt separate from observed effect; no UI-only access control                                |
-| Secrets                                                                       | No provider/Forge tokens in URLs, logs, fixtures, localStorage, browser bundles, offline/PWA cache or telemetry. No copying provider-managed secrets for convenience; no `VITE_` credential configuration                                  |
-| Local proxy / BFF                                                             | Only if contract evidence justifies it; fixed trusted upstreams, least-privilege credentials, bounded responses/timeouts, redirects/DNS restrictions and tests; never arbitrary endpoint forwarding, SSRF or credential-forwarding service |
-| Private metadata/exports                                                      | Minimize collection, explicit scope/consent, redaction and bounded retention; private URLs/tasks/costs can identify users even without source code; no automatic central upload                                                            |
-| Console cache/preferences                                                     | Rebuildable cache, separate from authority; version minimal non-secret settings; purge private cache on revocation according to contract; no secret offline storage; define retention before persisting producer data                      |
-| Execution and development CI                                                  | Kernel/harness/host own runtime sandbox. Reviewer tests execute untrusted code; pinned YAML does not prove hosted runner isolation, network restriction or secret absence                                                                  |
+| Threat / asset                                                                | Required control and proof before feature support                                                                                                                                                                      |
+| ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Untrusted task text, logs, Markdown, diffs/model output, external MI evidence | Escape text by default; no raw HTML injection; vetted Markdown sanitizer if required; limit sizes; reject executable/dangerous URL schemes; no trusted instruction/authority from content                              |
+| XSS and malicious navigation                                                  | CSP for chosen production server, safe link handling and no token-bearing links; test script-like/HTML payloads and links; do not infer safety from React escaping alone                                               |
+| CSRF, DNS rebinding, cross-origin sessions                                    | Exact origin/host allowlist, authenticated reads/writes, CSRF protection for cookie mutations; reject hostile/missing origins as topology requires; no permissive CORS/forwarded-host trust; test browser attack cases |
+| Authority, revocation and multiple clients                                    | Owner API enforces principal/scope, subject and reviewed revision; revoked/expired sessions fail closed; stale approvals conflict; command receipt separate from observed effect; no UI-only access control            |
+| Secrets                                                                       | No provider/Forge tokens in URLs, logs, fixtures, localStorage, browser bundles, offline/PWA cache or telemetry. No copying provider-managed secrets for convenience; no `VITE_` credential configuration              |
+| Scoped producer access                                                        | Fixed trusted upstreams, least-privilege credentials, bounded responses/timeouts, redirects/DNS restrictions and tests; never arbitrary endpoint forwarding, SSRF or credential-forwarding service                     |
+| Private metadata/exports                                                      | Minimize collection, explicit scope/consent, redaction and bounded retention; private URLs/tasks/costs can identify users even without source code; no automatic central upload                                        |
+| Console cache/preferences                                                     | Rebuildable cache, separate from authority; version minimal non-secret settings; purge private cache on revocation according to contract; no secret offline storage; define retention before persisting producer data  |
+| Execution and development CI                                                  | Kernel/harness/host own runtime sandbox. Reviewer tests execute untrusted code; pinned YAML does not prove hosted runner isolation, network restriction or secret absence                                              |
 
 There is no browser-autonomous shell fallback for an unavailable producer
 command, no shared ORM and no mounting/opening Kernel's active SQLite database.
@@ -35,9 +34,54 @@ Router administrator sessions, inference-client keys for `/v1/**` and worker
 credentials are distinct. None grants another surface's authority. Existing
 Router administration is reached by top-level navigation with its own login; no
 iframe, cookie/session copying, SSO assumption or cross-origin fetch shortcut.
-Browser/auth topology remains open until verified read delegation and
-owner-command contracts exist. Reuse established secure mechanisms; no custom
-identity platform.
+The owner approved a Console-owned application server and session boundary on
+2026-11-08. Console login authenticates its local owner, not the owner to
+Router, Kernel or MI. Router observer credentials are separately scoped and
+revocable; an administrator session or inference credential is not an observer
+credential. Reuse established secure mechanisms; no custom identity platform.
+
+## Application Security Requirements
+
+These requirements define the approved target; individual controls require
+implementation and verification. Security precedes UX, maintainability and
+flexibility.
+
+- Bootstrap requires explicit local owner authority and a short-lived,
+  single-use secret or equivalent local capability. It must fail closed after
+  owner creation and reject invalid, expired, replayed and concurrent attempts.
+  Never install default credentials or leave registration open.
+- Use a maintained Argon2id implementation with appropriate parameters and
+  unique salts. Never log, reversibly encrypt or store plaintext passwords.
+  Rate-limit failed authentication and bootstrap attempts, avoid account and
+  secret disclosure, and protect against resource exhaustion.
+- Issue opaque high-entropy session identifiers, rotate on authentication and
+  privilege changes, invalidate old identifiers, enforce idle and absolute
+  expiry server-side, and support server-side revocation and logout. Persist
+  authoritative session state across restart; separate browser sessions. A
+  cookie alone is not authority after revocation. An observed backward
+  wall-clock change invalidates sessions and setup authority, including after
+  restart; unobserved clock excursions cannot be detected by the application.
+- Cookies are HttpOnly, host-only and SameSite with explicit lifetime. Require
+  Secure on HTTPS; loopback HTTP must be configured explicitly and tested
+  separately, never used as a silent fallback for remote HTTPS. No permissive
+  CORS. Validate exact Host and Origin without trusting unconfigured forwarded
+  headers, reject DNS-rebinding attempts, and require CSRF protection for
+  cookie-authenticated mutations including login and bootstrap.
+- Serve browser resources from the same origin with a restrictive CSP,
+  anti-framing, no-sniff and appropriate no-store policies. Escape untrusted
+  producer content; never put secrets in browser code, storage, URLs or logs.
+  Fixed producer operations must reject untrusted destinations and redirects and
+  bound request and response sizes and timeouts.
+- Keep owner credentials, sessions, producer credentials and rebuildable
+  producer facts separate in lifecycle and access. Use restrictive local state
+  directory and file permissions; define backup, restore and migration behavior
+  without disclosing or silently invalidating secrets. Diagnostics must not
+  expose passwords, session identifiers or upstream credentials.
+- Test unauthenticated access, hostile Origin/Host, CSRF, rebinding, bootstrap
+  misuse, fixation, expiry, logout, revocation, restart, independent browser
+  sessions and secret absence, including real browser behavior where supported.
+  Synthetic tests are not a production security or network-isolation
+  certificate.
 
 For every future mutation, document owner API, required principal/scope, exact
 subject/revision, idempotency key/input, reconciliation/audit receipt and
@@ -56,18 +100,21 @@ condition.
 ## Local and Remote Operations
 
 Local default: no production listener/configuration is installed by bootstrap.
-Future connection onboarding must verify exact instance identity,
-capability/schema, TLS/trust and origin restrictions. User-local configuration
-only; no hardcoded workspace paths, generated credentials or dependency on
-private deployments. Remote exposure requires a separate threat-model decision,
-explicit owner authority, tested authentication/transport and revocation, and a
-documented supported matrix. It is not obtained by changing a dev server to bind
-all interfaces.
+Loopback HTTP assumes the local host and its users/processes are trusted; it is
+not confidential against untrusted local observers. Remote access requires
+verified HTTPS, explicit configuration and a tested exposure boundary; never
+silently fall back to HTTP. Future connection onboarding must verify exact
+instance identity, capability/schema, TLS/trust and origin restrictions.
+User-local configuration only; no hardcoded workspace paths, generated
+credentials or dependency on private deployments. Remote exposure requires a
+separate threat-model decision, explicit owner authority, tested
+authentication/transport and revocation, and a documented supported matrix. It
+is not obtained by changing a dev server to bind all interfaces.
 
-Security tests for future connections include revoked/expired sessions,
-unsupported security-critical fields, cross-origin/CSRF/rebinding, injection
-payloads, changed approval revision, denied commands and timeout after
-acceptance. Bootstrap gates only establish current-source secret hygiene and
-scaffold behavior; they do not prove these future controls or production runner
-security. See [roadmap](docs/roadmap.md) for registered ownership and acceptance
-gates.
+Security tests for connections include revoked/expired sessions, unsupported
+security-critical fields, cross-origin/CSRF/rebinding, injection payloads,
+changed approval revision, denied commands and timeout after acceptance.
+Bootstrap gates only establish current-source secret hygiene and current
+behavior; they do not prove production runner security or external network
+isolation. See [roadmap](docs/roadmap.md) for registered ownership and
+acceptance gates.

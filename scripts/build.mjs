@@ -55,7 +55,7 @@ try {
 
   const html = await readFile(join(outDir, "index.html"), "utf8");
   assert.match(html, /<html lang="en">/);
-  assert.match(html, /<title>Creatidy Console bootstrap<\/title>/);
+  assert.match(html, /<title>Creatidy Console<\/title>/);
   assert.match(html, /<div id="root"><\/div>/);
   assert.doesNotMatch(html, /\/src\/main\.tsx/);
   const tags = html.match(/<(?:script|link)\b[^>]*>/g) ?? [];
@@ -73,15 +73,15 @@ try {
     assert((await stat(path)).size > 0, `Empty asset: ${asset}`);
     if (path.endsWith(".js")) {
       const javascript = await readFile(path, "utf8");
-      assert.match(javascript, /Creatidy Console bootstrap/);
-      assert.match(
+      assert.match(javascript, /CREATIDY \/ CONSOLE/);
+      assert.doesNotMatch(
         javascript,
-        /https:\/\/forgejo\.creatidy\.com\/Creatidy\/creatidy-console\/issues\/1/,
+        /CONSOLE_TLS_KEY|signing_key|password_hash|NAPI_RS_NATIVE_LIBRARY_PATH/,
       );
     }
   }
   console.log(
-    "Validated built HTML, referenced assets, and runtime MIT licenses.",
+    "Validated built HTML, referenced assets, and browser runtime MIT licenses.",
   );
 } finally {
   if (temporary) await rm(temporary, { recursive: true, force: true });

@@ -60,3 +60,39 @@ a:focus-visible {
   outline: 0.15rem solid #154f7c;
   outline-offset: 0.25rem;
 }
+
+form {
+  display: grid;
+  gap: 0.75rem;
+  max-width: 30rem;
+}
+label {
+  font-weight: 650;
+}
+input,
+button {
+  font: inherit;
+  padding: 0.6rem 0.8rem;
+}
+input {
+  width: 100%;
+  border: 1px solid #36576d;
+  background: white;
+  color: #162f46;
+}
+button {
+  justify-self: start;
+  border: 0;
+  background: #225c86;
+  color: white;
+  cursor: pointer;
+}
+button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+input:focus-visible,
+button:focus-visible {
+  outline: 0.15rem solid #154f7c;
+  outline-offset: 0.25rem;
+}
