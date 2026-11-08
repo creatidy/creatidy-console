@@ -15,6 +15,26 @@ type RouterStatus =
   | "configuration_error";
 class Unsupported extends Error {}
 
+function parseObserverJson(source: string): unknown {
+  const json = JSON as JSON & { rawJSON: (source: string) => unknown };
+  const parse = JSON.parse as unknown as (
+    text: string,
+    reviver: (
+      key: string,
+      value: unknown,
+      context?: { source?: string },
+    ) => unknown,
+  ) => unknown;
+  return parse(source, (_key, value, context) => {
+    if (typeof value === "number" && !Number.isSafeInteger(value)) {
+      if (!context?.source)
+        throw new Unsupported("Unsupported observer number");
+      return json.rawJSON(context.source);
+    }
+    return value;
+  });
+}
+
 function object(value: unknown): RecordValue {
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw new Unsupported("Unsupported observer data");
@@ -258,7 +278,7 @@ async function observe(
                 status: response.statusCode ?? 0,
                 data:
                   response.statusCode === 200
-                    ? JSON.parse(Buffer.concat(chunks).toString("utf8"))
+                    ? parseObserverJson(Buffer.concat(chunks).toString("utf8"))
                     : null,
               });
             } catch {

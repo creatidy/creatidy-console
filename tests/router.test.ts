@@ -32,9 +32,9 @@ const run = promisify(execFile);
 const directories: string[] = [];
 const servers: Server[] = [];
 const cursor = (sequence: number) => ({
-  epoch: "synthetic-epoch",
+  epoch: "a".repeat(32),
   sequence,
-  provenance: "synthetic-provenance",
+  provenance: "b".repeat(64),
   schema_version: 1,
 });
 const snapshot = (model = "model-a") => ({
@@ -173,12 +173,18 @@ async function upstream() {
             { length: 201 },
             () => data.resources[0]!,
           );
+        const payload = JSON.stringify({
+          schema_version: mode === "version" ? 2 : 1,
+          cursor: cursor(currentSequence),
+          snapshot: data,
+        });
         response.end(
-          JSON.stringify({
-            schema_version: mode === "version" ? 2 : 1,
-            cursor: cursor(currentSequence),
-            snapshot: data,
-          }),
+          mode === "large-cursor"
+            ? payload.replace(
+                `"sequence":${currentSequence}`,
+                '"sequence":9223372036854775807',
+              )
+            : payload,
         );
         return;
       }
@@ -371,7 +377,7 @@ describe("Router observer", () => {
       ),
     ).toBe(true);
     expect(JSON.stringify(disconnected)).not.toContain(credential);
-    expect(JSON.stringify(disconnected)).not.toContain("synthetic-epoch");
+    expect(JSON.stringify(disconnected)).not.toContain("a".repeat(32));
   });
 
   it("fails closed for unsupported versions, redirects, secret echoes and unsafe config files", async () => {
@@ -405,6 +411,19 @@ describe("Router observer", () => {
     expect(result.status).toBe("connected");
     expect(result.facts?.resource_count).toBe(201);
     expect(result.facts?.resources).toHaveLength(200);
+  });
+
+  it("replays a producer cursor without losing its 64-bit sequence", async () => {
+    const fixture = await upstream();
+    fixture.setMode("large-cursor");
+    const dir = directory();
+    writeConfig(dir, fixture.origin);
+    const observer = createRouterObserver(dir);
+    expect((await observer.refresh()).status).toBe("connected");
+    expect((await observer.refresh()).status).toBe("connected");
+    const replay = fixture.calls.find((call) => call.method === "POST");
+    expect(replay?.body).toContain('"sequence":9223372036854775807');
+    expect(replay?.body).not.toContain('"sequence":"9223372036854775807"');
   });
 
   it("coalesces concurrent refreshes until denial clears old facts", async () => {
@@ -619,7 +638,7 @@ describe("Router observer", () => {
       expect(response.statusCode).toBe(200);
       expect(response.json().status).toBe("connected");
       expect(response.body).not.toContain(credential);
-      expect(response.body).not.toContain("synthetic-epoch");
+      expect(response.body).not.toContain("a".repeat(32));
     } finally {
       await app.close();
     }

@@ -148,9 +148,9 @@ it.skipIf(!existsSync(chrome))(
       let calls = 0;
       const key = "synthetic-browser-observer-key";
       const position = {
-        epoch: "synthetic-epoch",
+        epoch: "a".repeat(32),
         sequence: 1,
-        provenance: "synthetic",
+        provenance: "b".repeat(64),
         schema_version: 1,
       };
       const fakeSnapshot = {
