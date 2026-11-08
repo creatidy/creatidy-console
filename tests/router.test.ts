@@ -175,7 +175,11 @@ async function upstream() {
           );
         const payload = JSON.stringify({
           schema_version: mode === "version" ? 2 : 1,
-          cursor: cursor(currentSequence),
+          cursor: {
+            ...cursor(currentSequence),
+            epoch:
+              mode === "provenance-epoch" ? "c".repeat(32) : "a".repeat(32),
+          },
           snapshot: data,
         });
         response.end(
@@ -184,7 +188,27 @@ async function upstream() {
                 `"sequence":${currentSequence}`,
                 '"sequence":9223372036854775807',
               )
-            : payload,
+            : mode === "huge-duration" || mode === "extreme-duration"
+              ? payload.replace(
+                  '"duration_seconds":null',
+                  `"duration_seconds":${mode === "huge-duration" ? "9223372036854775807" : "9".repeat(129)}`,
+                )
+              : payload,
+        );
+        return;
+      }
+      if (mode === "provenance-event" || mode === "provenance-epoch") {
+        currentModel = "model-after";
+        currentSequence = 2;
+        response.end(
+          JSON.stringify({
+            schema_version: 1,
+            cursor: cursor(1),
+            events: [],
+            resync: null,
+            resync_reason: null,
+            provenance_current: false,
+          }),
         );
         return;
       }
@@ -342,8 +366,11 @@ describe("Router observer", () => {
     fixture.setMode("invalid");
     expect((await observer.refresh()).gap).toContain("Replay was rejected");
     fixture.setMode("provenance");
-    expect((await observer.refresh()).facts?.resources[0]?.identity.model).toBe(
-      "model-a",
+    const provenance = await observer.refresh();
+    expect(provenance.facts?.resources[0]?.identity.model).toBe("model-a");
+    expect(provenance.gap).toContain("Replay was rejected");
+    expect(provenance.gap).toContain(
+      "intermediate history may have been omitted",
     );
     expect(fixture.calls.at(-1)?.url).toBe("/observer/v1/snapshot");
     fixture.setMode("reordered");
@@ -353,7 +380,7 @@ describe("Router observer", () => {
     const reordered = await freshObserver.refresh();
     expect(reordered.facts?.resources[0]?.identity.model).toBe("authoritative");
     expect(reordered.gap).toContain(
-      "intermediate history is not reconstructed",
+      "intermediate history may have been omitted",
     );
     fixture.setMode("denied");
     const denied = await observer.refresh();
@@ -424,6 +451,43 @@ describe("Router observer", () => {
     const replay = fixture.calls.find((call) => call.method === "POST");
     expect(replay?.body).toContain('"sequence":9223372036854775807');
     expect(replay?.body).not.toContain('"sequence":"9223372036854775807"');
+  });
+
+  it("marks possible omitted history when an empty stale replay is followed by a changed snapshot", async () => {
+    for (const mode of ["provenance-event", "provenance-epoch"]) {
+      const fixture = await upstream();
+      const dir = directory();
+      writeConfig(dir, fixture.origin);
+      const observer = createRouterObserver(dir);
+      expect((await observer.refresh()).status).toBe("connected");
+      fixture.setMode(mode);
+      const result = await observer.refresh();
+      expect(result.status).toBe("connected");
+      expect(result.facts?.resources[0]?.identity.model).toBe("model-after");
+      expect(result.gap).toContain(
+        "intermediate history may have been omitted",
+      );
+      expect(fixture.calls.at(-1)?.url).toBe("/observer/v1/snapshot");
+    }
+  });
+
+  it("keeps large producer quota durations without discarding other facts", async () => {
+    for (const [mode, expected] of [
+      ["huge-duration", "9223372036854775807"],
+      ["extreme-duration", "out_of_display_range"],
+    ]) {
+      const fixture = await upstream();
+      fixture.setMode(mode!);
+      const dir = directory();
+      writeConfig(dir, fixture.origin);
+      const result = await createRouterObserver(dir).refresh();
+      expect(result.status).toBe("connected");
+      expect(result.facts?.resources[0]?.identity.model).toBe("model-a");
+      expect(result.facts?.resources[0]?.quotas[0]?.duration_seconds).toBe(
+        expected,
+      );
+      expect(result.facts?.sources[0]?.source_id).toBe("source-a");
+    }
   });
 
   it("coalesces concurrent refreshes until denial clears old facts", async () => {

@@ -151,7 +151,10 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
                                 ; duration:{" "}
                                 {quota.duration_seconds === null
                                   ? "unknown"
-                                  : `${quota.duration_seconds} seconds`}
+                                  : quota.duration_seconds ===
+                                      "out_of_display_range"
+                                    ? "outside display range"
+                                    : `${quota.duration_seconds} seconds`}
                                 ; resets: {quota.resets_at ?? "unknown"}.
                               </li>
                             ))}

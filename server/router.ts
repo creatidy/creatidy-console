@@ -80,6 +80,17 @@ function integer(value: unknown, minimum: number, maximum: number) {
     throw new Unsupported("Unsupported observer number");
   return value;
 }
+function duration(value: unknown) {
+  if (value === null) return null;
+  const json = JSON as JSON & { isRawJSON: (candidate: unknown) => boolean };
+  if (json.isRawJSON(value)) {
+    const raw = JSON.stringify(value);
+    if (!/^[1-9]\d*$/.test(raw))
+      throw new Unsupported("Unsupported observer duration");
+    return raw.length <= 128 ? raw : "out_of_display_range";
+  }
+  return integer(value, 1, Number.MAX_SAFE_INTEGER);
+}
 function list(value: unknown) {
   if (!Array.isArray(value) || value.length > 10000)
     throw new Unsupported("Unsupported observer data");
@@ -160,11 +171,7 @@ function project(value: unknown) {
             ]),
             resource: text(window.resource),
             kind: text(window.kind),
-            duration_seconds: integer(
-              window.duration_seconds,
-              1,
-              Number.MAX_SAFE_INTEGER,
-            ),
+            duration_seconds: duration(window.duration_seconds),
             used_percent: integer(window.used_percent, 0, 100),
             remaining_percent: integer(window.remaining_percent, 0, 100),
             resets_at: timestamp(window.resets_at),
@@ -480,9 +487,10 @@ export function createRouterObserver(directory: string) {
             throw new Unsupported("Unsupported observer version");
           nextFacts = project(envelope.snapshot);
           nextPosition = cursor(envelope.cursor);
-          if (events.length > 0 && nextGap === null)
-            nextGap =
-              "Replay updates were followed by a fresh snapshot; intermediate history is not reconstructed.";
+          const notice =
+            "A fresh snapshot replaced replay; intermediate history may have been omitted.";
+          if (!nextGap?.includes(notice))
+            nextGap = nextGap ? `${nextGap} ${notice}` : notice;
         }
       }
       if (
