@@ -10,11 +10,11 @@ public mirror, not a second development workflow.
 
 ## Current Status
 
-Repository foundation only: English product/architecture context, registered
-integration backlog, development tooling and a non-operational web scaffold.
-There are no producer connections, live task views, product commands,
-notifications or product installation guarantees. The scaffold does not simulate
-healthy resources.
+The authenticated local application foundation is in development under
+[#31](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/31). It
+provides owner setup, login and durable sessions, but no producer connections,
+live task views, product commands, notifications or production installation
+guarantees. It does not simulate healthy resources.
 
 Console presents producer-owned facts and delivers authorized commands to their
 owners. It is not a scheduler, harness, inference gateway, model catalog, shared
@@ -22,9 +22,12 @@ database or replacement for Router administration or Forgejo.
 
 ## Development
 
-Use the declared Node/npm versions, then `make help`, `make install` and
-`make check`. `make dev` serves only the scaffold on loopback. `make build`
-produces a local static artifact, not a production deployment. See
+Use the declared Node/npm versions, then `make install`, `make build`,
+`make bootstrap` and `make start`. The setup command writes a short-lived
+authority to a private local file and prints its location. Open
+`http://127.0.0.1:4173` on the same trusted machine, use that authority to set
+the owner password, then sign in. `make check` runs the repository checks.
+Loopback HTTP is not confidential against untrusted local observers. See
 [contribution guidance](CONTRIBUTING.md) for exact commands and evidence limits.
 
 `develop` is the integration/default branch. Normal work uses one selected

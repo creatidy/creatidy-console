@@ -1,9 +1,43 @@
 # Producer Contracts and Evidence
 
-## Integration Risks First
+## Current Producer and Browser Boundary
+
+Owner decision 2026-11-08 approves a Console-owned authenticated application
+server with durable sessions. It addresses the previously undecided browser
+authentication topology, but approval is not implementation, installed consumer
+conformance or live access evidence. The older #2 investigation below is a dated
+historical receipt, not a blanket assertion that producer contracts remain
+absent.
+
+- Router
+  [#183](https://forgejo.creatidy.com/Creatidy/scarcity-router/issues/183), at
+  inspected `develop` `8fc4f91ff1aa4c52f4738d436fc2ac12d0b8acb1`, provides
+  separately scoped revocable observer credentials and
+  `GET /observer/v1/snapshot` and `POST /observer/v1/replay`. Cursors are
+  opaque; retention gaps and restart require explicit resynchronization. These
+  reads do not authorize inference or administration. No direct browser
+  credential or Router administrator session substitutes for observer
+  authorization.
+- Kernel [#57](https://forgejo.creatidy.com/Creatidy/creatidy-kernel/issues/57),
+  at `4cb500a6d58d983854ad795a56db0af3c6d902f8`, supplies a trusted-local,
+  owner-served descriptor capability, not a browser HTTP API or permission to
+  open its active SQLite database.
+- MI `e8a6b81546994438038d22fd08fc041c6901d9cd` supplies the offline, read-only
+  `mi.operator-working/1` contract, not a daemon or replay service. Foundry
+  retains distribution and integration acceptance responsibility, not Console
+  login or producer authority.
+
+The first authenticated Router-backed view depends on the Console foundation in
+[#31](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/31).
+Consumer fixtures, browser security and installed/live receipts remain distinct;
+their completion is not a prerequisite for starting the code that creates them.
+
+## Historical Integration Risks
 
 These are verified source gaps at the inspected revisions, not newly delivered
-Console functionality or a refreshed inventory of current producer delivery.
+Console functionality or a refreshed inventory of current producer delivery. The
+current producer and browser boundary above supersedes historical absence claims
+wherever the two differ.
 
 | Divergence / consequence                                                                                                                                           | Priority, owner and closure condition                                                                                                                                                                                                                                                                                                                                                                                    |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -94,8 +128,8 @@ Accepted semantic requirements for supported connections:
 - Compatible CLI facts at the same revision/policy; different observation times
   remain visible.
 
-Transport (SSE/WebSocket/polling/other), production session boundary and numeric
-client limits are open until producer evidence supports them. No global event
+Producer transport details and numeric client limits require producer evidence.
+The accepted Console session boundary is described above. No global event
 ordering, shared database, common ontology service or hidden producer shell/API
 is selected.
 

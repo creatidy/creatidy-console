@@ -6,7 +6,7 @@
 | Navigation, journeys, states, accessibility and wireframes               | [UX](ux.md)                        |
 | Source revisions, producer capabilities, consumer semantics and commands | [Contracts](contracts.md)          |
 | Browser trust, authentication, privacy and threat model                  | [Security](../SECURITY.md)         |
-| Initial ADR, alternatives, reuse/license matrix and operations choices   | [Decisions](decisions.md)          |
+| Accepted application architecture, ADRs, reuse and license decisions     | [Decisions](decisions.md)          |
 | Actual backlog, G01-G13, requirement traceability and evidence gates     | [Roadmap](roadmap.md)              |
 | Developer commands, CI, contribution and exact-subject review            | [Contributing](../CONTRIBUTING.md) |
 | Concise agent entry point                                                | [AGENTS](../AGENTS.md)             |

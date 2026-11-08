@@ -9,10 +9,22 @@ contracts; P3 = conditional research, not preapproved client implementation.
 These are priorities, not invented product spending/performance limits.
 Bootstrap #1 remains distinct from future features.
 
+The 2026-11-08 owner decision approves a Console-owned authenticated web server;
+the former blanket producer-contract/browser-topology gate is superseded, not
+the need for actual consumer and security evidence. Foundation
+[#31](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/31) precedes
+an authenticated Router-backed browser view under #3. Issue #8 retains
+specialist navigation, #10 accessibility and semantic agreement, #11
+installation and upgrades, and #12 cross-feature conformance. Their downstream
+acceptance is developed alongside the relevant features, not an artificial
+prerequisite for starting the foundation. No historical #14 administrative gate
+is reactivated.
+
 | Issue / exact title                                                                                                                                              | Priority and intended result                                                          | Principal dependencies                                                                                    |
 | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| [#31 Implement authenticated local web application foundation](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/31)                                 | Owner-selected foundation: local owner, durable sessions and same-origin serving      | Console-owned security controls; no downstream conformance completion prerequisite                        |
 | [#2 Define supported producer reads and the browser authentication boundary](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/2)                    | P1: conclusive local read/auth topology, version/cost/capability inventory            | Kernel #57, Router #140/#183, MI #13/#16                                                                  |
-| [#3 Implement resilient snapshot and progress projections with honest reconnect gaps](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/3)           | P1: namespaced rebuildable views, bounded progress, truthful history/resync           | #2; producer view/event contracts                                                                         |
+| [#3 Implement resilient snapshot and progress projections with honest reconnect gaps](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/3)           | P1: namespaced rebuildable views, bounded progress, truthful history/resync           | #31 for authenticated browser access; relevant producer contracts                                         |
 | [#4 Deliver cross-product overview and exact Kernel task evidence drill-down](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/4)                   | P2: immediate overview and exact intent-to-outcome lineage                            | #3/#8/#10/#12; Kernel #47/#49/#51-#59                                                                     |
 | [#5 Present Router decisions, shared quotas and full-cost uncertainty faithfully](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/5)               | P2: source-owned resource identity, freshness, costs and uncertainty                  | #3/#8/#10/#12; Router #140/#177/#183; Kernel #56/#58                                                      |
 | [#6 Inspect referenced MI knowledge snapshots, validity and conflicts](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/6)                          | P2: adopt MI-owned contract, then exact referenced knowledge, not entitlement/ranking | Upstream contract: MI #16; adapter/UI: #3/read-auth gate/#10/#12, MI #12-#15/#18, Router #176, Kernel #55 |
@@ -34,7 +46,9 @@ loop. Only a new explicit owner task can establish such a requirement again. See
 [contribution guidance](../CONTRIBUTING.md); this disposition does not certify
 infrastructure or remove actual producer/browser security and live-read gates.
 
-Native same-repository dependency edges are registered for the read gate and
+The table preserves earlier issue references as historical planning evidence;
+Router #140's `wontfix` disposition is not an active prerequisite. Native
+same-repository dependency edges are registered for the historical read gate and
 core projections/installation. Cross-repository dependencies use actual links
 because Forgejo dependency endpoints do not create cross-repository edges here.
 Issue bodies contain goal/why, revision evidence, owner/Gxx/source mapping,
@@ -163,14 +177,10 @@ removed by parallel work. Numeric freshness/performance/client bounds belong to
 producer policy or an explicit measured proposal, never invented bootstrap
 limits.
 
-Console #2's bounded [read/auth inventory](contracts.md) concludes with exact
-missing producer contracts, not an approved live topology. Completion of that
-design exit does not satisfy the supported-read/auth prerequisite for downstream
-issues. Kernel #57, Router #183 and MI #13/#16 still need their actual contract
-and conformance evidence; Router #140's current `wontfix` disposition is not
-implementation proof. Keep those gates until authenticated reads are evidenced,
-without opening an invented client/proxy or treating issue closure as support.
-These are live-integration gates, not a requirement that Console #6 or its
-projection/browser/installed components finish before MI #16 can define and
-validate its initial contract. The producer-first contract-level path above
-remains separate from actual adapter/UI acceptance.
+Console #2's bounded [read/auth inventory](contracts.md) is historical. Kernel
+issue 57 and Router issue 183 have since delivered specific contracts, while the
+owner has approved the Console session architecture. Those facts do not prove
+installed consumer conformance, authorized live reads or full-system readiness.
+The producer-first contract-level path above remains separate from actual
+adapter/UI acceptance. Router #140's `wontfix` disposition is not implementation
+proof or permission to restart it.

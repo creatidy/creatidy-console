@@ -33,13 +33,13 @@ recorded in [contracts](contracts.md) and tracked in [roadmap](roadmap.md).
 
 ## Ownership and Flows
 
-| Owner              | Owns                                                                                                                                     | Console must not duplicate                                                             |
-| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| Kernel             | Intent, TaskSpec/WorkUnit/Attempt, permissions/workspace, harness lifecycle, durable state, verification, review/remediation and outcome | Scheduling, execution, acceptance, retries, reconciliation or authority                |
-| Scarcity Router    | Resources/accounts/pools, private telemetry, compatibility, scarcity/cost policy, selection/admission, gateway/provider calls            | Discovery, quota collectors, model ranking, spending enforcement, pairing or inference |
-| Model Intelligence | External model/surface/benchmark/public-plan evidence, provenance, validity/conflicts and versioned snapshots                            | Catalog/crawler/calibration or conflict resolution                                     |
-| Console            | Cross-product views, navigation, presentation preferences, rebuildable UI projections and authorized command delivery                    | Another business control plane or shared authoritative database                        |
-| Existing harness   | Model-tools loop and intelligent workspace work                                                                                          | Chat agent, shell executor, coding harness or GUI automation                           |
+| Owner              | Owns                                                                                                                                           | Console must not duplicate                                                             |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| Kernel             | Intent, TaskSpec/WorkUnit/Attempt, permissions/workspace, harness lifecycle, durable state, verification, review/remediation and outcome       | Scheduling, execution, acceptance, retries, reconciliation or authority                |
+| Scarcity Router    | Resources/accounts/pools, private telemetry, compatibility, scarcity/cost policy, selection/admission, gateway/provider calls                  | Discovery, quota collectors, model ranking, spending enforcement, pairing or inference |
+| Model Intelligence | External model/surface/benchmark/public-plan evidence, provenance, validity/conflicts and versioned snapshots                                  | Catalog/crawler/calibration or conflict resolution                                     |
+| Console            | Application authentication and sessions, connection configuration, cross-product views, navigation, preferences and rebuildable UI projections | Producer business authority or a shared authoritative database                         |
+| Existing harness   | Model-tools loop and intelligent workspace work                                                                                                | Chat agent, shell executor, coding harness or GUI automation                           |
 
 ```text
 Control:    operator -> Kernel -> supported harness adapter -> existing harness
@@ -91,11 +91,15 @@ MVP.
 
 ## Deployment Boundary
 
-Accepted: local-first web, independent presentation, no implicit
-public/LAN/mobile listener or private installer. Proposed refinement: static web
-artifact first, loopback-only development server; any production
-session/aggregation boundary needs verified browser/auth/connectivity
-justification. To be proven: production serving, authenticated producer access,
-trusted endpoint onboarding, transport, retention, upgrades and explicitly
-supported remote access. Such a boundary cannot become an unrestricted proxy or
-custom identity platform. See [decisions](decisions.md).
+Accepted owner decision, 2026-11-08: local-first web with a Console-owned
+Node/TypeScript application server serving the React application and its
+authenticated endpoints on one logical origin. A single local owner account,
+durable server-side sessions and Console-owned SQLite state form the initial
+authentication foundation. Connection configuration and disposable projections
+have distinct lifecycles from credentials and sessions. Console authentication
+does not confer Kernel, Router or MI authority; supported producer authorization
+still applies. Router-only use remains independent of Kernel and MI. There is no
+implicit public/LAN exposure, unrestricted proxy or general identity platform.
+The decision approves implementation direction, not an implementation, validated
+transport, supported installation or live integration. See
+[decisions](decisions.md) and [security](../SECURITY.md).

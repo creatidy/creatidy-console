@@ -2,7 +2,11 @@
 
 ## ADR-001: Initial Web Toolchain
 
-Status: **Proposed refinement adopted for this reversible repository
+Status: **Historical toolchain selection**, 2026-10-05. The frontend-only
+deployment assumption below is superseded by ADR-002; React, TypeScript and Vite
+remain selected. Original rationale follows.
+
+Originally: **Proposed refinement adopted for this reversible repository
 foundation**, 2026-10-05. Not an owner decision about production auth, public
 exposure or a new business service. Accepted architecture requires a local-first
 web interface but does not prescribe a framework. Future changes use measured
@@ -29,6 +33,29 @@ evidence requires a thin boundary, first evaluate supported producer delegation
 and existing secure session primitives. Record the changed trust boundary before
 implementing it.
 
+## ADR-002: Authenticated Application Server
+
+Status: **Accepted owner direction**, 2026-11-08. Security takes precedence over
+UX, maintainability and flexibility, in that order. Retain the ADR-001 browser
+stack, but supersede its frontend-only deployment assumption. One lightweight
+Node/TypeScript application server serves the UI and explicitly scoped
+same-origin endpoints. Fastify and a maintained session integration are
+preferred subject to verification against the pinned Node runtime, actual store
+semantics, security maintenance and licenses. SQLite is the accepted default for
+Console-owned durable state, subject to concrete platform evidence. The server
+supports explicit local first-run authority, one owner account with established
+Argon2id password hashing, opaque cookie sessions, expiry, rotation and
+server-side revocation. Producer credentials stay server-side and remain
+distinct from Console sessions. Router observer access is the first producer
+target; Console login never substitutes for producer authorization.
+
+This decision is not evidence that a library version, migration, operating
+platform, browser threat boundary or installed integration has passed
+validation. Do not introduce a general proxy, separate auth microservice, SSO,
+multi-tenant RBAC or an external database service. See
+[security](../SECURITY.md) for required controls and [roadmap](roadmap.md) for
+delivery sequencing.
+
 ## Verified Foundation Inputs
 
 The following published versions were verified through npm metadata and locked
@@ -38,11 +65,11 @@ not a deployed service, performance proof or blanket supply-chain certification.
 | Input          | Exact package revision / inspected material                                              | License / disposition                                                   |
 | -------------- | ---------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
 | Runtime        | Node `24.19.0`, npm `11.17.0`, declared locally                                          | Existing development runtime, not installed into producer hosts         |
-| Web build      | `vite@8.3.2`, `@vitejs/plugin-react@6.1.1`, package metadata and installed license       | MIT; dev-only, no upstream source vendoring                             |
+| Web build      | `vite@8.3.6`, `@vitejs/plugin-react@6.1.1`, package metadata and installed license       | MIT; dev-only, no upstream source vendoring                             |
 | Browser UI     | `react@19.3.0`, `react-dom@19.3.0`, installed `LICENSE`; scheduler exact version in lock | MIT; applicable license texts included in static artifact               |
 | Static checks  | `typescript@7.0.2`, strict compiler configuration                                        | Apache-2.0; development-only                                            |
 | Tests          | `vitest@5.0.3`, package metadata/license                                                 | MIT; deterministic scaffold/tooling tests, not live conformance         |
-| Format/docs    | `prettier@3.9.9`, `markdownlint-cli2@0.23.3`, `markdown-it@15.0.2`                       | MIT; adopt formatting/lint/parser, build only small local-link policy   |
+| Format/docs    | `prettier@3.9.9`, `markdownlint-cli2@0.23.3`, `markdown-it@15.0.3`                       | MIT; adopt formatting/lint/parser, build only small local-link policy   |
 | Secret hygiene | `secretlint@13.0.7`, matching recommended rule preset                                    | MIT; current public-file scan, not proof of all history/runtime secrecy |
 
 Updates require intentional lockfile review, upstream security/license review,
@@ -50,6 +77,34 @@ Updates require intentional lockfile review, upstream security/license review,
 scripts are disabled by default. No runtime network package fetch, external
 font, provider credential or private service is necessary to inspect the
 scaffold.
+
+### Application Server Dependencies
+
+The in-progress application foundation pins `fastify@5.12.8`,
+`@fastify/cookie@11.1.5`, `@fastify/session@11.1.6`, `@fastify/static@10.1.10`
+and `@node-rs/argon2@2.2.2`. Their npm metadata declares MIT. Session 11.1.6
+requires an atomic generation-aware store; its default in-memory store is not
+durable. The native Argon2 package uses platform-specific optional binaries;
+locked installs retain those dependencies and disable install scripts. Runtime
+advisories were checked separately, and `fast-uri` 3.1.9 replaces the affected
+3.1.8 transitive resolution. The initial state adapter uses Node 24.19.0's
+built-in `node:sqlite` and transactional `user_version` migrations; that Node
+API is release-candidate stability rather than a blanket platform-support
+guarantee. Supported operating systems, crash recovery and upgrades remain
+subject to installed evidence.
+
+The npm Argon2 wrapper's MIT label is not a complete native-binary notice
+inventory. Its pinned upstream source revision
+`b706e3035f5d4d487ae66ea0549a041cd509e5d4` includes `argon2-rust` 1.1.0 and
+native allocator dependencies with their own notices. The Linux x64 binary
+package has no bundled license file; the wrapper package supplies its own MIT
+license, not a verified complete native dependency inventory. This repository's
+build currently distributes only the browser artifact, not a packaged server or
+native binary. Before distributing an installable server/native artifact,
+complete a target-specific dependency and attribution audit, supply all
+applicable notices including upstream `argon2-rust` NOTICE and verify the
+artifact. This remains part of installation/distribution work in #11; source
+inspection and registry metadata are not cryptographic provenance verification.
 
 ## Bounded Reuse Matrix
 
@@ -87,11 +142,11 @@ Settings and projection migrations, rollback, platform/browser support and
 trusted connection onboarding require explicit tests before operational
 distribution.
 
-Development servers bind loopback and expose no product auth/proxy. `make build`
-creates local `dist`; `make check` also builds and inspects an ephemeral
-artifact outside the source tree. Linux/WSL is the first tested development
-host. Browser access on Windows/macOS/mobile does not certify Kernel runtime
-support there. Public/LAN exposure, transport choice, persistence retention and
-PWA/IDE/native delivery remain open, registered work. No numeric
-freshness/performance/budget limit is claimed without producer semantics or a
-reviewed measured proposal.
+The current scaffold's development servers bind loopback and expose no product
+auth/proxy. `make build` creates local `dist`; `make check` also builds and
+inspects an ephemeral artifact outside the source tree. Linux/WSL is the first
+tested development host. Browser access on Windows/macOS/mobile does not certify
+Kernel runtime support there. Public/LAN exposure, precise transport
+configuration, persistence retention and PWA/IDE/native delivery remain open,
+registered work. No numeric freshness/performance/budget limit is claimed
+without producer semantics or a reviewed measured proposal.
