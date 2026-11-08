@@ -7,6 +7,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { unlinkSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { openState } from "./state.ts";
+import { createRouterObserver } from "./router.ts";
 
 declare module "fastify" {
   interface Session {
@@ -72,6 +73,7 @@ export async function createApp(options: AppOptions) {
   });
   const cookieName =
     origin.protocol === "https:" ? "__Host-console" : "console";
+  const routerObserver = createRouterObserver(options.stateDirectory);
   await app.register(cookie);
   await app.register(session, {
     secret: String(signing),
@@ -277,7 +279,20 @@ export async function createApp(options: AppOptions) {
   app.get("/api/application", async (request, reply) => {
     if (!(await authenticated(request)))
       return reply.code(401).send({ error: "Login required" });
-    return { message: "No producer connections are configured." };
+    return { message: "Console session authenticated." };
+  });
+  app.get("/api/router", async (request, reply) => {
+    if (!(await authenticated(request)))
+      return reply.code(401).send({ error: "Login required" });
+    return routerObserver.view();
+  });
+  app.post("/api/router/refresh", async (request, reply) => {
+    if (!(await authenticated(request)))
+      return reply.code(401).send({ error: "Login required" });
+    const result = await routerObserver.refresh();
+    if (!(await authenticated(request)))
+      return reply.code(401).send({ error: "Login required" });
+    return result;
   });
   await app.register(fastifyStatic, {
     root: resolve(options.staticDirectory ?? "dist"),

@@ -40,6 +40,14 @@ Router, Kernel or MI. Router observer credentials are separately scoped and
 revocable; an administrator session or inference credential is not an observer
 credential. Reuse established secure mechanisms; no custom identity platform.
 
+The initial Router observer adapter accepts only explicitly configured literal
+loopback IP origins, not DNS names or arbitrary URLs. It does not follow
+redirects, and HTTPS uses normal certificate verification. A locally supplied
+observer key is stored in a separate owner-only file, never in browser assets,
+URLs or logs. The adapter has fixed snapshot/replay paths and bounded requests;
+it clears cached observations on denied credentials, invalid configuration or
+unsupported responses. A trusted local host and filesystem remain assumptions.
+
 ## Application Security Requirements
 
 These requirements define the approved target; individual controls require

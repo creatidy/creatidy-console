@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
+import RouterPanel from "./RouterPanel";
 
 type Session = { configured: boolean; authenticated: boolean };
 
@@ -106,11 +107,14 @@ export default function App() {
         </div>
       ) : session.authenticated ? (
         <section>
-          <p className="scope">No producer connections are configured.</p>
-          <p>
-            Router, Kernel and Model Intelligence remain independent. This
-            foundation does not yet connect to them.
-          </p>
+          <RouterPanel
+            expired={() => {
+              void refresh().then(() =>
+                setError("Your session expired or was revoked. Sign in again."),
+              );
+            }}
+          />
+          <p>Kernel and Model Intelligence are not configured by this view.</p>
           <button
             type="button"
             disabled={pending}

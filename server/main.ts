@@ -5,6 +5,9 @@ import { join } from "node:path";
 if (process.env.NAPI_RS_NATIVE_LIBRARY_PATH) {
   throw new Error("Custom native library paths are not supported");
 }
+if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === "0") {
+  throw new Error("TLS verification must not be disabled");
+}
 const { createApp } = await import("./app.ts");
 
 const origin = process.env.CONSOLE_ORIGIN ?? "http://127.0.0.1:4173";

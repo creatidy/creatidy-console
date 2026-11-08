@@ -43,6 +43,11 @@ p {
   overflow-wrap: anywhere;
 }
 
+li,
+code {
+  overflow-wrap: anywhere;
+}
+
 .scope {
   font-size: 1.125rem;
 }

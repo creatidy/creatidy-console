@@ -10,11 +10,14 @@ public mirror, not a second development workflow.
 
 ## Current Status
 
-The authenticated local application foundation is in development under
-[#31](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/31). It
-provides owner setup, login and durable sessions, but no producer connections,
-live task views, product commands, notifications or production installation
-guarantees. It does not simulate healthy resources.
+The authenticated local application foundation delivered in
+[#31](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/31) provides
+owner setup, login and durable sessions. The in-progress Router-only observer
+view accepts a locally configured, separately scoped observer key and uses only
+the producer's read contract. There are no live task views, product commands,
+notifications or production installation guarantees. Synthetic tests are not
+evidence of an installed Router connection, and the UI does not simulate healthy
+resources.
 
 Console presents producer-owned facts and delivers authorized commands to their
 owners. It is not a scheduler, harness, inference gateway, model catalog, shared
