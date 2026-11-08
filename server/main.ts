@@ -28,6 +28,9 @@ const tls =
 const app = await createApp({
   stateDirectory,
   origin,
+  ...(process.env.CONSOLE_STATIC_DIR
+    ? { staticDirectory: process.env.CONSOLE_STATIC_DIR }
+    : {}),
   ...(tls ? { tls } : {}),
 });
 await app.listen({

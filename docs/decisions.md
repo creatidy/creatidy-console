@@ -62,15 +62,16 @@ The following published versions were verified through npm metadata and locked
 with integrity hashes in `package-lock.json`. This is package-source evidence,
 not a deployed service, performance proof or blanket supply-chain certification.
 
-| Input          | Exact package revision / inspected material                                              | License / disposition                                                   |
-| -------------- | ---------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| Runtime        | Node `24.19.0`, npm `11.17.0`, declared locally                                          | Existing development runtime, not installed into producer hosts         |
-| Web build      | `vite@8.3.6`, `@vitejs/plugin-react@6.1.1`, package metadata and installed license       | MIT; dev-only, no upstream source vendoring                             |
-| Browser UI     | `react@19.3.0`, `react-dom@19.3.0`, installed `LICENSE`; scheduler exact version in lock | MIT; applicable license texts included in static artifact               |
-| Static checks  | `typescript@7.0.2`, strict compiler configuration                                        | Apache-2.0; development-only                                            |
-| Tests          | `vitest@5.0.3`, package metadata/license                                                 | MIT; deterministic scaffold/tooling tests, not live conformance         |
-| Format/docs    | `prettier@3.9.9`, `markdownlint-cli2@0.23.3`, `markdown-it@15.0.3`                       | MIT; adopt formatting/lint/parser, build only small local-link policy   |
-| Secret hygiene | `secretlint@13.0.7`, matching recommended rule preset                                    | MIT; current public-file scan, not proof of all history/runtime secrecy |
+| Input          | Exact package revision / inspected material                                              | License / disposition                                                      |
+| -------------- | ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| Runtime        | Node `24.19.0`, npm `11.17.0`, declared locally                                          | Existing development runtime, not installed into producer hosts            |
+| Web build      | `vite@8.3.6`, `@vitejs/plugin-react@6.1.1`, package metadata and installed license       | MIT; dev-only, no upstream source vendoring                                |
+| Browser UI     | `react@19.3.0`, `react-dom@19.3.0`, installed `LICENSE`; scheduler exact version in lock | MIT; applicable license texts included in static artifact                  |
+| Static checks  | `typescript@7.0.2`, strict compiler configuration                                        | Apache-2.0; development-only                                               |
+| Tests          | `vitest@5.0.3`, package metadata/license                                                 | MIT; deterministic scaffold/tooling tests, not live conformance            |
+| Browser test   | `playwright-core@1.65.0`                                                                 | Apache-2.0; dev-only, uses installed sandboxed Chrome, no browser download |
+| Format/docs    | `prettier@3.9.9`, `markdownlint-cli2@0.23.3`, `markdown-it@15.0.3`                       | MIT; adopt formatting/lint/parser, build only small local-link policy      |
+| Secret hygiene | `secretlint@13.0.7`, matching recommended rule preset                                    | MIT; current public-file scan, not proof of all history/runtime secrecy    |
 
 Updates require intentional lockfile review, upstream security/license review,
 `make check`, artifact validation and independent PR review. Dependency install
