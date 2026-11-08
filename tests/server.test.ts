@@ -255,6 +255,97 @@ describe("authenticated application", () => {
     await app.close();
   });
 
+  it("cannot revive expired or previously valid sessions after a clock rollback and restart", async () => {
+    let now = Date.now();
+    const { app, dir, assets } = await fixture(() => now);
+    await app.inject({
+      method: "POST",
+      url: "/api/bootstrap",
+      headers,
+      payload: { token, password },
+    });
+    const login = await app.inject({
+      method: "POST",
+      url: "/api/login",
+      headers,
+      payload: { password },
+    });
+    const expired = String(login.headers["set-cookie"]).split(";")[0]!;
+    now += 30 * 60_000;
+    expect(
+      (
+        await app.inject({
+          method: "GET",
+          url: "/api/application",
+          headers: { ...headers, cookie: expired },
+        })
+      ).statusCode,
+    ).toBe(401);
+    now -= 29 * 60_000;
+    expect(
+      (
+        await app.inject({
+          method: "GET",
+          url: "/api/application",
+          headers: { ...headers, cookie: expired },
+        })
+      ).statusCode,
+    ).toBe(401);
+    const next = await app.inject({
+      method: "POST",
+      url: "/api/login",
+      headers,
+      payload: { password },
+    });
+    const active = String(next.headers["set-cookie"]).split(";")[0]!;
+    expect(
+      (
+        await app.inject({
+          method: "GET",
+          url: "/api/application",
+          headers: { ...headers, cookie: active },
+        })
+      ).statusCode,
+    ).toBe(200);
+    await app.close();
+    now -= 1;
+    const restarted = await createApp({
+      stateDirectory: dir,
+      staticDirectory: assets,
+      origin,
+      now: () => now,
+    });
+    expect(
+      (
+        await restarted.inject({
+          method: "GET",
+          url: "/api/application",
+          headers: { ...headers, cookie: active },
+        })
+      ).statusCode,
+    ).toBe(401);
+    await restarted.close();
+  });
+
+  it("invalidates outstanding setup authority after clock rollback", () => {
+    let now = Date.now();
+    const dir = mkdtempSync(join(tmpdir(), "console-clock-"));
+    directories.push(dir);
+    const state = openState(dir, () => now);
+    state.db
+      .prepare("INSERT INTO settings (name, value) VALUES ('bootstrap', ?)")
+      .run("synthetic");
+    state.db.close();
+    now -= 1;
+    const restarted = openState(dir, () => now);
+    expect(
+      restarted.db
+        .prepare("SELECT value FROM settings WHERE name = 'bootstrap'")
+        .get(),
+    ).toBeUndefined();
+    restarted.db.close();
+  });
+
   it("rejects expired setup authority and persists failed-login throttling", async () => {
     let now = Date.now();
     const { app, dir, assets } = await fixture(() => now);

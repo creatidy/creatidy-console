@@ -71,14 +71,46 @@ export function openState(directory: string, now: () => number = Date.now) {
       COMMIT;`);
   }
 
+  function clock() {
+    const current = now();
+    if (!Number.isSafeInteger(current) || current < 0)
+      throw new Error("Invalid system clock");
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      const row = db
+        .prepare("SELECT value FROM settings WHERE name = 'clock'")
+        .get();
+      const previous = row ? Number(row.value) : current;
+      if (!Number.isSafeInteger(previous) || previous < 0)
+        throw new Error("Invalid persisted clock");
+      if (current < previous) {
+        db.prepare("DELETE FROM sessions").run();
+        db.prepare("DELETE FROM settings WHERE name = 'bootstrap'").run();
+      }
+      db.prepare(
+        "INSERT OR REPLACE INTO settings (name, value) VALUES ('clock', ?)",
+      ).run(String(current));
+      db.exec("COMMIT");
+      return current;
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+  clock();
+
   const store: SessionStore = {
     get(id, callback) {
       try {
+        const current = clock();
+        db.prepare(
+          "DELETE FROM sessions WHERE id = ? AND (idle_expires <= ? OR absolute_expires <= ?)",
+        ).run(key(id), current, current);
         const row = db
           .prepare(
             "SELECT data FROM sessions WHERE id = ? AND idle_expires > ? AND absolute_expires > ?",
           )
-          .get(key(id), now(), now());
+          .get(key(id), current, current);
         callback(null, row ? (JSON.parse(String(row.data)) as Session) : null);
       } catch (error) {
         callback(error);
@@ -91,7 +123,7 @@ export function openState(directory: string, now: () => number = Date.now) {
             __fastifySessionMetadata: { generation: string };
           }
         ).__fastifySessionMetadata.generation;
-        const created = now();
+        const created = clock();
         db.prepare(
           "DELETE FROM sessions WHERE idle_expires <= ? OR absolute_expires <= ?",
         ).run(created, created);
@@ -116,7 +148,7 @@ export function openState(directory: string, now: () => number = Date.now) {
             __fastifySessionMetadata: { generation: string };
           }
         ).__fastifySessionMetadata.generation;
-        const time = now();
+        const time = clock();
         const result = db
           .prepare(
             `UPDATE sessions SET generation = ?, data = ?,
@@ -155,11 +187,12 @@ export function openState(directory: string, now: () => number = Date.now) {
     },
   };
   function revoke(id: string, generation: string) {
+    clock();
     return (
       db
         .prepare("DELETE FROM sessions WHERE id = ? AND generation = ?")
         .run(key(id), key(generation)).changes === 1
     );
   }
-  return { db, store, revoke };
+  return { db, store, revoke, clock };
 }

@@ -38,8 +38,12 @@ export async function createApp(options: AppOptions) {
   }
   if ((origin.protocol === "https:") !== Boolean(options.tls))
     throw new Error("HTTPS requires a configured TLS certificate and key");
-  const now = options.now ?? Date.now;
-  const { db, store, revoke } = openState(options.stateDirectory, now);
+  const {
+    db,
+    store,
+    revoke,
+    clock: now,
+  } = openState(options.stateDirectory, options.now);
   let signing = db
     .prepare("SELECT value FROM settings WHERE name = 'signing_key'")
     .get()?.value;
@@ -187,6 +191,7 @@ export async function createApp(options: AppOptions) {
       hashing = true;
       try {
         const passwordHash = await hash(password, parameters);
+        const checkedAt = now();
         db.exec("BEGIN IMMEDIATE");
         try {
           const current = db
@@ -197,7 +202,7 @@ export async function createApp(options: AppOptions) {
             !current ||
             current.value !== row?.value ||
             (JSON.parse(String(current.value)) as { expires: number })
-              .expires <= now()
+              .expires <= checkedAt
           ) {
             throw new Error("Bootstrap no longer valid");
           }

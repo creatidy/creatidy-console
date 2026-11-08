@@ -58,7 +58,9 @@ flexibility.
   privilege changes, invalidate old identifiers, enforce idle and absolute
   expiry server-side, and support server-side revocation and logout. Persist
   authoritative session state across restart; separate browser sessions. A
-  cookie alone is not authority after revocation.
+  cookie alone is not authority after revocation. An observed backward
+  wall-clock change invalidates sessions and setup authority, including after
+  restart; unobserved clock excursions cannot be detected by the application.
 - Cookies are HttpOnly, host-only and SameSite with explicit lifetime. Require
   Secure on HTTPS; loopback HTTP must be configured explicitly and tested
   separately, never used as a silent fallback for remote HTTPS. No permissive

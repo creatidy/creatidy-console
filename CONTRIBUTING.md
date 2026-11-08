@@ -86,7 +86,11 @@ sets the exact browser origin; HTTPS requires `CONSOLE_TLS_KEY` and
 defaults to `127.0.0.1`; HTTP binds only loopback. Explicit non-loopback HTTPS
 exposure still needs appropriate network, certificate and operational security.
 The application does not trust forwarded headers. Sessions have 30-minute idle
-and 24-hour absolute limits; logout revokes the current browser session.
+and 24-hour absolute limits; logout revokes the current browser session. An
+observed backward system-clock change revokes all sessions and outstanding setup
+authority, including after restart; sign in again or issue fresh setup
+authority. The application cannot detect a clock change that occurs entirely
+between observations. Keep the host clock reliable.
 
 For a consistent backup stop the server and copy the complete owner-only state
 directory into protected storage. Restoring old state can resurrect revoked
