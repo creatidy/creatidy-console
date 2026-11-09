@@ -98,6 +98,26 @@ outstanding setup authority, including after restart; sign in again or issue
 fresh setup authority. The application cannot detect a clock change that occurs
 entirely between observations. Keep the host clock reliable.
 
+For the Router-only observer, first obtain a separately scoped Router observer
+credential using Router's own administration. Keep that credential in a
+protected owner-only file on the trusted host, then run
+`node server/router-cli.ts set http://127.0.0.1:PORT < /path/to/observer-key`.
+The command reads the key from standard input, not an argument, and never sends
+it to the browser. Only exact `127.0.0.1` or `[::1]` origins are accepted in
+this initial adapter; HTTPS uses normal certificate verification. Loopback HTTP
+trusts local processes and is not confidential from untrusted local observers.
+Use `node server/router-cli.ts clear` to remove the connection. The private
+`router.json` stores the key in the owner-only state directory; protect backups
+and revoke the observer key at Router if compromised. Refresh explicitly from
+the signed-in view. Snapshot/replay are read-only producer operations, not
+inference or collector refresh. The in-memory projection is disposable; it may
+show labeled last-known data on disconnect and is cleared on denial or invalid
+configuration. Each displayed group is capped at 200 entries and each resource
+at 20 quota facts, with explicit omission counts; responses over 20 MiB or
+groups over 10,000 entries are rejected. These are protective bounds, not
+measured capacity guarantees. No fixture proves a live installed producer
+integration.
+
 For a consistent backup stop the server and copy the complete owner-only state
 directory into protected storage. Restoring old state can resurrect revoked
 sessions. With the server stopped, run

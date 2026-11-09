@@ -31,6 +31,10 @@ The first authenticated Router-backed view depends on the Console foundation in
 [#31](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/31).
 Consumer fixtures, browser security and installed/live receipts remain distinct;
 their completion is not a prerequisite for starting the code that creates them.
+The in-progress Router-only consumer uses fixed snapshot/replay paths and an
+opaque server-held cursor; it requests a fresh snapshot after replayed changes
+and does not claim reconstructed intermediate history. Its loopback-only
+connection scope and synthetic tests do not establish a live producer receipt.
 
 ## Historical Integration Risks
 
