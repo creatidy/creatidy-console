@@ -60,6 +60,107 @@ afterEach(() => {
 });
 
 describe("authenticated application", () => {
+  it("keeps Kernel owner operations unavailable despite a Console session", async () => {
+    const { app } = await fixture();
+    try {
+      expect(
+        (await app.inject({ method: "GET", url: "/api/kernel/owner", headers }))
+          .statusCode,
+      ).toBe(401);
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/api/kernel/owner",
+            headers,
+            payload: { action: "approve" },
+          })
+        ).statusCode,
+      ).toBe(401);
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/api/kernel/owner",
+            headers: { ...headers, origin: "https://attacker.example" },
+            payload: { action: "approve" },
+          })
+        ).statusCode,
+      ).toBe(403);
+      await app.inject({
+        method: "POST",
+        url: "/api/bootstrap",
+        headers,
+        payload: { token, password },
+      });
+      const login = await app.inject({
+        method: "POST",
+        url: "/api/login",
+        headers,
+        payload: { password },
+      });
+      const cookie = String(login.headers["set-cookie"]).split(";")[0]!;
+      const status = await app.inject({
+        method: "GET",
+        url: "/api/kernel/owner",
+        headers: { ...headers, cookie },
+      });
+      expect(status.statusCode).toBe(200);
+      expect(status.json()).toEqual({ status: "unavailable", actions: [] });
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/api/kernel/owner",
+            headers: { host: headers.host, cookie },
+            payload: { action: "approve" },
+          })
+        ).statusCode,
+      ).toBe(403);
+      for (const action of ["approve", "stop", "unsupported"]) {
+        const result = await app.inject({
+          method: "POST",
+          url: "/api/kernel/owner",
+          headers: { ...headers, cookie },
+          payload: { action, principal: "synthetic-injected-principal" },
+        });
+        expect(result.statusCode).toBe(503);
+        expect(result.body).not.toContain("synthetic-injected-principal");
+      }
+      expect(
+        (
+          await app.inject({
+            method: "GET",
+            url: "/api/kernel/owner",
+            headers: { ...headers, cookie, host: "attacker.example" },
+          })
+        ).statusCode,
+      ).toBe(403);
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/api/logout",
+            headers: { ...headers, cookie },
+            payload: {},
+          })
+        ).statusCode,
+      ).toBe(200);
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/api/kernel/owner",
+            headers: { ...headers, cookie },
+            payload: { action: "approve" },
+          })
+        ).statusCode,
+      ).toBe(401);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("enforces one-time setup, host/origin, fixation, revocation and restart persistence", async () => {
     const { app, dir, assets } = await fixture();
     expect(

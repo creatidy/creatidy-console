@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import RouterPanel from "./RouterPanel";
+import KernelOwnerPanel from "./KernelOwnerPanel";
 
 type Session = { configured: boolean; authenticated: boolean };
 
@@ -114,7 +115,14 @@ export default function App() {
               );
             }}
           />
-          <p>Kernel and Model Intelligence are not configured by this view.</p>
+          <KernelOwnerPanel
+            expired={() => {
+              void refresh().then(() =>
+                setError("Your session expired or was revoked. Sign in again."),
+              );
+            }}
+          />
+          <p>Model Intelligence is not configured by this view.</p>
           <button
             type="button"
             disabled={pending}

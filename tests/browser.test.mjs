@@ -139,6 +139,19 @@ it.skipIf(!existsSync(chrome))(
         .fill("synthetic-owner-password");
       await page.getByRole("button", { name: "Sign in" }).click();
       await page.getByRole("heading", { name: "Your console" }).waitFor();
+      await page
+        .getByRole("heading", { name: "Kernel owner actions" })
+        .waitFor();
+      await page
+        .getByText(
+          "Unavailable: no verified Kernel owner capability is connected. Console login does not grant Kernel authority.",
+        )
+        .waitFor();
+      expect(
+        await page
+          .getByRole("button", { name: /approve|stop|reconcile|start/i })
+          .count(),
+      ).toBe(0);
       expect(
         await page.evaluate(() =>
           fetch("/api/application").then((response) => response.status),

@@ -28,6 +28,7 @@
     "@fastify/cookie": "11.1.5",
     "@fastify/session": "11.1.6",
     "@fastify/static": "10.1.10",
+    "@humanwhocodes/momoa": "3.3.13",
     "@node-rs/argon2": "2.2.2",
     "fastify": "5.12.8",
     "react": "19.3.0",

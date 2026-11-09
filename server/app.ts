@@ -294,6 +294,18 @@ export async function createApp(options: AppOptions) {
       return reply.code(401).send({ error: "Login required" });
     return result;
   });
+  app.get("/api/kernel/owner", async (request, reply) => {
+    if (!(await authenticated(request)))
+      return reply.code(401).send({ error: "Login required" });
+    return { status: "unavailable", actions: [] };
+  });
+  app.post("/api/kernel/owner", async (request, reply) => {
+    if (!(await authenticated(request)))
+      return reply.code(401).send({ error: "Login required" });
+    return reply
+      .code(503)
+      .send({ error: "Kernel owner capability unavailable" });
+  });
   await app.register(fastifyStatic, {
     root: resolve(options.staticDirectory ?? "dist"),
     index: "index.html",
