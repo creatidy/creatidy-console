@@ -47,6 +47,7 @@ describe("Kernel local owner v1 contract shapes", () => {
         expected_revision: -1,
         decision_id: "synthetic-decision",
         expires_at: 1,
+        proposal_digest: "a".repeat(64),
       },
       { action: "start-managed", expected_revision: 0 },
       { action: "stop", expected_revision: 0, reason: "synthetic-reason" },
@@ -72,12 +73,21 @@ describe("Kernel local owner v1 contract shapes", () => {
         expected_revision: -2,
         decision_id: "synthetic",
         expires_at: 1,
+        proposal_digest: "a".repeat(64),
       },
       {
         action: "approve",
         expected_revision: 0,
         decision_id: "synthetic",
         expires_at: 0,
+        proposal_digest: "a".repeat(64),
+      },
+      {
+        action: "approve",
+        expected_revision: 0,
+        decision_id: "synthetic",
+        expires_at: 1,
+        proposal_digest: "A".repeat(64),
       },
       {
         action: "reconcile",
@@ -158,6 +168,7 @@ describe("Kernel local owner v1 contract shapes", () => {
         expected_revision: -1,
         decision_id: "decision-a",
         expires_at: 500n,
+        proposal_digest: "a".repeat(64),
       },
       () => "synthetic-id",
     );
@@ -169,9 +180,42 @@ describe("Kernel local owner v1 contract shapes", () => {
       expires_at: 500,
       authority: "historical-only",
     };
+    expect(approve.request).toEqual({
+      version: 1,
+      action: "approve",
+      command_id: "synthetic-id",
+      expected_revision: -1,
+      decision_id: "decision-a",
+      expires_at: 500n,
+      proposal_digest: "a".repeat(64),
+    });
     expect(classifyLocalOwnerResult(approve.request, receipt).kind).toBe(
       "historical-receipt-shape",
     );
+    expect(classifyLocalOwnerResult(approve.request, receipt)).toEqual({
+      kind: "historical-receipt-shape",
+      action: "approve",
+      status: "approved",
+      settlement: null,
+      decision_id: "decision-a",
+      spec_digest: "a".repeat(64),
+      expires_at: 500,
+    });
+    expect(approve.frame().subarray(4).toString()).toContain(
+      `"proposal_digest":"${"a".repeat(64)}"`,
+    );
+    expect(
+      classifyLocalOwnerResult(approve.request, { ...receipt, expires_at: 499 })
+        .kind,
+    ).toBe("historical-receipt-shape");
+    expect(
+      classifyLocalOwnerResult(approve.request, { ...receipt, expires_at: 501 })
+        .kind,
+    ).toBe("unknown");
+    expect(
+      classifyLocalOwnerResult(approve.request, { ...receipt, expires_at: 0 })
+        .kind,
+    ).toBe("unknown");
     expect(
       classifyLocalOwnerResult(approve.request, {
         ...receipt,
@@ -207,6 +251,7 @@ describe("Kernel local owner v1 contract shapes", () => {
         expected_revision: -1,
         decision_id: "decision-a",
         expires_at: 9223372036854775807n,
+        proposal_digest: "a".repeat(64),
       },
       () => "synthetic-id",
     );

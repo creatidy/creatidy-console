@@ -6,6 +6,7 @@ import { iterator, parse, type ObjectNode } from "@humanwhocodes/momoa";
 type Integer = number | bigint;
 type Action = "approve" | "start-managed" | "stop" | "reconcile";
 type Request = Readonly<Record<string, string | number | bigint>>;
+const preparedCommands = new WeakSet<object>();
 
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value))
@@ -69,7 +70,13 @@ export function prepareLocalOwnerCommand(
     throw new Error("Unsupported owner action");
   const fields =
     action === "approve"
-      ? ["action", "expected_revision", "decision_id", "expires_at"]
+      ? [
+          "action",
+          "expected_revision",
+          "decision_id",
+          "expires_at",
+          "proposal_digest",
+        ]
       : action === "stop"
         ? ["action", "expected_revision", "reason"]
         : action === "reconcile"
@@ -84,6 +91,9 @@ export function prepareLocalOwnerCommand(
   if (action === "approve") {
     details.decision_id = text(intent.decision_id, 256);
     details.expires_at = integer(intent.expires_at, 1n);
+    const digest = text(intent.proposal_digest, 64);
+    if (!/^[0-9a-f]{64}$/.test(digest)) throw new Error("Invalid owner intent");
+    details.proposal_digest = digest;
   } else if (action === "stop") {
     details.reason = text(intent.reason, 512);
   } else if (action === "reconcile") {
@@ -107,19 +117,36 @@ export function prepareLocalOwnerCommand(
   const encoded = Buffer.allocUnsafe(4 + payload.length);
   encoded.writeUInt32BE(payload.length, 0);
   payload.copy(encoded, 4);
-  return Object.freeze({
+  const command = Object.freeze({
     commandId,
     request,
     frame: () => Buffer.from(encoded),
   });
+  preparedCommands.add(command);
+  return command;
+}
+
+export function isPreparedLocalOwnerCommand(value: unknown): boolean {
+  return (
+    typeof value === "object" && value !== null && preparedCommands.has(value)
+  );
 }
 
 export type OwnerObservation =
   | { kind: "unknown" }
   | {
       kind: "historical-receipt-shape";
-      action: Action;
-      status: "approved" | "accepted" | "recorded";
+      action: "approve";
+      status: "approved";
+      settlement: null;
+      decision_id: string;
+      spec_digest: string;
+      expires_at: Integer;
+    }
+  | {
+      kind: "historical-receipt-shape";
+      action: Exclude<Action, "approve">;
+      status: "accepted" | "recorded";
       settlement: "unknown" | "bound-managed-target-settled" | null;
     };
 
@@ -152,10 +179,15 @@ export function classifyLocalOwnerResult(
         "authority",
       ]) &&
       result.status === "approved" &&
+      typeof request.proposal_digest === "string" &&
+      /^[0-9a-f]{64}$/.test(request.proposal_digest) &&
+      typeof result.decision_id === "string" &&
+      result.decision_id.trim().length > 0 &&
+      result.decision_id.length <= 256 &&
       result.decision_id === request.decision_id &&
       typeof result.spec_digest === "string" &&
       /^[0-9a-f]{64}$/.test(result.spec_digest) &&
-      BigInt(integer(result.expires_at, 1n)) ===
+      BigInt(integer(result.expires_at, 1n)) <=
         BigInt(integer(request.expires_at, 1n))
     ) {
       return {
@@ -163,6 +195,9 @@ export function classifyLocalOwnerResult(
         action: "approve",
         status: "approved",
         settlement: null,
+        decision_id: result.decision_id,
+        spec_digest: result.spec_digest,
+        expires_at: integer(result.expires_at, 1n),
       };
     }
     if (
@@ -198,6 +233,38 @@ export function classifyLocalOwnerResult(
   return unknown;
 }
 
+export function parseOwnerJson(text: string): unknown {
+  const syntax = parse(text, { mode: "json" });
+  for (const { node, phase } of iterator(syntax)) {
+    if (phase !== "enter" || node.type !== "Object") continue;
+    const keys = new Set<string>();
+    for (const member of (node as ObjectNode).members) {
+      if (member.name.type !== "String" || keys.has(member.name.value))
+        throw new Error("Ambiguous producer response");
+      keys.add(member.name.value);
+    }
+  }
+  const parseNative = JSON.parse as unknown as (
+    source: string,
+    reviver: (
+      key: string,
+      value: unknown,
+      context?: { source?: string },
+    ) => unknown,
+  ) => unknown;
+  return parseNative(text, (_key, item, context) => {
+    if (typeof item !== "number") return item;
+    const raw = context?.source;
+    if (!raw || !/^-?(?:0|[1-9]\d*)$/.test(raw) || raw.length > 128)
+      throw new Error("Unsupported producer number");
+    const number = BigInt(raw);
+    return number >= BigInt(Number.MIN_SAFE_INTEGER) &&
+      number <= BigInt(Number.MAX_SAFE_INTEGER)
+      ? Number(number)
+      : number;
+  });
+}
+
 export function decodeLocalOwnerFrame(
   request: Request,
   input: Uint8Array,
@@ -214,35 +281,7 @@ export function decodeLocalOwnerFrame(
     const text = new TextDecoder("utf-8", { fatal: true }).decode(
       frame.subarray(4),
     );
-    const syntax = parse(text, { mode: "json" });
-    for (const { node, phase } of iterator(syntax)) {
-      if (phase !== "enter" || node.type !== "Object") continue;
-      const keys = new Set<string>();
-      for (const member of (node as ObjectNode).members) {
-        if (member.name.type !== "String" || keys.has(member.name.value))
-          throw new Error("Ambiguous producer response");
-        keys.add(member.name.value);
-      }
-    }
-    const parseNative = JSON.parse as unknown as (
-      source: string,
-      reviver: (
-        key: string,
-        value: unknown,
-        context?: { source?: string },
-      ) => unknown,
-    ) => unknown;
-    const value = parseNative(text, (_key, item, context) => {
-      if (typeof item !== "number") return item;
-      const raw = context?.source;
-      if (!raw || !/^-?(?:0|[1-9]\d*)$/.test(raw) || raw.length > 128)
-        throw new Error("Unsupported producer number");
-      const number = BigInt(raw);
-      return number >= BigInt(Number.MIN_SAFE_INTEGER) &&
-        number <= BigInt(Number.MAX_SAFE_INTEGER)
-        ? Number(number)
-        : number;
-    });
+    const value = parseOwnerJson(text);
     const envelope = object(value);
     if (
       !exact(envelope, ["version", "ok", "result"]) ||

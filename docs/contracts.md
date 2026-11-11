@@ -283,6 +283,22 @@ producer identity or dispatch commands; the authenticated production endpoint
 reports no available actions and refuses submissions. A valid-looking receipt
 shape is not evidence of an authenticated producer or an observed effect.
 
+Kernel
+[PR #130](https://forgejo.creatidy.com/Creatidy/creatidy-kernel/pulls/130) was
+merged at `86a2af119bb38f71c071cb28af3d2db954de3316`. Its owner channel serves
+canonical proposal bytes in digest-bound chunks and requires the reviewed
+proposal digest in `approve`. The local synthetic codec validates contiguous
+chunks, scope, supported v1 shape, complete length and SHA-256 over the original
+bytes, with a 4 MiB Console aggregate bound. Larger proposals are unavailable,
+not truncated or approvable. The original text is untrusted data; a matching
+digest alone grants no authority. Approval receipts are historical and may have
+an effective expiry earlier than requested. These fixture-level checks neither
+prove the identity or version of a running producer nor enable live commands.
+The local transport is exercised only against synthetic Unix sockets. It
+serializes requests, closes on protocol failures and returns unknown for
+ambiguous command outcomes; callers must retain the exact prepared command for
+reconciliation. It is not connected to production startup or browser endpoints.
+
 Each real command additionally requires idempotency/input/reconciliation, audit
 receipt and negative tests for denial, expiration, stale subject, multiple
 clients and timeout-after-acceptance. Receipt != observed effect. No blind
