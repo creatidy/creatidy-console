@@ -17,6 +17,7 @@ function frame(text: string) {
 describe("Kernel local owner v1 contract shapes", () => {
   it("builds fixed-action length-prefixed frames with stable identity and exact integers", () => {
     const command = prepareLocalOwnerCommand(
+      "program",
       {
         action: "stop",
         expected_revision: 9007199254740993n,
@@ -37,6 +38,64 @@ describe("Kernel local owner v1 contract shapes", () => {
       '"command_id":"synthetic-command-id"',
     );
     expect(Object.isFrozen(command.request)).toBe(true);
+    expect(Object.isFrozen(command)).toBe(true);
+    expect(command.scope).toBe("program");
+    expect(command.frame().subarray(4).toString()).not.toContain('"scope"');
+  });
+
+  it("requires a bounded nonblank local scope", () => {
+    const intent = { action: "start-managed", expected_revision: 0 };
+    for (const scope of ["", " ", "x".repeat(4097)])
+      expect(() => prepareLocalOwnerCommand(scope, intent)).toThrow();
+    expect(() =>
+      prepareLocalOwnerCommand("x".repeat(4096), intent),
+    ).not.toThrow();
+  });
+
+  it("counts Kernel command text limits in Unicode code points", () => {
+    const character = "\u{1f680}";
+    const approve = (decision_id: string, commandId: string) =>
+      prepareLocalOwnerCommand(
+        "program",
+        {
+          action: "approve",
+          expected_revision: -1,
+          decision_id,
+          expires_at: 1,
+          proposal_digest: "a".repeat(64),
+        },
+        () => commandId,
+      );
+    const command = approve(character.repeat(256), character.repeat(256));
+    expect(
+      classifyLocalOwnerResult(command.request, {
+        version: 1,
+        status: "approved",
+        decision_id: character.repeat(256),
+        spec_digest: "a".repeat(64),
+        expires_at: 1,
+        authority: "historical-only",
+      }).kind,
+    ).toBe("historical-receipt-shape");
+    expect(() => approve(character.repeat(257), "id")).toThrow();
+    expect(() => approve("decision", character.repeat(257))).toThrow();
+    for (const action of ["stop", "reconcile"] as const) {
+      const intent = (value: string) =>
+        action === "stop"
+          ? { action, expected_revision: 1, reason: value }
+          : {
+              action,
+              expected_revision: 1,
+              subject: "a".repeat(64),
+              evidence: value,
+            };
+      expect(() =>
+        prepareLocalOwnerCommand("program", intent(character.repeat(512))),
+      ).not.toThrow();
+      expect(() =>
+        prepareLocalOwnerCommand("program", intent(character.repeat(513))),
+      ).toThrow();
+    }
   });
 
   it("permits only the exact existing owner action fields", () => {
@@ -58,7 +117,9 @@ describe("Kernel local owner v1 contract shapes", () => {
         evidence: "synthetic-evidence",
       },
     ])
-      expect(() => prepareLocalOwnerCommand(intent, id)).not.toThrow();
+      expect(() =>
+        prepareLocalOwnerCommand("program", intent, id),
+      ).not.toThrow();
     for (const intent of [
       { action: "pause", expected_revision: 0 },
       {
@@ -101,11 +162,12 @@ describe("Kernel local owner v1 contract shapes", () => {
         reason: "synthetic",
       },
     ])
-      expect(() => prepareLocalOwnerCommand(intent, id)).toThrow();
+      expect(() => prepareLocalOwnerCommand("program", intent, id)).toThrow();
   });
 
   it("distinguishes historical receipt shapes from unknown effects without retrying", () => {
     const stop = prepareLocalOwnerCommand(
+      "program",
       { action: "stop", expected_revision: 4, reason: "synthetic" },
       () => "synthetic-id",
     );
@@ -163,6 +225,7 @@ describe("Kernel local owner v1 contract shapes", () => {
 
   it("refuses mismatched approval receipts and recognizes bounded reconciliation shape", () => {
     const approve = prepareLocalOwnerCommand(
+      "program",
       {
         action: "approve",
         expected_revision: -1,
@@ -223,6 +286,7 @@ describe("Kernel local owner v1 contract shapes", () => {
       }).kind,
     ).toBe("unknown");
     const reconcile = prepareLocalOwnerCommand(
+      "program",
       {
         action: "reconcile",
         expected_revision: 1,
@@ -246,6 +310,7 @@ describe("Kernel local owner v1 contract shapes", () => {
   });
   it("decodes only bounded, unambiguous local v1 response envelopes", () => {
     const command = prepareLocalOwnerCommand(
+      "program",
       {
         action: "approve",
         expected_revision: -1,
@@ -301,6 +366,7 @@ describe("Kernel local owner v1 contract shapes", () => {
 
   it("coalesces one synthetic exchange and reports a historical receipt shape, not an effect", async () => {
     const attempt = createLocalOwnerAttempt(
+      "program",
       { action: "stop", expected_revision: 4, reason: "synthetic" },
       () => "synthetic-id",
     );
@@ -330,6 +396,7 @@ describe("Kernel local owner v1 contract shapes", () => {
 
   it("keeps lost replies unknown and never retries a possibly accepted command", async () => {
     const attempt = createLocalOwnerAttempt(
+      "program",
       { action: "start-managed", expected_revision: 2 },
       () => "synthetic-id",
     );

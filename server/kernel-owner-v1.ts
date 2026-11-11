@@ -26,7 +26,7 @@ function text(value: unknown, maximum: number) {
   if (
     typeof value !== "string" ||
     value.trim().length === 0 ||
-    value.length > maximum
+    Array.from(value).length > maximum
   )
     throw new Error("Invalid owner intent");
   return value;
@@ -56,9 +56,16 @@ function json(value: unknown) {
 }
 
 export function prepareLocalOwnerCommand(
+  scope: string,
   input: unknown,
   generateId: () => string = randomUUID,
 ) {
+  if (
+    typeof scope !== "string" ||
+    !scope.trim() ||
+    Buffer.byteLength(scope) > 4096
+  )
+    throw new Error("Invalid owner scope");
   const intent = object(input);
   const action = intent.action;
   if (
@@ -118,6 +125,7 @@ export function prepareLocalOwnerCommand(
   encoded.writeUInt32BE(payload.length, 0);
   payload.copy(encoded, 4);
   const command = Object.freeze({
+    scope,
     commandId,
     request,
     frame: () => Buffer.from(encoded),
@@ -183,7 +191,7 @@ export function classifyLocalOwnerResult(
       /^[0-9a-f]{64}$/.test(request.proposal_digest) &&
       typeof result.decision_id === "string" &&
       result.decision_id.trim().length > 0 &&
-      result.decision_id.length <= 256 &&
+      Array.from(result.decision_id).length <= 256 &&
       result.decision_id === request.decision_id &&
       typeof result.spec_digest === "string" &&
       /^[0-9a-f]{64}$/.test(result.spec_digest) &&
@@ -298,10 +306,11 @@ export function decodeLocalOwnerFrame(
 // The caller must obtain a producer-authorized channel under the host contract.
 // Normal Console operation does not provide or invoke this seam.
 export function createLocalOwnerAttempt(
+  scope: string,
   input: unknown,
   generateId: () => string = randomUUID,
 ) {
-  const command = prepareLocalOwnerCommand(input, generateId);
+  const command = prepareLocalOwnerCommand(scope, input, generateId);
   let pending: Promise<OwnerObservation> | undefined;
   return Object.freeze({
     command,

@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { createServer, createConnection, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createLocalOwnerTransport } from "../server/kernel-owner-transport.ts";
 import { prepareLocalOwnerCommand } from "../server/kernel-owner-v1.ts";
 
@@ -164,6 +164,7 @@ it("serializes commands and preserves uncertainty on EOF without retries", async
   const { client, requests } = await pair((socket) => socket.end());
   const transport = createLocalOwnerTransport(client, "program", 500);
   const command = prepareLocalOwnerCommand(
+    "program",
     { action: "stop", expected_revision: 1, reason: "sensitive" },
     () => "retained-id",
   );
@@ -190,6 +191,39 @@ it("rejects forged command objects without writing to the channel", async () => 
   transport.close();
 });
 
+it("never writes a command prepared for a different bound scope", async () => {
+  const receipt = {
+    version: 1,
+    status: "accepted",
+    settlement: "unknown",
+    authority: "historical-only",
+  };
+  const { client, requests } = await pair((socket) =>
+    socket.write(response(receipt)),
+  );
+  const write = vi.spyOn(client, "write");
+  const transport = createLocalOwnerTransport(client, "program-b");
+  const wrong = prepareLocalOwnerCommand(
+    "program-a",
+    { action: "stop", expected_revision: 1, reason: "synthetic" },
+    () => "same-id",
+  );
+  expect(await transport.sendCommand(wrong)).toEqual({ kind: "unknown" });
+  expect(write).not.toHaveBeenCalled();
+  expect(requests).toHaveLength(0);
+  const right = prepareLocalOwnerCommand(
+    "program-b",
+    { action: "stop", expected_revision: 1, reason: "synthetic" },
+    () => "same-id",
+  );
+  expect((await transport.sendCommand(right)).kind).toBe(
+    "historical-receipt-shape",
+  );
+  expect(requests).toEqual([right.request]);
+  expect(requests[0]).not.toHaveProperty("scope");
+  transport.close();
+});
+
 it("waits for a backpressured write and closes a stalled write on deadline", async () => {
   const receipt = {
     version: 1,
@@ -201,7 +235,10 @@ it("waits for a backpressured write and closes a stalled write on deadline", asy
   pair1.client.cork();
   const channel = createLocalOwnerTransport(pair1.client, "program", 500);
   const pending = channel.sendCommand(
-    prepareLocalOwnerCommand({ action: "start-managed", expected_revision: 1 }),
+    prepareLocalOwnerCommand("program", {
+      action: "start-managed",
+      expected_revision: 1,
+    }),
   );
   await new Promise((resolve) => setTimeout(resolve, 10));
   expect(pair1.requests).toHaveLength(0);
@@ -214,7 +251,7 @@ it("waits for a backpressured write and closes a stalled write on deadline", asy
   const stalled = createLocalOwnerTransport(pair2.client, "program", 20);
   expect(
     await stalled.sendCommand(
-      prepareLocalOwnerCommand({
+      prepareLocalOwnerCommand("program", {
         action: "start-managed",
         expected_revision: 1,
       }),
@@ -235,7 +272,7 @@ it("supports sequential commands and rejects unsolicited coalesced responses", a
     socket.write(response(receipt)),
   );
   const transport = createLocalOwnerTransport(client, "program");
-  const command = prepareLocalOwnerCommand({
+  const command = prepareLocalOwnerCommand("program", {
     action: "start-managed",
     expected_revision: 1,
   });

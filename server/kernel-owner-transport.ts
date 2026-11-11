@@ -214,6 +214,7 @@ export function createLocalOwnerTransport(
     ): Promise<OwnerObservation> {
       if (!isPreparedLocalOwnerCommand(command))
         throw new Error("Invalid owner command");
+      if (command.scope !== scope) return { kind: "unknown" };
       try {
         return await operation(async () => {
           const frame = await exchange(command.frame(), RESPONSE_LIMIT);

@@ -299,6 +299,15 @@ serializes requests, closes on protocol failures and returns unknown for
 ambiguous command outcomes; callers must retain the exact prepared command for
 reconciliation. It is not connected to production startup or browser endpoints.
 
+The reviewed proposal does not itself contain the full host-bound owner policy,
+authority envelope, budgets or execution and verification context that Kernel
+uses to construct its resulting ProgramSpec. Its digest therefore does not
+establish that those effective authority consequences were reviewed. Console
+must not enable approval until producer evidence makes the relevant prospective
+scope and limits available and binds the reviewed values to the decision, or an
+equivalent accepted contract establishes the same guarantee. The requested
+expiry is an upper bound, not a guaranteed effective deadline.
+
 Each real command additionally requires idempotency/input/reconciliation, audit
 receipt and negative tests for denial, expiration, stale subject, multiple
 clients and timeout-after-acceptance. Receipt != observed effect. No blind
