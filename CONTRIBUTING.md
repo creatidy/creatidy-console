@@ -135,6 +135,12 @@ fetched by deterministic gates; verify actual Forgejo issue/review links through
 platform evidence. Local heading fragments are not supported by the link
 validator; use topic-file links instead.
 
+Follow the [test design and evidence rules](.kilo/rules/validation.md): use
+focused development checks, preserve distinct artifact and security evidence,
+isolate mutable test state and report skipped evidence explicitly. The current
+full local and independent-review gates remain required; CI configuration alone
+does not prove a successful run against the current integration subject.
+
 Run `git diff --check` before commit. Stage only intended files. Do not track
 `node_modules`, `dist`, `.env`, process logs or Agent Manager recovery/worktree
 state. No token may enter public `VITE_` configuration or a browser bundle. Do
