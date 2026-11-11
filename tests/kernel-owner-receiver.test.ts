@@ -13,7 +13,9 @@ import {
 import { tmpdir } from "node:os";
 import { createConnection, createServer } from "node:net";
 import { dirname, join, resolve } from "node:path";
+import { createHash } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { openState } from "../server/state.ts";
 
 const temporary = mkdtempSync(join(tmpdir(), "console-owner-test-"));
 const addon = join(temporary, "receiver.node");
@@ -246,6 +248,194 @@ describe.skipIf(process.platform !== "linux")("native owner receiver", () => {
       expect(output.code).not.toBe(0);
       expect(output.stderr).toContain(error);
       expect(received).toBe(0);
+    }
+  });
+
+  it("retains the inherited socket in the real entry point for authenticated reads", async () => {
+    const dir = join(temporary, "startup-state");
+    const assets = join(temporary, "startup-assets");
+    mkdirSync(assets);
+    const state = openState(dir);
+    state.db
+      .prepare("INSERT INTO settings (name, value) VALUES ('bootstrap', ?)")
+      .run(
+        JSON.stringify({
+          digest: createHash("sha256").update("synthetic-setup").digest("hex"),
+          expires: Date.now() + 60000,
+        }),
+      );
+    state.db.close();
+    const reservation = createServer();
+    await new Promise<void>((resolve) =>
+      reservation.listen(0, "127.0.0.1", resolve),
+    );
+    const address = reservation.address();
+    if (!address || typeof address === "string")
+      throw new Error("Missing address");
+    const origin = `http://127.0.0.1:${address.port}`;
+    await new Promise<void>((resolve) => reservation.close(() => resolve()));
+    const process = spawn(
+      globalThis.process.execPath,
+      ["server/main.ts", "3"],
+      {
+        cwd: appRoot,
+        env: {
+          ...env,
+          CONSOLE_KERNEL_OWNER: "1",
+          CONSOLE_KERNEL_OWNER_SCOPE: "program-1",
+          CONSOLE_KERNEL_OWNER_PRODUCER: "kernel-1",
+          CONSOLE_KERNEL_OWNER_RECIPIENT: "console-1",
+          CONSOLE_STATE_DIR: dir,
+          CONSOLE_STATIC_DIR: assets,
+          CONSOLE_ORIGIN: origin,
+        },
+        stdio: ["ignore", "pipe", "pipe", "pipe"],
+      },
+    );
+    const output = collect(process);
+    const channel = process.stdio[3];
+    if (!channel || !("write" in channel)) throw new Error("Missing channel");
+    const subject = {
+      origin: "https://example.test",
+      repository: "a/b",
+      issue: 1,
+      branch: "main",
+      base: "a".repeat(40),
+    };
+    const declaration = JSON.stringify({
+      version: 1,
+      outcome: "x",
+      criteria: ["x"],
+      quality: [],
+      interface: [],
+      context: [],
+      unknowns: [],
+      paths: [],
+      network: [],
+      effects: [],
+      recipes: ["x"],
+      provenance: ["x"],
+    });
+    const text = JSON.stringify({
+      version: 1,
+      kind: "ordinary-program-proposal",
+      program: "program-1",
+      objective: "synthetic",
+      drafts: [
+        {
+          kind: "ordinary-draft",
+          version: 1,
+          task_id: "x",
+          revision: 1,
+          parent_digest: null,
+          declaration,
+          evidence: {
+            subject,
+            issue_digest: "x",
+            issue_updated: "x",
+            issue_state: "x",
+            source: "x",
+            recipe_digest: "x",
+            baseline_producer: "x",
+            baseline_reference: "x",
+            baseline_result: "x",
+            relevance_producer: "x",
+            relevance_reference: "x",
+            relevance_proof: "x",
+            disposition: "work_remains",
+          },
+          observed_at: 1,
+        },
+      ],
+      dependencies: [
+        {
+          subject,
+          required: [],
+          reference: "x",
+          complete: true,
+          observed_at: 1,
+          fresh_until: 2,
+        },
+      ],
+    });
+    const bytes = Buffer.from(text);
+    const digest = createHash("sha256").update(bytes).digest("hex");
+    const requests: unknown[] = [];
+    let incoming = Buffer.alloc(0);
+    channel.on("data", (data: Buffer) => {
+      incoming = Buffer.concat([incoming, data]);
+      if (incoming.length < 4 || incoming.length < 4 + incoming.readUInt32BE())
+        return;
+      const size = incoming.readUInt32BE();
+      requests.push(JSON.parse(incoming.subarray(4, size + 4).toString()));
+      incoming = incoming.subarray(size + 4);
+      const body = Buffer.from(
+        JSON.stringify({
+          version: 1,
+          ok: true,
+          result: {
+            version: 1,
+            digest,
+            offset: 0,
+            bytes: bytes.length,
+            data_base64: bytes.toString("base64"),
+            complete: true,
+          },
+        }),
+      );
+      const header = Buffer.alloc(4);
+      header.writeUInt32BE(body.length);
+      channel.write(Buffer.concat([header, body]));
+    });
+    channel.write(frame());
+    try {
+      let ready = false;
+      for (let i = 0; i < 100 && !ready; i++) {
+        try {
+          ready = (await fetch(`${origin}/api/session`)).ok;
+        } catch {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+      }
+      expect(ready).toBe(true);
+      const headers = { origin, "content-type": "application/json" };
+      const bootstrap = await fetch(`${origin}/api/bootstrap`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          token: "synthetic-setup",
+          password: "synthetic-password",
+        }),
+      });
+      expect(bootstrap.status).toBe(200);
+      const login = await fetch(`${origin}/api/login`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ password: "synthetic-password" }),
+      });
+      const cookie = login.headers.get("set-cookie")!.split(";")[0]!;
+      const result = await fetch(`${origin}/api/kernel/owner`, {
+        headers: { ...headers, cookie },
+      });
+      expect(await result.json()).toEqual({
+        status: "connected",
+        actions: [],
+        scope: "program-1",
+        digest,
+        text,
+      });
+      expect(requests).toEqual([
+        {
+          version: 1,
+          action: "proposal-chunk",
+          offset: 0,
+          proposal_digest: null,
+        },
+      ]);
+    } finally {
+      process.kill("SIGTERM");
+      const result = await output;
+      expect(result.code, result.stderr).toBe(0);
     }
   });
 });

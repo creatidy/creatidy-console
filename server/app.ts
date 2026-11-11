@@ -1,11 +1,12 @@
 import Fastify from "fastify";
-import cookie from "@fastify/cookie";
+import cookie, { Signer } from "@fastify/cookie";
 import session from "@fastify/session";
 import fastifyStatic from "@fastify/static";
 import { hash, verify } from "@node-rs/argon2";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { unlinkSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { createRequire } from "node:module";
 import { openState } from "./state.ts";
 import { createRouterObserver } from "./router.ts";
 
@@ -21,6 +22,11 @@ export interface AppOptions {
   staticDirectory?: string;
   now?: () => number;
   tls?: { key: Buffer; cert: Buffer };
+  kernelOwner?: {
+    scope: string;
+    readProposal: () => Promise<{ digest: string; text: string }>;
+    close: () => void;
+  };
 }
 
 export async function createApp(options: AppOptions) {
@@ -75,20 +81,6 @@ export async function createApp(options: AppOptions) {
     origin.protocol === "https:" ? "__Host-console" : "console";
   const routerObserver = createRouterObserver(options.stateDirectory);
   await app.register(cookie);
-  await app.register(session, {
-    secret: String(signing),
-    store,
-    cookieName,
-    saveUninitialized: false,
-    rolling: false,
-    cookie: {
-      path: "/",
-      httpOnly: true,
-      sameSite: "strict",
-      secure: origin.protocol === "https:",
-      maxAge: 30 * 60_000,
-    },
-  });
   app.addHook("onRequest", async (request, reply) => {
     reply
       .header("Cache-Control", "no-store")
@@ -112,7 +104,70 @@ export async function createApp(options: AppOptions) {
       return reply.code(403).send({ error: "Request origin denied" });
     }
   });
+  // Bypass the session plugin's rolling/expired-cookie handling for this
+  // read-only check. Use its pinned decoder and the same signed generation.
+  const Session = createRequire(import.meta.url)(
+    "@fastify/session/lib/session",
+  ) as {
+    decodeSessionId: (value: string) => {
+      sessionStoreId: string;
+      sessionId: string;
+    };
+  };
+  const sessionSigner = new Signer(String(signing));
+  app.addHook("onRequest", async (request, reply) => {
+    if (
+      request.method !== "GET" ||
+      request.routeOptions.url !== "/api/kernel/session-check"
+    )
+      return;
+    const cookieValue = request.cookies[cookieName];
+    const signed = cookieValue ? sessionSigner.unsign(cookieValue) : undefined;
+    if (!signed?.valid || !signed.value)
+      return reply.code(401).send({ error: "Login required" });
+    const { sessionStoreId, sessionId } = Session.decodeSessionId(signed.value);
+    const saved = await new Promise<import("fastify").Session | null>(
+      (resolve, reject) => {
+        store.get(sessionStoreId, (error, value) =>
+          error ? reject(error) : resolve(value ?? null),
+        );
+      },
+    );
+    const metadata = saved as
+      | (import("fastify").Session & {
+          __fastifySessionMetadata?: { generation?: string };
+        })
+      | null;
+    // The pinned session Cookie constructor rebuilds originalExpires from expires.
+    const storedCookie = saved?.cookie as { expires?: unknown } | undefined;
+    const expires = storedCookie?.expires;
+    const expiryTime = typeof expires === "string" ? Date.parse(expires) : NaN;
+    if (
+      !saved?.owner ||
+      metadata?.__fastifySessionMetadata?.generation !== sessionId ||
+      !Number.isFinite(expiryTime) ||
+      expiryTime <= Date.now()
+    )
+      return reply.code(401).send({ error: "Login required" });
+    return reply.send({ authenticated: true });
+  });
+  await app.register(session, {
+    secret: String(signing),
+    store,
+    cookieName,
+    saveUninitialized: false,
+    rolling: false,
+    cookie: {
+      path: "/",
+      httpOnly: true,
+      sameSite: "strict",
+      secure: origin.protocol === "https:",
+      maxAge: 30 * 60_000,
+    },
+  });
+  app.get("/api/kernel/session-check", async () => ({ authenticated: false }));
   app.addHook("onClose", async () => {
+    options.kernelOwner?.close();
     db.close();
   });
   const owner = () =>
@@ -294,10 +349,34 @@ export async function createApp(options: AppOptions) {
       return reply.code(401).send({ error: "Login required" });
     return result;
   });
+  let proposalRead: Promise<{ digest: string; text: string }> | undefined;
   app.get("/api/kernel/owner", async (request, reply) => {
     if (!(await authenticated(request)))
       return reply.code(401).send({ error: "Login required" });
-    return { status: "unavailable", actions: [] };
+    const ownerChannel = options.kernelOwner;
+    if (!ownerChannel) return { status: "unavailable", actions: [] };
+    let proposal: { digest: string; text: string } | undefined;
+    try {
+      proposalRead ??= ownerChannel.readProposal();
+      const pending = proposalRead;
+      try {
+        proposal = await pending;
+      } finally {
+        if (proposalRead === pending) proposalRead = undefined;
+      }
+    } catch {
+      // Do not expose producer errors or retain partial observations.
+    }
+    if (!(await authenticated(request)))
+      return reply.code(401).send({ error: "Login required" });
+    if (!proposal) return { status: "disconnected", actions: [] };
+    return {
+      status: "connected",
+      actions: [],
+      scope: ownerChannel.scope,
+      digest: proposal.digest,
+      text: proposal.text,
+    };
   });
   app.post("/api/kernel/owner", async (request, reply) => {
     if (!(await authenticated(request)))

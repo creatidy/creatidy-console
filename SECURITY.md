@@ -44,11 +44,34 @@ The owner selected the existing authenticated Console backend as the intended
 browser-facing boundary for Kernel owner commands. A Console session does not
 grant Kernel authority: a trusted host must independently provision the correct
 Kernel-authorized capability. Kernel #124 delivered a Linux trusted-supervisor
-launch contract, but Console receiver and installed consumer conformance remain
-unverified. Until those controls are implemented and verified, Console must fail
-closed and must not connect a synthetic capability to normal operation. No
-Kernel HTTP server, arbitrary dispatcher, browser-selected principal, active
-SQLite peer or new authentication system follows from this decision.
+launch contract. The optional Linux supervisor-launched receiver retains the
+validated descriptor for fixed, bounded proposal reads only; default startup has
+no capability. The browser receives the verified original proposal text, scope
+and digest only after Console session checks before and after the read. Labels
+check pairing, not producer identity; descriptor custody and the trusted
+supervisor are security assumptions. The producer's declarations are not the
+effective host policy, which remains unknown. No proposal data is cached by the
+adapter or persisted in browser storage. Synthetic tests do not establish
+installed consumer conformance. All owner commands remain unavailable. No Kernel
+HTTP server, arbitrary dispatcher, browser-selected principal, active SQLite
+peer or new authentication system follows from this decision.
+
+While the proposal is visible, Console checks the existing session without
+extending its idle or absolute expiry. The view hides the proposal while a check
+is pending and when the document is hidden; foregrounding requires a new check.
+External revocation is detected on the next check, not instantaneously, and
+browser scheduling or suspension can delay checks. This does not erase data
+already seen or copied by the user. The non-touch check uses the pinned
+`@fastify/session` internal cookie decoder and store generation verification;
+revalidate that coupling when the session dependency changes.
+
+Same-origin Console windows also send a payload-free BroadcastChannel signal
+after logout or an authentication denial, causing other windows to discard their
+displayed session state. Delivery is best effort and may be delayed or
+unavailable when browser contexts are suspended, partitioned or do not support
+the API; non-touch checks remain the fallback. A transient check failure hides
+the proposal and retries the non-touch check at a bounded interval while
+visible.
 
 The initial Router observer adapter accepts only explicitly configured literal
 loopback IP origins, not DNS names or arbitrary URLs. It does not follow

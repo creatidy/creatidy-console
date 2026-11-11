@@ -76,7 +76,7 @@ dependencies; it is not a packaged installation or producer-integration receipt.
 | `make bootstrap` | Issue short-lived local first-owner authority                        |
 | `make start`     | Serve the built UI and authenticated API from one origin             |
 
-### Experimental Owner Descriptor Check
+### Experimental Owner Proposal Read
 
 The optional Linux-only descriptor check is not command delivery or installed
 producer conformance. Build it explicitly with `npm run build:native-owner`;
@@ -109,14 +109,15 @@ identity.
 
 The check accepts only a connected Unix stream descriptor at least 3, sets and
 verifies `FD_CLOEXEC`, reads one framed greeting of at most 65536 bytes with a
-five-second deadline, validates the exact Kernel #124 greeting and closes the
-channel. It never sends a request. Startup fails closed on a missing addon,
-invalid descriptor, mismatch, malformed frame or timeout. The default startup
-does not load the addon or use a descriptor. This is a synthetic verification
-seam, not a supported deployment recipe, live integration receipt, or a
-proposal/revision binding. Approval and every other owner action remain
-unavailable until their producer contracts and installed conformance are
-established.
+five-second deadline, and validates the exact Kernel #124 greeting. It retains
+the channel for authenticated fixed proposal-chunk reads, with a 4 MiB aggregate
+limit and digest validation; it never sends owner commands. Startup fails closed
+on a missing addon, invalid descriptor, mismatch, malformed frame or timeout.
+The default startup does not load the addon or use a descriptor. This is a
+synthetic verification path, not a supported deployment recipe or live
+integration receipt. Proposal text is untrusted; declarations do not establish
+effective host policy. Approval and every other owner action remain unavailable
+and live mutation requires separate owner authorization.
 
 `make bootstrap` creates `bootstrap-token` in the private state directory with
 mode 0600, expires in 15 minutes, and refuses once an owner exists. Read it only

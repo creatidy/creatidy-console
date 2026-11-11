@@ -315,7 +315,10 @@ export function assembleLocalOwnerProposal(
   const raw = Buffer.concat(chunks, total);
   if (createHash("sha256").update(raw).digest("hex") !== digest)
     throw new Error("Invalid proposal digest");
-  const text = new TextDecoder("utf-8", { fatal: true }).decode(raw);
+  const text = new TextDecoder("utf-8", {
+    fatal: true,
+    ignoreBOM: true,
+  }).decode(raw);
   const proposal = validateProposal(parseOwnerJson(text), scope);
   return { digest, proposal, text };
 }

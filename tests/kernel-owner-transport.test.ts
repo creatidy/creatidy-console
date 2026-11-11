@@ -3,7 +3,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { createServer, createConnection, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { mkdirSync } from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
+import { createApp } from "../server/app.ts";
+import { openState } from "../server/state.ts";
 import { createLocalOwnerTransport } from "../server/kernel-owner-transport.ts";
 import { prepareLocalOwnerCommand } from "../server/kernel-owner-v1.ts";
 
@@ -353,4 +356,119 @@ it("rejects truncated frames and oversized proposal aggregates", async () => {
     createLocalOwnerTransport(oversized.client, "program").readProposal(),
   ).rejects.toThrow("Owner channel unavailable");
   expect(oversized.requests).toHaveLength(1);
+});
+
+it("serves verified socket proposals only to current sessions and coalesces concurrent reads", async () => {
+  const raw = proposal(9000);
+  const digest = createHash("sha256").update(raw).digest("hex");
+  let release: (() => void) | undefined;
+  let started!: () => void;
+  const waiting = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  const { client, requests } = await pair((socket, request) => {
+    const send = () =>
+      socket.write(response(chunk(raw, request.offset as number, digest)));
+    if (requests.length === 1) {
+      release = send;
+      started();
+    } else send();
+  });
+  const channel = createLocalOwnerTransport(client, "program");
+  const dir = await mkdtemp(join(tmpdir(), "console-owner-app-"));
+  const assets = join(dir, "assets");
+  mkdirSync(assets);
+  const state = openState(dir);
+  state.db
+    .prepare("INSERT INTO settings (name, value) VALUES ('bootstrap', ?)")
+    .run(
+      JSON.stringify({
+        digest: createHash("sha256").update("synthetic-token").digest("hex"),
+        expires: Date.now() + 60000,
+      }),
+    );
+  state.db.close();
+  const origin = "http://127.0.0.1:4173";
+  const headers = { host: "127.0.0.1:4173", origin };
+  const app = await createApp({
+    stateDirectory: dir,
+    staticDirectory: assets,
+    origin,
+    kernelOwner: {
+      scope: "program",
+      readProposal: channel.readProposal,
+      close: channel.close,
+    },
+  });
+  try {
+    expect(
+      (await app.inject({ method: "GET", url: "/api/kernel/owner", headers }))
+        .statusCode,
+    ).toBe(401);
+    expect(requests).toHaveLength(0);
+    await app.inject({
+      method: "POST",
+      url: "/api/bootstrap",
+      headers,
+      payload: { token: "synthetic-token", password: "synthetic-password" },
+    });
+    const login = await app.inject({
+      method: "POST",
+      url: "/api/login",
+      headers,
+      payload: { password: "synthetic-password" },
+    });
+    const cookie = String(login.headers["set-cookie"]).split(";")[0]!;
+    const auth = { ...headers, cookie };
+    expect(
+      (
+        await app.inject({
+          method: "GET",
+          url: "/api/kernel/owner",
+          headers: { ...auth, origin: "https://attacker.example" },
+        })
+      ).statusCode,
+    ).toBe(403);
+    const first = app.inject({
+      method: "GET",
+      url: "/api/kernel/owner",
+      headers: auth,
+    });
+    await waiting;
+    const second = app.inject({
+      method: "GET",
+      url: "/api/kernel/owner",
+      headers: auth,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    release!();
+    const [a, b] = await Promise.all([first, second]);
+    expect(a.json()).toEqual({
+      status: "connected",
+      actions: [],
+      scope: "program",
+      digest,
+      text: raw.toString(),
+    });
+    expect(b.json()).toEqual(a.json());
+    expect(a.headers["cache-control"]).toBe("no-store");
+    expect(requests).toHaveLength(2);
+    expect(
+      requests.every((request) => request.action === "proposal-chunk"),
+    ).toBe(true);
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/kernel/owner",
+          headers: auth,
+          payload: { action: "approve" },
+        })
+      ).statusCode,
+    ).toBe(503);
+    expect(requests).toHaveLength(2);
+  } finally {
+    await app.close();
+    await rm(dir, { recursive: true, force: true });
+  }
 });

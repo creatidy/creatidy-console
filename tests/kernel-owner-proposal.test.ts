@@ -153,6 +153,7 @@ describe("synthetic Kernel proposal chunks", () => {
       Buffer.from(raw.replace('"version":1', '"version":1.0')),
       Buffer.from(raw.replace('"ordinary-draft"', '"future-draft"')),
       Buffer.concat([Buffer.from(raw), Buffer.from([0xff])]),
+      Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(raw)]),
     ])
       expect(() =>
         assembleLocalOwnerProposal(frames(chunks(bytes)), "program"),

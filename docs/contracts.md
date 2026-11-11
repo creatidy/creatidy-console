@@ -276,12 +276,12 @@ labels check pairing, not cryptographic or durable producer identity; trust
 depends on the supervisor and protected descriptor inheritance. Channel closure
 does not itself cancel work or prove settlement. See the
 [merged producer contract](https://forgejo.creatidy.com/Creatidy/creatidy-kernel/src/commit/407f1be3195d3c698ac1f5e7c57e65e215d0c88a/docs/architecture/contracts.md).
-This delivery is not Console conformance or live integration evidence. The
-Console codebase includes a bounded local-v1 frame codec and receipt-shape
-checks for deterministic fixtures. They do not acquire a descriptor, verify a
-producer identity or dispatch commands; the authenticated production endpoint
-reports no available actions and refuses submissions. A valid-looking receipt
-shape is not evidence of an authenticated producer or an observed effect.
+This delivery is not installed Console conformance or live integration evidence.
+The optional Linux supervisor-launched Console backend validates and retains the
+descriptor and greeting for authenticated proposal inspection. The default has
+no capability; submissions remain refused. Labels do not verify producer
+identity. A valid-looking receipt shape is not evidence of an authenticated
+producer or an observed effect.
 
 Kernel
 [PR #130](https://forgejo.creatidy.com/Creatidy/creatidy-kernel/pulls/130) was
@@ -294,19 +294,21 @@ not truncated or approvable. The original text is untrusted data; a matching
 digest alone grants no authority. Approval receipts are historical and may have
 an effective expiry earlier than requested. These fixture-level checks neither
 prove the identity or version of a running producer nor enable live commands.
-The local transport is exercised only against synthetic Unix sockets. It
-serializes requests, closes on protocol failures and returns unknown for
-ambiguous command outcomes; callers must retain the exact prepared command for
-reconciliation. It is not connected to production startup or browser endpoints.
+The local transport has synthetic Unix-socket tests. The application exposes
+only the complete verified original text, scope and digest through its
+authenticated, no-store endpoint; concurrent reads share an in-flight request.
+Disconnect, refusal, malformed data and oversize responses fail closed. No
+actual producer connection or installed provenance has been established.
 
 The reviewed proposal does not itself contain the full host-bound owner policy,
 authority envelope, budgets or execution and verification context that Kernel
 uses to construct its resulting ProgramSpec. Its digest therefore does not
 establish that those effective authority consequences were reviewed. Console
-must not enable approval until producer evidence makes the relevant prospective
-scope and limits available and binds the reviewed values to the decision, or an
-equivalent accepted contract establishes the same guarantee. The requested
-expiry is an upper bound, not a guaranteed effective deadline.
+does not present proposer declarations as effective host policy. Effective host
+policy is unknown in this read-only view; it is not an approval. Real mutation
+requires separate owner authorization and its applicable security and evidence
+gates. The requested expiry is an upper bound, not a guaranteed effective
+deadline.
 
 Each real command additionally requires idempotency/input/reconciliation, audit
 receipt and negative tests for denial, expiration, stale subject, multiple
