@@ -46,4 +46,42 @@
   matching native reviewer result plus a final MCP currentness check can yield
   READY_TO_MERGE.
 
+## Test Design and Evidence
+
+- During development run checks relevant to the change. Avoid repeating an
+  identical scenario without a distinct evidentiary purpose; define scenario
+  matrices once, retain all assertions when consolidating, and document distinct
+  source, built-artifact, installed and runtime-dependency boundaries. Do not
+  remove security, failure or acceptance evidence as redundant by assumption.
+- Build an identical artifact once per run where practical, after verifying its
+  identity and provenance. Artifacts from different inputs or build paths may
+  prove different things. Share immutable artifacts, not mutable test state:
+  isolate databases, directories, ports, process identifiers and fixture data
+  unless sharing is itself under test.
+- Parallelize only after establishing isolation; prefer separate processes and
+  serialize or genuinely isolate host-global state, fixed markers, shared
+  containers and signals. Do not hide races with longer timeouts or automatic
+  retries. If introducing phases or shards, automatically verify their collected
+  case identities, including parameters, are complete and disjoint; matching
+  counts alone is insufficient.
+- When testing an installed artifact, verify its origin rather than accidentally
+  importing from the checkout, including workers and representative child
+  processes. Preserve separate evidence that runtime dependencies are declared.
+  The current temporary static build and checkout browser test are not installed
+  application or live producer acceptance.
+- For performance changes, measure before and after: total wall-clock, major
+  phases, executed and skipped test counts, and runner conditions. Identify
+  observations as measurements, not guarantees. Report skipped or unavailable
+  evidence as UNPROVED, with its scope and reason; a green process exit does not
+  turn an optional skipped browser, native, security, integration or recovery
+  test into proof.
+- CI is intended to run the full gate for the exact integration subject. Before
+  relying on a run, verify its actual checkout or explicit merge tree, all
+  required step results and current HEAD/base; a badge alone is insufficient. An
+  independent reviewer examines code, assertions and exact-run evidence and uses
+  focused checks as needed. Do not assume CI evidence exists or substitutes for
+  the currently required local `make check` and reviewer checks: those workflow
+  gates remain in force until their contracts are explicitly changed and
+  equivalent exact-subject evidence is available.
+
 <!-- Adapted from Model Intelligence 013cbb43e11d7f698d359db5a456d26d8075e34e: existing Console Node validation/artifact gates; handoff and isolation unchanged. See NOTICE. -->
