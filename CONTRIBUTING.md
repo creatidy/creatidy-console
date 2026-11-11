@@ -76,6 +76,48 @@ dependencies; it is not a packaged installation or producer-integration receipt.
 | `make bootstrap` | Issue short-lived local first-owner authority                        |
 | `make start`     | Serve the built UI and authenticated API from one origin             |
 
+### Experimental Owner Descriptor Check
+
+The optional Linux-only descriptor check is not command delivery or installed
+producer conformance. Build it explicitly with `npm run build:native-owner`;
+there is no install hook or downloaded native package. It requires Node
+`24.19.0`, its matching headers at `../include/node` relative to the Node
+executable, and a trusted system C compiler available as `cc`. The build checks
+the Node and header version, compiles the Apache-2.0 Console source with the
+specified flags, and atomically writes `.cache/native/owner-receiver.node`.
+Different compilers, libc versions and target architectures may produce
+different binary bytes; this is not a cross-platform or bit-reproducible release
+artifact. The normal static `dist` build does not include this addon or a Node
+runtime. The build uses Node's MIT-licensed N-API headers without vendoring
+them. The local Linux build dynamically links the system C library. Any future
+distribution of Node, libc, or a native binary must independently include
+applicable licenses and validate its actual artifact and target platform.
+
+Only a trusted supervisor may opt in: set `CONSOLE_KERNEL_OWNER=1`, supply
+`CONSOLE_KERNEL_OWNER_SCOPE`, `CONSOLE_KERNEL_OWNER_PRODUCER`, and
+`CONSOLE_KERNEL_OWNER_RECIPIENT` from independently trusted configuration, and
+append the inherited descriptor as the sole argument after `server/main.ts`. The
+supervisor must select and protect the executable, addon, arguments and
+environment; prohibit Node preloads, loaders, injected libraries and other
+startup code; and ensure no thread or child can spawn with the descriptor before
+the native check sets close-on-exec. Node startup occurs before application
+code, so this code cannot retroactively prevent a preload or earlier fork.
+Close-on-exec does not prevent an explicit descriptor transfer or inheritance
+across fork without exec. The channel and checkout must be protected from
+hostile local processes; the labels check pairing, not cryptographic or durable
+identity.
+
+The check accepts only a connected Unix stream descriptor at least 3, sets and
+verifies `FD_CLOEXEC`, reads one framed greeting of at most 65536 bytes with a
+five-second deadline, validates the exact Kernel #124 greeting and closes the
+channel. It never sends a request. Startup fails closed on a missing addon,
+invalid descriptor, mismatch, malformed frame or timeout. The default startup
+does not load the addon or use a descriptor. This is a synthetic verification
+seam, not a supported deployment recipe, live integration receipt, or a
+proposal/revision binding. Approval and every other owner action remain
+unavailable until their producer contracts and installed conformance are
+established.
+
 `make bootstrap` creates `bootstrap-token` in the private state directory with
 mode 0600, expires in 15 minutes, and refuses once an owner exists. Read it only
 from the trusted local machine and enter it in the setup form; do not commit,

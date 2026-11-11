@@ -43,12 +43,12 @@ credential. Reuse established secure mechanisms; no custom identity platform.
 The owner selected the existing authenticated Console backend as the intended
 browser-facing boundary for Kernel owner commands. A Console session does not
 grant Kernel authority: a trusted host must independently provision the correct
-Kernel-authorized capability, whose producer-owned lifecycle and consumer
-conformance remain pending in Kernel #124. Until that contract is implemented
-and verified, Console must fail closed and must not connect a synthetic
-capability to normal operation. No Kernel HTTP server, arbitrary dispatcher,
-browser-selected principal, active SQLite peer or new authentication system
-follows from this decision.
+Kernel-authorized capability. Kernel #124 delivered a Linux trusted-supervisor
+launch contract, but Console receiver and installed consumer conformance remain
+unverified. Until those controls are implemented and verified, Console must fail
+closed and must not connect a synthetic capability to normal operation. No
+Kernel HTTP server, arbitrary dispatcher, browser-selected principal, active
+SQLite peer or new authentication system follows from this decision.
 
 The initial Router observer adapter accepts only explicitly configured literal
 loopback IP origins, not DNS names or arbitrary URLs. It does not follow

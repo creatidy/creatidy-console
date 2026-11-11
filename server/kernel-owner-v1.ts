@@ -256,8 +256,8 @@ export function decodeLocalOwnerFrame(
   }
 }
 
-// The caller must obtain a producer-authorized channel under the future host
-// contract. Normal Console operation does not provide or invoke this seam.
+// The caller must obtain a producer-authorized channel under the host contract.
+// Normal Console operation does not provide or invoke this seam.
 export function createLocalOwnerAttempt(
   input: unknown,
   generateId: () => string = randomUUID,

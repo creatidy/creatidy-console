@@ -250,14 +250,13 @@ credential must not be used or promoted for administration. MI's
 declares an empty effectful-command inventory and no service or authentication
 contract. Presentation-only notification dismissal is not producer approval.
 
-No supported Console-to-Kernel command capability or authenticated browser
-delivery boundary is established by these producer-local contracts. A future
-consumer must first have an accepted host provisioning and caller-admission,
-revocation, origin/exposure and secret-safe security contract, with exact
-subject/revision and separately scoped authority. Do not introduce an unscoped
-Kernel forwarding bridge, active-database access, shell fallback or producer
-permission bypass to fill that gap. Existing Console sessions authenticate
-Console users, not their authority over any producer.
+The historical producer-local contracts above did not establish a supported
+Console-to-Kernel command capability. A consumer requires host provisioning and
+caller-admission, revocation, origin/exposure and secret-safe security controls,
+with exact subject/revision and separately scoped authority. Do not introduce an
+unscoped Kernel forwarding bridge, active-database access, shell fallback or
+producer permission bypass to fill that gap. Existing Console sessions
+authenticate Console users, not their authority over any producer.
 
 The owner decision of 2026-11-09 selects the existing authenticated Console
 backend as the intended browser-facing boundary for Kernel owner commands. It
@@ -268,16 +267,21 @@ authentication system is approved. Consumer design and deterministic synthetic
 tests may proceed against a proposed producer contract, but real command
 delivery must remain unavailable until the Kernel capability and installed
 compatibility are verified. A Console session is never itself a Kernel grant.
-The missing independent host-provisioning and lifecycle contract is registered
-in
-[Kernel #124](https://forgejo.creatidy.com/Creatidy/creatidy-kernel/issues/124).
-That issue is a proposed future producer contract, not a delivered transport,
-authentication mechanism or installed conformance receipt. The Console codebase
-includes a bounded local-v1 frame codec and receipt-shape checks for
-deterministic fixtures. They do not acquire a descriptor, verify a producer
-identity or dispatch commands; the authenticated production endpoint reports no
-available actions and refuses submissions. A valid-looking receipt shape is not
-evidence of an authenticated producer or an observed effect.
+[Kernel #124](https://forgejo.creatidy.com/Creatidy/creatidy-kernel/issues/124)
+delivered a Linux trusted-supervisor launch contract at Kernel merge
+`407f1be3195d3c698ac1f5e7c57e65e215d0c88a`: the host launches a child backend
+with a bound, inherited Unix stream descriptor and a versioned greeting. It is
+not attachment to an already-running backend. Configured producer and recipient
+labels check pairing, not cryptographic or durable producer identity; trust
+depends on the supervisor and protected descriptor inheritance. Channel closure
+does not itself cancel work or prove settlement. See the
+[merged producer contract](https://forgejo.creatidy.com/Creatidy/creatidy-kernel/src/commit/407f1be3195d3c698ac1f5e7c57e65e215d0c88a/docs/architecture/contracts.md).
+This delivery is not Console conformance or live integration evidence. The
+Console codebase includes a bounded local-v1 frame codec and receipt-shape
+checks for deterministic fixtures. They do not acquire a descriptor, verify a
+producer identity or dispatch commands; the authenticated production endpoint
+reports no available actions and refuses submissions. A valid-looking receipt
+shape is not evidence of an authenticated producer or an observed effect.
 
 Each real command additionally requires idempotency/input/reconciliation, audit
 receipt and negative tests for denial, expiration, stale subject, multiple

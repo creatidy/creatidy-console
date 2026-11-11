@@ -1,6 +1,36 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { createRequire } from "node:module";
+
+if (process.env.CONSOLE_KERNEL_OWNER === "1") {
+  if (
+    process.platform !== "linux" ||
+    process.execArgv.length !== 0 ||
+    process.argv.length !== 3
+  )
+    throw new Error("Invalid owner launch configuration");
+  const value = process.argv[2];
+  if (!value || !/^[1-9][0-9]*$/.test(value))
+    throw new Error("Invalid owner launch descriptor");
+  const fd = Number(value);
+  if (!Number.isSafeInteger(fd) || fd < 3 || fd > 2147483647)
+    throw new Error("Invalid owner launch descriptor");
+  const require = createRequire(import.meta.url);
+  const native = require("../.cache/native/owner-receiver.node") as {
+    receive: (descriptor: number) => void;
+  };
+  native.receive(fd);
+  const { validateInheritedOwnerChannel } =
+    await import("./kernel-owner-receiver.ts");
+  await validateInheritedOwnerChannel(fd, {
+    scope: process.env.CONSOLE_KERNEL_OWNER_SCOPE ?? "",
+    producer: process.env.CONSOLE_KERNEL_OWNER_PRODUCER ?? "",
+    recipient: process.env.CONSOLE_KERNEL_OWNER_RECIPIENT ?? "",
+  });
+} else if (process.env.CONSOLE_KERNEL_OWNER !== undefined) {
+  throw new Error("Invalid owner launch configuration");
+}
 
 if (process.env.NAPI_RS_NATIVE_LIBRARY_PATH) {
   throw new Error("Custom native library paths are not supported");

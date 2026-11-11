@@ -15,6 +15,7 @@
     "start": "node server/main.ts",
     "bootstrap": "node server/bootstrap.ts issue",
     "build": "node scripts/build.mjs",
+    "build:native-owner": "node scripts/build-native-owner.mjs",
     "build:check": "node scripts/build.mjs --check",
     "format:check": "node scripts/lint.mjs format",
     "lint:markdown": "node scripts/lint.mjs markdown",
