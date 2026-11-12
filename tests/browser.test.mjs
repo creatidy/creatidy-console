@@ -114,7 +114,9 @@ it.skipIf(!existsSync(chrome))(
           "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1",
         ],
       });
-      const page = await browser.newPage();
+      const context = await browser.newContext();
+      const page = await context.newPage();
+      await page.clock.install();
       await page.goto(origin);
       await page
         .getByRole("heading", { name: "Set up your console" })
@@ -139,6 +141,143 @@ it.skipIf(!existsSync(chrome))(
         .fill("synthetic-owner-password");
       await page.getByRole("button", { name: "Sign in" }).click();
       await page.getByRole("heading", { name: "Your console" }).waitFor();
+      await page
+        .getByRole("heading", { name: "Kernel owner actions" })
+        .waitFor();
+      await page
+        .getByText(
+          "Unavailable: no verified Kernel owner capability is connected. Console login does not grant Kernel authority.",
+        )
+        .waitFor();
+      expect(
+        await page
+          .getByRole("button", { name: /approve|stop|reconcile|start/i })
+          .count(),
+      ).toBe(0);
+      const hostile =
+        '<img src=x onerror="window.ownerInjected=1">' + "x".repeat(2048);
+      let proposalReads = 0;
+      await page.route("**/api/kernel/owner", (route) => {
+        proposalReads++;
+        return route.fulfill({
+          json: {
+            status: "connected",
+            actions: [],
+            scope: hostile,
+            digest: "a".repeat(64),
+            text: hostile,
+          },
+          headers: { "cache-control": "no-store" },
+        });
+      });
+      await page.setViewportSize({ width: 360, height: 800 });
+      await page.reload();
+      await page
+        .getByText(
+          "Verified proposal received when this view opened; it may have changed. Reload to recheck. No owner commands are available.",
+        )
+        .waitFor();
+      expect(await page.locator("pre").textContent()).toBe(hostile);
+      expect(await page.locator("pre img").count()).toBe(0);
+      expect(await page.evaluate(() => window.ownerInjected)).toBeUndefined();
+      expect(
+        await page.evaluate(
+          () =>
+            document.documentElement.scrollWidth <=
+            document.documentElement.clientWidth,
+        ),
+      ).toBe(true);
+      expect(
+        await page.getByText(/Effective host policy is unknown/).count(),
+      ).toBe(1);
+      let checks = 0;
+      await page.route("**/api/kernel/session-check", (route) => {
+        checks++;
+        return checks === 1 ? route.abort("failed") : route.continue();
+      });
+      await page.evaluate(() =>
+        document.dispatchEvent(new Event("visibilitychange")),
+      );
+      await page.getByText(/Kernel proposal unavailable/).waitFor();
+      expect(await page.locator("pre").count()).toBe(0);
+      await page.clock.fastForward(10000);
+      await page.getByText(hostile, { exact: false }).first().waitFor();
+      expect(checks).toBe(2);
+      expect(proposalReads).toBe(1);
+      await page.unroute("**/api/kernel/session-check");
+      let releaseCheck;
+      let checkStarted;
+      const started = new Promise((resolve) => {
+        checkStarted = resolve;
+      });
+      const held = new Promise((resolve) => {
+        releaseCheck = resolve;
+      });
+      await page.evaluate(() => {
+        Object.defineProperty(document, "visibilityState", {
+          configurable: true,
+          value: "hidden",
+        });
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await page.locator("pre").waitFor({ state: "hidden" });
+      await page.evaluate(() => {
+        Object.defineProperty(document, "visibilityState", {
+          configurable: true,
+          value: "visible",
+        });
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await page.getByText(hostile, { exact: false }).first().waitFor();
+      await page.route("**/api/kernel/session-check", async (route) => {
+        checkStarted();
+        await held;
+        await route.fulfill({ json: { authenticated: true } }).catch(() => {});
+      });
+      await started;
+      expect(await page.locator("pre").count()).toBe(0);
+      await page.evaluate(() => {
+        Object.defineProperty(document, "visibilityState", {
+          configurable: true,
+          value: "hidden",
+        });
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      expect(await page.locator("pre").count()).toBe(0);
+      await page.route("**/api/kernel/session-check", (route) =>
+        route.fulfill({ status: 401, json: { error: "expired" } }),
+      );
+      await page.evaluate(() => {
+        window.invalidationSignals = [];
+        window.invalidationChannel = new BroadcastChannel(
+          "creatidy-console-session-v1",
+        );
+        window.invalidationChannel.onmessage = (event) =>
+          window.invalidationSignals.push(event.data);
+      });
+      await page.evaluate(() => {
+        Object.defineProperty(document, "visibilityState", {
+          configurable: true,
+          value: "visible",
+        });
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await page.getByRole("heading", { name: "Sign in" }).waitFor();
+      await page.waitForFunction(() => window.invalidationSignals.length > 0);
+      expect(await page.evaluate(() => window.invalidationSignals)).toEqual([
+        null,
+      ]);
+      await page.evaluate(() => window.invalidationChannel.close());
+      releaseCheck();
+      expect(await page.locator("pre").count()).toBe(0);
+      await page.unroute("**/api/kernel/session-check");
+      await page.unroute("**/api/kernel/owner");
+      await page
+        .getByLabel("Owner password", { exact: true })
+        .fill("synthetic-owner-password");
+      await page.getByRole("button", { name: "Sign in" }).click();
+      await page.getByRole("heading", { name: "Your console" }).waitFor();
+      await page.setViewportSize({ width: 1280, height: 720 });
       expect(
         await page.evaluate(() =>
           fetch("/api/application").then((response) => response.status),
@@ -316,8 +455,49 @@ it.skipIf(!existsSync(chrome))(
       await startServer();
       await page.reload();
       await page.getByRole("heading", { name: "Your console" }).waitFor();
-      await page.getByRole("button", { name: "Log out" }).click();
+      await page.route("**/api/kernel/owner", (route) =>
+        route.fulfill({
+          json: {
+            status: "connected",
+            actions: [],
+            scope: "synthetic",
+            digest: "a".repeat(64),
+            text: "synthetic-private-proposal",
+          },
+        }),
+      );
+      const other = await page.context().newPage();
+      await other.goto(origin);
+      await other.getByRole("heading", { name: "Your console" }).waitFor();
+      await page.bringToFront();
+      await page.reload();
+      await page.getByText("synthetic-private-proposal").waitFor();
+      await page.evaluate(() => {
+        Object.defineProperty(document, "visibilityState", {
+          configurable: true,
+          value: "visible",
+        });
+        window.visibilityEvents = 0;
+        document.addEventListener(
+          "visibilitychange",
+          () => window.visibilityEvents++,
+        );
+      });
+      await other.evaluate(() => {
+        Object.defineProperty(document, "visibilityState", {
+          configurable: true,
+          value: "visible",
+        });
+      });
+      await other
+        .getByRole("button", { name: "Log out" })
+        .evaluate((button) => button.click());
+      await other.getByRole("heading", { name: "Sign in" }).waitFor();
       await page.getByRole("heading", { name: "Sign in" }).waitFor();
+      expect(await page.locator("pre").count()).toBe(0);
+      expect(await page.evaluate(() => window.visibilityEvents)).toBe(0);
+      await other.close();
+      await page.unroute("**/api/kernel/owner");
       await page.reload();
       await page.getByRole("heading", { name: "Sign in" }).waitFor();
       expect(

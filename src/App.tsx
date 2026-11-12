@@ -1,5 +1,6 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import RouterPanel from "./RouterPanel";
+import KernelOwnerPanel from "./KernelOwnerPanel";
 
 type Session = { configured: boolean; authenticated: boolean };
 
@@ -7,14 +8,33 @@ export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
+  const channel = useRef<BroadcastChannel | null>(null);
+  const generation = useRef(0);
+
+  function invalidate(broadcast: boolean) {
+    generation.current++;
+    setSession({ configured: true, authenticated: false });
+    setError("Your session expired or was revoked. Sign in again.");
+    if (broadcast) {
+      try {
+        channel.current?.postMessage(null);
+      } catch {
+        /* Periodic checks remain the fallback. */
+      }
+    }
+  }
 
   async function refresh() {
+    const current = generation.current;
     try {
       const response = await fetch("/api/session", { cache: "no-store" });
       if (!response.ok) throw new Error();
-      setSession((await response.json()) as Session);
+      const result = (await response.json()) as Session;
+      if (current !== generation.current) return;
+      setSession(result);
       setError("");
     } catch {
+      if (current !== generation.current) return;
       setSession(null);
       setError(
         "Console is disconnected. Check that the application server is running.",
@@ -23,10 +43,23 @@ export default function App() {
   }
 
   useEffect(() => {
+    try {
+      channel.current = new BroadcastChannel("creatidy-console-session-v1");
+      channel.current.onmessage = (event) => {
+        if (event.data === null) invalidate(false);
+      };
+    } catch {
+      // Periodic session checks remain the fallback.
+    }
     void refresh();
+    return () => {
+      channel.current?.close();
+      channel.current = null;
+    };
   }, []);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
+    const current = generation.current;
     event.preventDefault();
     const form = event.currentTarget;
     const data = new FormData(form);
@@ -47,6 +80,7 @@ export default function App() {
         }),
       });
       form.reset();
+      if (current !== generation.current) return;
       if (!response.ok) {
         setError(
           response.status === 429
@@ -66,6 +100,7 @@ export default function App() {
   }
 
   async function logout() {
+    generation.current++;
     setPending(true);
     try {
       const response = await fetch("/api/logout", {
@@ -74,12 +109,11 @@ export default function App() {
         body: "{}",
       });
       if (response.status === 401) {
-        await refresh();
-        setError("Your session expired or was revoked. Sign in again.");
+        invalidate(true);
         return;
       }
       if (!response.ok) throw new Error();
-      await refresh();
+      invalidate(true);
     } catch {
       setError("Logout could not be confirmed. Check the server connection.");
     } finally {
@@ -109,12 +143,17 @@ export default function App() {
         <section>
           <RouterPanel
             expired={() => {
-              void refresh().then(() =>
-                setError("Your session expired or was revoked. Sign in again."),
-              );
+              invalidate(true);
             }}
           />
-          <p>Kernel and Model Intelligence are not configured by this view.</p>
+          {!pending && (
+            <KernelOwnerPanel
+              expired={() => {
+                invalidate(true);
+              }}
+            />
+          )}
+          <p>Model Intelligence is not configured by this view.</p>
           <button
             type="button"
             disabled={pending}

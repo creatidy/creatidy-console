@@ -48,6 +48,11 @@ code {
   overflow-wrap: anywhere;
 }
 
+pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .scope {
   font-size: 1.125rem;
 }

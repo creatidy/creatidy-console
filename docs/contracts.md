@@ -186,12 +186,129 @@ correction.
 
 ## Command Inventory Gate
 
-| Contemplated action                      | Owning service / required evidence                                                                  | Current disposition                                                             |
-| ---------------------------------------- | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| Task scope/approval, pause/resume/cancel | Kernel authenticated API, principal/grant, subject/spec/aggregate revision, exact runtime semantics | Unavailable in Console; internal methods are not a browser command contract     |
-| Resource/policy/source administration    | Router admin authority, CSRF, exact owner semantics/audit                                           | Existing Router UI only; no Console credentials/configuration clone             |
-| Knowledge/source action                  | MI actual authorized command, artifact/revision and error/reconciliation                            | No delivered operational command; unavailable, not frontend conflict resolution |
-| Notification dismissal/preferences       | Console presentation-only state                                                                     | Future Console-owned behavior, never source acknowledgement/approval            |
+The following is a pre-write inventory for
+[Console #7](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/7),
+not evidence of operational Console command delivery. The owner decision and
+delivery conditions are recorded below. Inspected producer revisions are Kernel
+`597fe1b4ee7c71c2ee847507921b06c1cf4c0eb7`, Router
+`7090a4337e0cdbde30810dfc5319f63b6ba322c8`, and MI
+`e8a6b81546994438038d22fd08fc041c6901d9cd`. These source observations do not
+prove installed Console integration, a live effect or production readiness.
+
+| Contemplated action                      | Owning service / required evidence                                                     | Current disposition                                                          |
+| ---------------------------------------- | -------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| Task scope/approval, pause/resume/cancel | Kernel owner capability, principal/grant, exact subject/revision and runtime semantics | Unavailable in Console; a local descriptor is not a browser command contract |
+| Resource/policy/source administration    | Router admin authority, CSRF, exact owner semantics/audit                              | Existing Router UI only; no Console credentials/configuration clone          |
+| Knowledge/source action                  | MI actual authorized command, artifact/revision and error/reconciliation               | MI's offline operator contract has no effectful commands                     |
+| Notification dismissal/preferences       | Console presentation-only state                                                        | Future Console-owned behavior, never source acknowledgement/approval         |
+
+### Kernel Local Owner Capability
+
+The
+[producer contract](https://forgejo.creatidy.com/Creatidy/creatidy-kernel/src/commit/597fe1b4ee7c71c2ee847507921b06c1cf4c0eb7/docs/architecture/contracts.md#local-owner-served-contract)
+and
+[owner channel implementation](https://forgejo.creatidy.com/Creatidy/creatidy-kernel/src/commit/597fe1b4ee7c71c2ee847507921b06c1cf4c0eb7/src/creatidy_kernel/adapters/served_local.py)
+describe a trusted host which binds an owner capability to its own Program and
+passes a preconnected descriptor to a local client. The host services the
+channel on the owning thread; Console must not open the active Kernel database.
+The contract does not establish that a host supplies this capability to Console,
+nor does it provide browser authentication, remote admission or a network
+bridge. A Console login alone is not a Kernel grant.
+
+| Producer-local action | Host-bound subject and request                                                                                  | Recorded response and limit                                                                                             |
+| --------------------- | --------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `approve`             | Bound proposal and policy; command ID, expected Program revision, decision ID and expiry; `-1` means no Program | `approved` with decision, spec digest and expiry; historical receipt, not renewed permission                            |
+| `start-managed`       | Bound approval, handoff and managed target; command ID and current revision; Attempt must be prepared           | `accepted`, settlement `unknown`; not a general start or resume                                                         |
+| `stop`                | Bound original approval and, where present, one managed target; command ID, current revision and reason         | `accepted`; settlement `unknown` or `bound-managed-target-settled`, limited to that target, not every effect/descendant |
+| `reconcile`           | Bound control and handoff; command ID, current revision, exact subject digest and evidence                      | `recorded`; specific resource reconciliation, not a universal receipt lookup or guaranteed resolution                   |
+
+Each row describes producer-local behavior, **not an enabled Console action**.
+Worker `claim`, `context`, `start`, `quiesce`, `renew`, `submit` and `report`
+use a separate worker capability; a browser owner must not acquire that scope by
+implication. Cooperative quiescence is not managed-process settlement. Pause,
+resume and general cancellation cannot be inferred from these action names.
+
+For a new intent Kernel checks the caller-observed Program revision. Exact
+repetition of a command ID and input can return its original validated receipt
+as historical evidence; a changed input under the same ID is refused. An intent
+without its outcome receipt is `unknown`, not permission to repeat the effect. A
+timeout after dispatch is likewise not proof of failure. A known exact command
+may be queried through the producer's existing replay semantics only when its
+original bound capability and inputs remain available; do not equate that with
+an automatic retry or a general reconciliation endpoint. Snapshot command
+history is sampled, with explicit coverage, not a complete audit log.
+
+### Other Producers and Delivery Boundary
+
+Router's
+[observer contract](https://forgejo.creatidy.com/Creatidy/scarcity-router/src/commit/7090a4337e0cdbde30810dfc5319f63b6ba322c8/docs/control-surface.md)
+permits snapshot and replay reads only; replay POST is not an effectful command.
+Its observer, administrator, inference and worker identities are separate. The
+existing Router administrator surface retains its own authority; an observer
+credential must not be used or promoted for administration. MI's
+[offline operator contract](https://forgejo.creatidy.com/Creatidy/model-intelligence/src/commit/e8a6b81546994438038d22fd08fc041c6901d9cd/OPERATOR_CONTRACT.md)
+declares an empty effectful-command inventory and no service or authentication
+contract. Presentation-only notification dismissal is not producer approval.
+
+The historical producer-local contracts above did not establish a supported
+Console-to-Kernel command capability. A consumer requires host provisioning and
+caller-admission, revocation, origin/exposure and secret-safe security controls,
+with exact subject/revision and separately scoped authority. Do not introduce an
+unscoped Kernel forwarding bridge, active-database access, shell fallback or
+producer permission bypass to fill that gap. Existing Console sessions
+authenticate Console users, not their authority over any producer.
+
+The owner decision of 2026-11-09 selects the existing authenticated Console
+backend as the intended browser-facing boundary for Kernel owner commands. It
+supersedes the earlier blanket prohibition on that Console boundary, not the
+requirements for independently provisioned Kernel authority or an accepted local
+capability contract. No Kernel HTTP API, second web server or separate
+authentication system is approved. Consumer design and deterministic synthetic
+tests may proceed against a proposed producer contract, but real command
+delivery must remain unavailable until the Kernel capability and installed
+compatibility are verified. A Console session is never itself a Kernel grant.
+[Kernel #124](https://forgejo.creatidy.com/Creatidy/creatidy-kernel/issues/124)
+delivered a Linux trusted-supervisor launch contract at Kernel merge
+`407f1be3195d3c698ac1f5e7c57e65e215d0c88a`: the host launches a child backend
+with a bound, inherited Unix stream descriptor and a versioned greeting. It is
+not attachment to an already-running backend. Configured producer and recipient
+labels check pairing, not cryptographic or durable producer identity; trust
+depends on the supervisor and protected descriptor inheritance. Channel closure
+does not itself cancel work or prove settlement. See the
+[merged producer contract](https://forgejo.creatidy.com/Creatidy/creatidy-kernel/src/commit/407f1be3195d3c698ac1f5e7c57e65e215d0c88a/docs/architecture/contracts.md).
+This delivery is not installed Console conformance or live integration evidence.
+The optional Linux supervisor-launched Console backend validates and retains the
+descriptor and greeting for authenticated proposal inspection. The default has
+no capability; submissions remain refused. Labels do not verify producer
+identity. A valid-looking receipt shape is not evidence of an authenticated
+producer or an observed effect.
+
+Kernel
+[PR #130](https://forgejo.creatidy.com/Creatidy/creatidy-kernel/pulls/130) was
+merged at `86a2af119bb38f71c071cb28af3d2db954de3316`. Its owner channel serves
+canonical proposal bytes in digest-bound chunks and requires the reviewed
+proposal digest in `approve`. The local synthetic codec validates contiguous
+chunks, scope, supported v1 shape, complete length and SHA-256 over the original
+bytes, with a 4 MiB Console aggregate bound. Larger proposals are unavailable,
+not truncated or approvable. The original text is untrusted data; a matching
+digest alone grants no authority. Approval receipts are historical and may have
+an effective expiry earlier than requested. These fixture-level checks neither
+prove the identity or version of a running producer nor enable live commands.
+The local transport has synthetic Unix-socket tests. The application exposes
+only the complete verified original text, scope and digest through its
+authenticated, no-store endpoint; concurrent reads share an in-flight request.
+Disconnect, refusal, malformed data and oversize responses fail closed. No
+actual producer connection or installed provenance has been established.
+
+The reviewed proposal does not itself contain the full host-bound owner policy,
+authority envelope, budgets or execution and verification context that Kernel
+uses to construct its resulting ProgramSpec. Its digest therefore does not
+establish that those effective authority consequences were reviewed. Console
+does not present proposer declarations as effective host policy. Effective host
+policy is unknown in this read-only view; it is not an approval. Real mutation
+requires separate owner authorization and its applicable security and evidence
+gates. The requested expiry is an upper bound, not a guaranteed effective
+deadline.
 
 Each real command additionally requires idempotency/input/reconciliation, audit
 receipt and negative tests for denial, expiration, stale subject, multiple

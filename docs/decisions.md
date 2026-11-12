@@ -94,6 +94,17 @@ API is release-candidate stability rather than a blanket platform-support
 guarantee. Supported operating systems, crash recovery and upgrades remain
 subject to installed evidence.
 
+The in-progress Kernel local-v1 codec uses `@humanwhocodes/momoa@3.3.13` for
+duplicate-key detection in bounded synthetic response frames, and Node's
+standard JSON reviver for exact integers. npm metadata declares Apache-2.0 and
+the inspected package has no runtime dependencies. npm identifies upstream
+revision `625bcbec28623ccebb1da837c71389cf38014800`. Its installed package lacks
+a standalone license file, while its bundled source retains an MIT notice for
+JSON5-derived material. The project `LICENSE` supplies Apache-2.0; before any
+server distribution, verify and ship the applicable complete Apache and retained
+MIT notices with the artifact. The existing static artifact is browser-only.
+This parser does not establish a trusted capability or producer conformance.
+
 The npm Argon2 wrapper's MIT label is not a complete native-binary notice
 inventory. Its pinned upstream source revision
 `b706e3035f5d4d487ae66ea0549a041cd509e5d4` includes `argon2-rust` 1.1.0 and

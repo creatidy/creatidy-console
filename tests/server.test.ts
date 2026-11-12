@@ -11,7 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../server/app.ts";
 import { openState } from "../server/state.ts";
 import type { Session } from "fastify";
@@ -26,7 +26,10 @@ const headers = {
 const token = "synthetic-setup-authority";
 const password = "synthetic-owner-password";
 
-async function fixture(clock = () => Date.now()) {
+async function fixture(
+  clock = () => Date.now(),
+  kernelOwner?: import("../server/app.ts").AppOptions["kernelOwner"],
+) {
   const dir = mkdtempSync(join(tmpdir(), "console-test-"));
   directories.push(dir);
   const assets = join(dir, "assets");
@@ -50,6 +53,7 @@ async function fixture(clock = () => Date.now()) {
     staticDirectory: assets,
     origin,
     now: clock,
+    ...(kernelOwner ? { kernelOwner } : {}),
   });
   return { app, dir, assets };
 }
@@ -60,6 +64,339 @@ afterEach(() => {
 });
 
 describe("authenticated application", () => {
+  it("uses the restored cookie expires deadline without touching the session", async () => {
+    const { app, dir } = await fixture();
+    try {
+      await app.inject({
+        method: "POST",
+        url: "/api/bootstrap",
+        headers,
+        payload: { token, password },
+      });
+      const login = await app.inject({
+        method: "POST",
+        url: "/api/login",
+        headers,
+        payload: { password },
+      });
+      const cookie = String(login.headers["set-cookie"]).split(";")[0]!;
+      const state = openState(dir);
+      try {
+        const row = state.db.prepare("SELECT * FROM sessions").get()!;
+        const data = JSON.parse(String(row.data));
+        const future = new Date(Date.now() + 3600000).toISOString();
+        const past = new Date(Date.now() - 1000).toISOString();
+        expect(Number(row.idle_expires)).toBeGreaterThan(Date.now());
+        expect(Number(row.absolute_expires)).toBeGreaterThan(Date.now());
+        for (const value of [
+          { originalExpires: future, expires: past },
+          { originalExpires: null, expires: "invalid" },
+          { originalExpires: future, expires: null },
+        ]) {
+          data.cookie = { ...data.cookie, ...value };
+          const encoded = JSON.stringify(data);
+          state.db.prepare("UPDATE sessions SET data = ?").run(encoded);
+          const result = await app.inject({
+            method: "GET",
+            url: "/api/kernel/session-check",
+            headers: { ...headers, cookie },
+          });
+          expect(result.statusCode).toBe(401);
+          expect(result.headers["set-cookie"]).toBeUndefined();
+          expect(state.db.prepare("SELECT * FROM sessions").get()).toEqual({
+            ...row,
+            data: encoded,
+          });
+        }
+        data.cookie = {
+          ...data.cookie,
+          originalExpires: past,
+          expires: future,
+        };
+        const encoded = JSON.stringify(data);
+        state.db.prepare("UPDATE sessions SET data = ?").run(encoded);
+        const passive = await app.inject({
+          method: "GET",
+          url: "/api/kernel/session-check",
+          headers: { ...headers, cookie },
+        });
+        expect(passive.statusCode).toBe(200);
+        expect(passive.json()).toEqual({ authenticated: true });
+        expect(passive.headers["set-cookie"]).toBeUndefined();
+        expect(state.db.prepare("SELECT * FROM sessions").get()).toEqual({
+          ...row,
+          data: encoded,
+        });
+        const regular = await app.inject({
+          method: "GET",
+          url: "/api/application",
+          headers: { ...headers, cookie },
+        });
+        expect(regular.statusCode).toBe(200);
+      } finally {
+        state.db.close();
+      }
+    } finally {
+      await app.close();
+    }
+  });
+  it.each(["idle", "absolute", "revocation"])(
+    "checks %s without touching sessions or issuing cookies",
+    async (mode) => {
+      let now = Date.now();
+      const { app, dir } = await fixture(() => now);
+      try {
+        await app.inject({
+          method: "POST",
+          url: "/api/bootstrap",
+          headers,
+          payload: { token, password },
+        });
+        const login = await app.inject({
+          method: "POST",
+          url: "/api/login",
+          headers,
+          payload: { password },
+        });
+        const cookie = String(login.headers["set-cookie"]).split(";")[0]!;
+        const auth = { ...headers, cookie };
+        for (const supplied of [undefined, `${cookie}invalid`]) {
+          const denied = await app.inject({
+            method: "GET",
+            url: "/api/kernel/session-check",
+            headers: { ...headers, ...(supplied ? { cookie: supplied } : {}) },
+          });
+          expect(denied.statusCode).toBe(401);
+          expect(denied.headers["set-cookie"]).toBeUndefined();
+        }
+        const row = () => {
+          const state = openState(dir, () => now);
+          try {
+            return state.db.prepare("SELECT * FROM sessions").get();
+          } finally {
+            state.db.close();
+          }
+        };
+        const initial = row();
+        for (let i = 0; i < 3; i++) {
+          now += 60_000;
+          const check = await app.inject({
+            method: "GET",
+            url: "/api/kernel/session-check",
+            headers: auth,
+          });
+          expect(check.statusCode).toBe(200);
+          expect(check.headers["set-cookie"]).toBeUndefined();
+          expect(check.headers["cache-control"]).toBe("no-store");
+          expect(row()).toEqual(initial);
+        }
+        if (mode === "idle") now += 28 * 60_000;
+        if (mode === "absolute") {
+          const state = openState(dir, () => now);
+          state.db
+            .prepare(
+              "UPDATE sessions SET idle_expires = absolute_expires + 60000",
+            )
+            .run();
+          state.db.close();
+          now = Number(initial!.absolute_expires) - 1;
+          const before = await app.inject({
+            method: "GET",
+            url: "/api/kernel/session-check",
+            headers: auth,
+          });
+          expect(before.statusCode).toBe(200);
+          expect(before.headers["set-cookie"]).toBeUndefined();
+          now = Number(initial!.absolute_expires);
+        }
+        if (mode === "revocation")
+          await app.inject({
+            method: "POST",
+            url: "/api/logout",
+            headers: auth,
+            payload: {},
+          });
+        const denied = await app.inject({
+          method: "GET",
+          url: "/api/kernel/session-check",
+          headers: auth,
+        });
+        expect(denied.statusCode).toBe(401);
+        expect(denied.headers["set-cookie"]).toBeUndefined();
+        expect(
+          (
+            await app.inject({
+              method: "GET",
+              url: "/api/kernel/session-check",
+              headers: { ...auth, origin: "https://attacker.example" },
+            })
+          ).statusCode,
+        ).toBe(403);
+      } finally {
+        await app.close();
+      }
+    },
+  );
+  it.each(["logout", "expiry"])(
+    "denies a proposal after %s during the read",
+    async (mode) => {
+      let now = Date.now();
+      let release!: (value: { digest: string; text: string }) => void;
+      let start!: () => void;
+      const started = new Promise<void>((resolve) => {
+        start = resolve;
+      });
+      const closed = vi.fn();
+      const { app } = await fixture(() => now, {
+        scope: "synthetic",
+        close: closed,
+        readProposal: () => {
+          start();
+          return new Promise((resolve) => {
+            release = resolve;
+          });
+        },
+      });
+      try {
+        await app.inject({
+          method: "POST",
+          url: "/api/bootstrap",
+          headers,
+          payload: { token, password },
+        });
+        const login = await app.inject({
+          method: "POST",
+          url: "/api/login",
+          headers,
+          payload: { password },
+        });
+        const cookie = String(login.headers["set-cookie"]).split(";")[0]!;
+        const auth = { ...headers, cookie };
+        const pending = app.inject({
+          method: "GET",
+          url: "/api/kernel/owner",
+          headers: auth,
+        });
+        await started;
+        if (mode === "logout")
+          await app.inject({
+            method: "POST",
+            url: "/api/logout",
+            headers: auth,
+            payload: {},
+          });
+        else now += 31 * 60_000;
+        release({ digest: "a".repeat(64), text: "synthetic-private-proposal" });
+        const result = await pending;
+        expect(result.statusCode).toBe(401);
+        expect(result.body).not.toContain("synthetic-private-proposal");
+      } finally {
+        await app.close();
+        expect(closed).toHaveBeenCalledOnce();
+      }
+    },
+  );
+  it("keeps Kernel owner operations unavailable despite a Console session", async () => {
+    const { app } = await fixture();
+    try {
+      expect(
+        (await app.inject({ method: "GET", url: "/api/kernel/owner", headers }))
+          .statusCode,
+      ).toBe(401);
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/api/kernel/owner",
+            headers,
+            payload: { action: "approve" },
+          })
+        ).statusCode,
+      ).toBe(401);
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/api/kernel/owner",
+            headers: { ...headers, origin: "https://attacker.example" },
+            payload: { action: "approve" },
+          })
+        ).statusCode,
+      ).toBe(403);
+      await app.inject({
+        method: "POST",
+        url: "/api/bootstrap",
+        headers,
+        payload: { token, password },
+      });
+      const login = await app.inject({
+        method: "POST",
+        url: "/api/login",
+        headers,
+        payload: { password },
+      });
+      const cookie = String(login.headers["set-cookie"]).split(";")[0]!;
+      const status = await app.inject({
+        method: "GET",
+        url: "/api/kernel/owner",
+        headers: { ...headers, cookie },
+      });
+      expect(status.statusCode).toBe(200);
+      expect(status.json()).toEqual({ status: "unavailable", actions: [] });
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/api/kernel/owner",
+            headers: { host: headers.host, cookie },
+            payload: { action: "approve" },
+          })
+        ).statusCode,
+      ).toBe(403);
+      for (const action of ["approve", "stop", "unsupported"]) {
+        const result = await app.inject({
+          method: "POST",
+          url: "/api/kernel/owner",
+          headers: { ...headers, cookie },
+          payload: { action, principal: "synthetic-injected-principal" },
+        });
+        expect(result.statusCode).toBe(503);
+        expect(result.body).not.toContain("synthetic-injected-principal");
+      }
+      expect(
+        (
+          await app.inject({
+            method: "GET",
+            url: "/api/kernel/owner",
+            headers: { ...headers, cookie, host: "attacker.example" },
+          })
+        ).statusCode,
+      ).toBe(403);
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/api/logout",
+            headers: { ...headers, cookie },
+            payload: {},
+          })
+        ).statusCode,
+      ).toBe(200);
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/api/kernel/owner",
+            headers: { ...headers, cookie },
+            payload: { action: "approve" },
+          })
+        ).statusCode,
+      ).toBe(401);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("enforces one-time setup, host/origin, fixation, revocation and restart persistence", async () => {
     const { app, dir, assets } = await fixture();
     expect(
