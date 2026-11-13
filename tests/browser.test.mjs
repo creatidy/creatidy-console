@@ -156,6 +156,46 @@ it.skipIf(!existsSync(chrome))(
       ).toBe(0);
       const hostile =
         '<img src=x onerror="window.ownerInjected=1">' + "x".repeat(2048);
+      let snapshotReads = 0;
+      await page.route("**/api/kernel/snapshot", (route) => {
+        snapshotReads++;
+        return route.fulfill({
+          json: {
+            status: "observed",
+            snapshot: {
+              scope: hostile,
+              epoch: "a".repeat(32),
+              sequence: "3",
+              revision: "4",
+              status: "running",
+              history: "initial",
+              counts: { work_units: { sampled: 8, total: 9 } },
+              workUnits: [[hostile, "pending", null, null], null],
+              attempts: [],
+            },
+          },
+        });
+      });
+      expect(snapshotReads).toBe(0);
+      await page.getByRole("button", { name: "Read snapshot" }).click();
+      await page.getByText("work_units: 9 total; 8 sampled").waitFor();
+      expect(snapshotReads).toBe(1);
+      expect(await page.evaluate(() => window.ownerInjected)).toBeUndefined();
+      await page.route("**/api/kernel/session-check", (route) =>
+        route.fulfill({ status: 401, json: { error: "Login required" } }),
+      );
+      await page.getByRole("button", { name: "Read snapshot" }).click();
+      await page.getByRole("heading", { name: "Sign in" }).waitFor();
+      expect(
+        await page.getByText("work_units: 9 total; 8 sampled").count(),
+      ).toBe(0);
+      await page.unroute("**/api/kernel/session-check");
+      await page.unroute("**/api/kernel/snapshot");
+      await page
+        .getByLabel("Owner password", { exact: true })
+        .fill("synthetic-owner-password");
+      await page.getByRole("button", { name: "Sign in" }).click();
+      await page.getByRole("heading", { name: "Your console" }).waitFor();
       let proposalReads = 0;
       await page.route("**/api/kernel/owner", (route) => {
         proposalReads++;

@@ -39,6 +39,7 @@ try {
     kernelOwner = {
       scope,
       readProposal: transport.readProposal,
+      readSnapshot: transport.readSnapshot,
       close: transport.close,
     };
   } else if (process.env.CONSOLE_KERNEL_OWNER !== undefined) {

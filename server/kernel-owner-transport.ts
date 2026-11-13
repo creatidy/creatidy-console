@@ -1,4 +1,5 @@
 import { Socket } from "node:net";
+import { createHash } from "node:crypto";
 import {
   assembleLocalOwnerProposal,
   MAX_PROPOSAL_BYTES,
@@ -13,6 +14,8 @@ import {
 
 const RESPONSE_LIMIT = 1024 * 1024;
 const CHUNK_LIMIT = 16 * 1024;
+
+export class SnapshotChanged extends Error {}
 
 function record(value: unknown, keys: string[]): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value))
@@ -67,6 +70,18 @@ export function createLocalOwnerTransport(
   let busy = false;
   let closed = false;
   let waiting: (() => void) | undefined;
+  let lastPosition:
+    { producer: string; scope: string; sequence: number } | undefined;
+  let priorHistoryGap = false;
+  let priorHistoryUnknown = false;
+  let seenSnapshot = false;
+  const encodedScope = JSON.stringify(scope).replace(
+    /[\u0080-\uffff]/g,
+    (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+  const scopeBytes = Buffer.byteLength(encodedScope);
+  const scopeDigest = createHash("sha256").update(encodedScope).digest("hex");
+  const cursorScope = scopeBytes > 4096 ? `sha256:${scopeDigest}` : scope;
   const close = () => {
     closed = true;
     socket.destroy();
@@ -138,7 +153,8 @@ export function createLocalOwnerTransport(
           }, timeoutMs);
         }),
       ]);
-    } catch {
+    } catch (error) {
+      if (error instanceof SnapshotChanged) throw error;
       close();
       throw new Error("Owner channel unavailable");
     } finally {
@@ -150,6 +166,285 @@ export function createLocalOwnerTransport(
 
   return Object.freeze({
     close,
+    async readSnapshot() {
+      return operation(async () => {
+        const names = [
+          "work_units",
+          "attempts",
+          "reservations",
+          "claims",
+          "correlations",
+          "decisions",
+          "usage_subtotals",
+        ];
+        const counts: Record<string, { sampled: number; total: number }> = {};
+        const workUnits: ((string | null)[] | null)[] = [];
+        const attempts: ((string | null)[] | null)[] = [];
+        let identity:
+          | {
+              epoch: string;
+              sequence: string;
+              revision: string | null;
+              status: string;
+            }
+          | undefined;
+        for (let page = 0; page < 8; page++) {
+          const frame = await exchange(
+            requestFrame({ version: 1, action: "snapshot", page }),
+            RESPONSE_LIMIT,
+          );
+          const envelope = record(payload(frame), ["version", "ok", "result"]);
+          const snapshot = record(envelope.result, [
+            "version",
+            "producer",
+            "scope",
+            "program_revision",
+            "spec_digest",
+            "status",
+            "work_units",
+            "attempts",
+            "reservations",
+            "commands",
+            "command_coverage",
+            "claims",
+            "correlations",
+            "decisions",
+            "usage_subtotals",
+            "budget_configured",
+            "budget_revoked",
+            "authority",
+            "missing_usage",
+            "route_identity",
+            "physical_settlement",
+            "page",
+            "coverage",
+            "position",
+          ]);
+          const position = record(snapshot.position, [
+            "producer",
+            "scope",
+            "sequence",
+          ]);
+          const coverage = record(snapshot.coverage, names);
+          if (scopeBytes > 4096) {
+            const marker = record(snapshot.scope, [
+              "oversized",
+              "index",
+              "bytes",
+              "sha256",
+            ]);
+            if (
+              marker.oversized !== true ||
+              marker.index !== 0 ||
+              marker.bytes !== scopeBytes ||
+              marker.sha256 !== scopeDigest
+            )
+              throw new Error("Invalid snapshot scope");
+          } else if (snapshot.scope !== scope)
+            throw new Error("Invalid snapshot scope");
+          if (
+            envelope.version !== 1 ||
+            envelope.ok !== true ||
+            snapshot.version !== 1 ||
+            snapshot.page !== page ||
+            typeof snapshot.producer !== "string" ||
+            !/^[0-9a-f]{32}$/.test(snapshot.producer) ||
+            position.producer !== snapshot.producer ||
+            position.scope !== cursorScope ||
+            (typeof position.sequence !== "number" &&
+              typeof position.sequence !== "bigint") ||
+            BigInt(position.sequence) < 0n ||
+            BigInt(position.sequence) > 9223372036854775807n ||
+            typeof snapshot.status !== "string" ||
+            !snapshot.status.trim() ||
+            snapshot.status.length > 256 ||
+            (snapshot.program_revision !== null &&
+              ((typeof snapshot.program_revision !== "number" &&
+                typeof snapshot.program_revision !== "bigint") ||
+                BigInt(snapshot.program_revision) < 0n))
+          )
+            throw new Error("Invalid snapshot");
+          const current = {
+            epoch: snapshot.producer,
+            sequence: String(position.sequence),
+            revision:
+              snapshot.program_revision === null
+                ? null
+                : String(snapshot.program_revision),
+            status: snapshot.status,
+          };
+          if (
+            identity &&
+            (identity.epoch !== current.epoch ||
+              identity.sequence !== current.sequence ||
+              identity.revision !== current.revision ||
+              identity.status !== current.status)
+          ) {
+            priorHistoryGap = true;
+            throw new SnapshotChanged("Snapshot changed during pagination");
+          }
+          identity ??= current;
+          for (const name of names) {
+            const items = snapshot[name];
+            const itemCoverage = coverage[name];
+            if (
+              !Array.isArray(items) ||
+              items.length > 8 ||
+              !Array.isArray(itemCoverage) ||
+              itemCoverage.length !== 3 ||
+              !Number.isSafeInteger(itemCoverage[1]) ||
+              itemCoverage[1] < 0 ||
+              itemCoverage[0] !== Math.min(page * 8, itemCoverage[1]) ||
+              typeof itemCoverage[2] !== "boolean" ||
+              items.length !==
+                Math.min(8, Math.max(0, itemCoverage[1] - page * 8)) ||
+              itemCoverage[2] !== page * 8 + 8 >= itemCoverage[1] ||
+              (counts[name] !== undefined &&
+                counts[name].total !== itemCoverage[1])
+            )
+              throw new Error("Invalid snapshot coverage");
+            counts[name] = {
+              sampled: (counts[name]?.sampled ?? 0) + items.length,
+              total: itemCoverage[1],
+            };
+          }
+          const rows = (name: "work_units" | "attempts") =>
+            (snapshot[name] as unknown[]).map((value, index) => {
+              if (Array.isArray(value)) {
+                if (
+                  value.length !== 4 ||
+                  value.some(
+                    (field, fieldIndex) =>
+                      !(
+                        name === "work_units" &&
+                        fieldIndex >= 2 &&
+                        field === null
+                      ) &&
+                      (typeof field !== "string" ||
+                        !field.trim() ||
+                        Buffer.byteLength(field) > 4096),
+                  )
+                )
+                  throw new Error("Invalid snapshot record");
+                return value as (string | null)[];
+              }
+              const omitted = record(value, [
+                "oversized",
+                "index",
+                "bytes",
+                "sha256",
+              ]);
+              if (
+                omitted.oversized !== true ||
+                omitted.index !== page * 8 + index ||
+                !Number.isSafeInteger(omitted.bytes) ||
+                (omitted.bytes as number) <= 4096 ||
+                typeof omitted.sha256 !== "string" ||
+                !/^[0-9a-f]{64}$/.test(omitted.sha256)
+              )
+                throw new Error("Invalid oversized snapshot record");
+              return null;
+            });
+          workUnits.push(...rows("work_units"));
+          attempts.push(...rows("attempts"));
+          if (
+            counts.work_units!.sampled === counts.work_units!.total &&
+            counts.attempts!.sampled === counts.attempts!.total
+          )
+            break;
+        }
+        if (!identity) throw new Error("Snapshot unavailable");
+        let history: "initial" | "continuous" | "gap" | "unknown" =
+          priorHistoryGap ? "gap" : "initial";
+        const sequence = Number(identity.sequence);
+        if (lastPosition && Number.isSafeInteger(sequence)) {
+          const frame = await exchange(
+            requestFrame({
+              version: 1,
+              action: "events",
+              after: lastPosition,
+              limit: 256,
+            }),
+            RESPONSE_LIMIT,
+          );
+          const envelope = record(payload(frame), ["version", "ok", "result"]);
+          const batch = record(envelope.result, ["events", "position", "gap"]);
+          const end = record(batch.position, ["producer", "scope", "sequence"]);
+          if (
+            envelope.version !== 1 ||
+            envelope.ok !== true ||
+            !Array.isArray(batch.events) ||
+            batch.events.length > 256 ||
+            typeof batch.gap !== "boolean" ||
+            typeof end.producer !== "string" ||
+            !/^[0-9a-f]{32}$/.test(end.producer) ||
+            end.scope !== cursorScope ||
+            (typeof end.sequence !== "number" &&
+              typeof end.sequence !== "bigint") ||
+            BigInt(end.sequence) < 0n ||
+            BigInt(end.sequence) > 9223372036854775807n
+          )
+            throw new Error("Invalid progress batch");
+          let expected = BigInt(lastPosition.sequence);
+          for (const value of batch.events) {
+            const event = record(value, ["position", "kind", "revision"]);
+            const at = record(event.position, [
+              "producer",
+              "scope",
+              "sequence",
+            ]);
+            if (
+              at.producer !== end.producer ||
+              at.scope !== cursorScope ||
+              (typeof at.sequence !== "number" &&
+                typeof at.sequence !== "bigint") ||
+              BigInt(at.sequence) < 1n ||
+              BigInt(at.sequence) > 9223372036854775807n ||
+              ![
+                "snapshot-changed",
+                "decision-required",
+                "resync-required",
+              ].includes(String(event.kind)) ||
+              (typeof event.revision !== "number" &&
+                typeof event.revision !== "bigint") ||
+              BigInt(event.revision) < 0n
+            )
+              throw new Error("Invalid progress event");
+            if (
+              !batch.gap &&
+              (BigInt(at.sequence) !== ++expected ||
+                event.kind === "resync-required")
+            )
+              throw new Error("Invalid progress sequence");
+          }
+          if (
+            !batch.gap &&
+            (end.producer !== lastPosition.producer ||
+              BigInt(end.sequence) !== expected)
+          )
+            throw new Error("Invalid progress position");
+          if (batch.gap) priorHistoryGap = true;
+          if (
+            end.producer !== identity.epoch ||
+            BigInt(end.sequence) !== BigInt(identity.sequence)
+          )
+            priorHistoryUnknown = true;
+          history = priorHistoryGap
+            ? "gap"
+            : priorHistoryUnknown
+              ? "unknown"
+              : "continuous";
+        } else if (seenSnapshot || !Number.isSafeInteger(sequence)) {
+          priorHistoryUnknown = true;
+          history = priorHistoryGap ? "gap" : "unknown";
+        }
+        lastPosition = Number.isSafeInteger(sequence)
+          ? { producer: identity.epoch, scope: cursorScope, sequence }
+          : undefined;
+        seenSnapshot = true;
+        return { scope, ...identity, counts, workUnits, attempts, history };
+      });
+    },
     async readProposal() {
       return operation(async () => {
         const frames: Buffer[] = [];

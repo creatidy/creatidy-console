@@ -9,6 +9,7 @@ import { join, resolve } from "node:path";
 import { createRequire } from "node:module";
 import { openState } from "./state.ts";
 import { createRouterObserver } from "./router.ts";
+import { SnapshotChanged } from "./kernel-owner-transport.ts";
 
 declare module "fastify" {
   interface Session {
@@ -25,6 +26,17 @@ export interface AppOptions {
   kernelOwner?: {
     scope: string;
     readProposal: () => Promise<{ digest: string; text: string }>;
+    readSnapshot?: () => Promise<{
+      scope: string;
+      epoch: string;
+      sequence: string;
+      revision: string | null;
+      status: string;
+      history: "initial" | "continuous" | "gap" | "unknown";
+      counts: Record<string, { sampled: number; total: number }>;
+      workUnits: ((string | null)[] | null)[];
+      attempts: ((string | null)[] | null)[];
+    }>;
     close: () => void;
   };
 }
@@ -349,6 +361,24 @@ export async function createApp(options: AppOptions) {
       return reply.code(401).send({ error: "Login required" });
     return result;
   });
+  let kernelRead: Promise<void> = Promise.resolve();
+  async function serializeKernelRead<T>(
+    request: import("fastify").FastifyRequest,
+    read: () => Promise<T>,
+  ): Promise<T> {
+    const previous = kernelRead;
+    let release!: () => void;
+    kernelRead = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    try {
+      await previous;
+      if (!(await authenticated(request))) throw new Error("Session expired");
+      return await read();
+    } finally {
+      release();
+    }
+  }
   let proposalRead: Promise<{ digest: string; text: string }> | undefined;
   app.get("/api/kernel/owner", async (request, reply) => {
     if (!(await authenticated(request)))
@@ -357,7 +387,7 @@ export async function createApp(options: AppOptions) {
     if (!ownerChannel) return { status: "unavailable", actions: [] };
     let proposal: { digest: string; text: string } | undefined;
     try {
-      proposalRead ??= ownerChannel.readProposal();
+      proposalRead ??= serializeKernelRead(request, ownerChannel.readProposal);
       const pending = proposalRead;
       try {
         proposal = await pending;
@@ -384,6 +414,40 @@ export async function createApp(options: AppOptions) {
     return reply
       .code(503)
       .send({ error: "Kernel owner capability unavailable" });
+  });
+  let snapshotRead:
+    | ReturnType<
+        NonNullable<NonNullable<AppOptions["kernelOwner"]>["readSnapshot"]>
+      >
+    | undefined;
+  app.post("/api/kernel/snapshot", async (request, reply) => {
+    if (!(await authenticated(request)))
+      return reply.code(401).send({ error: "Login required" });
+    if (!options.kernelOwner?.readSnapshot) return { status: "unavailable" };
+    let snapshot;
+    let changed = false;
+    try {
+      snapshotRead ??= serializeKernelRead(
+        request,
+        options.kernelOwner.readSnapshot,
+      );
+      const pending = snapshotRead;
+      try {
+        snapshot = await pending;
+      } finally {
+        if (snapshotRead === pending) snapshotRead = undefined;
+      }
+    } catch (error) {
+      // The producer channel does not distinguish refusal from disconnection.
+      changed = error instanceof SnapshotChanged;
+    }
+    if (!(await authenticated(request)))
+      return reply.code(401).send({ error: "Login required" });
+    return changed
+      ? { status: "resync-required" }
+      : snapshot
+        ? { status: "observed", snapshot }
+        : { status: "read-unavailable" };
   });
   await app.register(fastifyStatic, {
     root: resolve(options.staticDirectory ?? "dist"),

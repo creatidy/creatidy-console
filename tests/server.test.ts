@@ -64,6 +64,191 @@ afterEach(() => {
 });
 
 describe("authenticated application", () => {
+  it.each(["connected", "revoked"])(
+    "serializes proposal and snapshot reads when %s",
+    async (mode) => {
+      let release!: () => void;
+      let started!: () => void;
+      let snapshotArrived!: () => void;
+      const waiting = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      const arrived = new Promise<void>((resolve) => {
+        snapshotArrived = resolve;
+      });
+      const readSnapshot = vi.fn(async () => ({
+        scope: "program",
+        epoch: "a".repeat(32),
+        sequence: "0",
+        revision: null,
+        status: "absent",
+        history: "initial" as const,
+        counts: {},
+        workUnits: [],
+        attempts: [],
+      }));
+      const { app } = await fixture(() => Date.now(), {
+        scope: "program",
+        readProposal: () =>
+          new Promise((resolve) => {
+            release = () =>
+              resolve({ digest: "a".repeat(64), text: "synthetic" });
+            started();
+          }),
+        readSnapshot,
+        close: () => {},
+      });
+      app.addHook("onRequest", async (request) => {
+        if (request.url === "/api/kernel/snapshot") snapshotArrived();
+      });
+      try {
+        await app.inject({
+          method: "POST",
+          url: "/api/bootstrap",
+          headers,
+          payload: { token, password },
+        });
+        const login = await app.inject({
+          method: "POST",
+          url: "/api/login",
+          headers,
+          payload: { password },
+        });
+        const cookie = String(login.headers["set-cookie"]).split(";")[0]!;
+        const auth = { ...headers, cookie };
+        const proposal = app.inject({
+          method: "GET",
+          url: "/api/kernel/owner",
+          headers: auth,
+        });
+        await waiting;
+        const snapshot = app.inject({
+          method: "POST",
+          url: "/api/kernel/snapshot",
+          headers: auth,
+          payload: {},
+        });
+        await arrived;
+        expect(readSnapshot).not.toHaveBeenCalled();
+        if (mode === "revoked") {
+          await app.inject({
+            method: "POST",
+            url: "/api/logout",
+            headers: auth,
+            payload: {},
+          });
+        }
+        release();
+        if (mode === "connected") {
+          expect((await proposal).json().status).toBe("connected");
+          expect((await snapshot).json().status).toBe("observed");
+          expect(readSnapshot).toHaveBeenCalledOnce();
+        } else {
+          expect((await proposal).statusCode).toBe(401);
+          expect((await snapshot).statusCode).toBe(401);
+          expect(readSnapshot).not.toHaveBeenCalled();
+        }
+      } finally {
+        await app.close();
+      }
+    },
+  );
+  it("protects snapshot reads and discards observations after logout", async () => {
+    let release!: (value: {
+      scope: string;
+      epoch: string;
+      sequence: string;
+      revision: string | null;
+      status: string;
+      history: "initial" | "continuous" | "gap" | "unknown";
+      counts: Record<string, { sampled: number; total: number }>;
+      workUnits: ((string | null)[] | null)[];
+      attempts: ((string | null)[] | null)[];
+    }) => void;
+    let started!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const readSnapshot = vi.fn(
+      () =>
+        new Promise<Parameters<typeof release>[0]>((resolve) => {
+          release = resolve;
+          started();
+        }),
+    );
+    const { app } = await fixture(() => Date.now(), {
+      scope: "program",
+      readProposal: async () => ({ digest: "a".repeat(64), text: "synthetic" }),
+      readSnapshot,
+      close: () => {},
+    });
+    try {
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/api/kernel/snapshot",
+            headers,
+            payload: {},
+          })
+        ).statusCode,
+      ).toBe(401);
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/api/kernel/snapshot",
+            headers: { ...headers, origin: "https://attacker.example" },
+            payload: {},
+          })
+        ).statusCode,
+      ).toBe(403);
+      expect(readSnapshot).not.toHaveBeenCalled();
+      await app.inject({
+        method: "POST",
+        url: "/api/bootstrap",
+        headers,
+        payload: { token, password },
+      });
+      const login = await app.inject({
+        method: "POST",
+        url: "/api/login",
+        headers,
+        payload: { password },
+      });
+      const cookie = String(login.headers["set-cookie"]).split(";")[0]!;
+      const auth = { ...headers, cookie };
+      const pending = app.inject({
+        method: "POST",
+        url: "/api/kernel/snapshot",
+        headers: auth,
+        payload: {},
+      });
+      await waiting;
+      await app.inject({
+        method: "POST",
+        url: "/api/logout",
+        headers: auth,
+        payload: {},
+      });
+      release({
+        scope: "synthetic-private-scope",
+        epoch: "a".repeat(32),
+        sequence: "0",
+        revision: null,
+        status: "absent",
+        history: "initial",
+        counts: {},
+        workUnits: [],
+        attempts: [],
+      });
+      const result = await pending;
+      expect(result.statusCode).toBe(401);
+      expect(result.body).not.toContain("synthetic-private-scope");
+    } finally {
+      await app.close();
+    }
+  });
   it("uses the restored cookie expires deadline without touching the session", async () => {
     const { app, dir } = await fixture();
     try {
