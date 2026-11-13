@@ -309,6 +309,17 @@ process-local: gaps and unknown intervals remain visible and a new snapshot does
 not restore missing history. These synthetic checks are not installed/live
 Kernel conformance or verified producer identity.
 
+One isolated source-checkout exercise used 512 synthetic work units and 300
+test-injected progress hints against that Kernel revision. Console retained 64
+work units per bounded window, detected a stale page and reported a gap; a
+separate two-work-unit retention-overflow case also reported a gap without
+changing the synthetic producer's durable history. On a one-CPU, 256 MiB
+network-disabled container, those single runs took 518 ms and 14 ms
+respectively; the observed Node heap deltas were approximately 1.52 MB and 5 KB,
+not peak memory. These measurements are not performance guarantees, real
+owner-decision evidence, an installed artifact receipt, or the required real
+Router exercise.
+
 Kernel
 [PR #130](https://forgejo.creatidy.com/Creatidy/creatidy-kernel/pulls/130) was
 merged at `86a2af119bb38f71c071cb28af3d2db954de3316`. Its owner channel serves

@@ -271,36 +271,54 @@ it("exposes bounded work and attempt facts while marking oversized records", asy
 
 it("retains sampled decision facts and distinguishes incomplete command coverage", async () => {
   const { client, requests } = await pair((socket, request) => {
+    if (request.action === "events") {
+      socket.write(
+        response({
+          events: [],
+          position: { producer: "a".repeat(32), scope: "program", sequence: 3 },
+          gap: true,
+        }),
+      );
+      return;
+    }
     const page = request.page as number;
     const item = snapshot();
     item.page = page;
     item.commands = [["id", "report", "actor", "accepted", "recorded"]];
     item.command_coverage = [1, 2, false];
-    item.decisions = Array.from({ length: page ? 1 : 8 }, (_, index) => ({
+    item.decisions = Array.from({ length: page === 8 ? 1 : 8 }, (_, index) => ({
       source: "served-command",
       command_id: `command-${page * 8 + index}`,
       attempt: null,
       status: "review_unknown",
       applicability: "unknown",
     }));
-    item.coverage.decisions = [page * 8, 9, page === 1];
+    item.coverage.decisions = [page * 8, 65, page === 8];
     socket.write(response(item));
   });
   const channel = createLocalOwnerTransport(client, "program");
   const result = await channel.readSnapshot();
-  expect(requests.map((request) => request.page)).toEqual([0, 1]);
+  expect(requests.map((request) => request.page)).toEqual([
+    0, 1, 2, 3, 4, 5, 6, 7,
+  ]);
   expect(result.commandCoverage).toEqual({
     sampled: 1,
     total: 2,
     complete: false,
   });
-  expect(result.decisions).toHaveLength(9);
-  expect(result.decisions[8]).toEqual({
+  expect(result.decisions).toHaveLength(64);
+  const next = await channel.readSnapshot({
+    page: 8,
+    epoch: result.epoch,
+    sequence: result.sequence,
+  });
+  expect(next.decisions).toHaveLength(1);
+  expect(next.decisions[0]).toEqual({
     source: "served-command",
     status: "review_unknown",
     applicability: "unknown",
     attempt: null,
-    commandId: "command-8",
+    commandId: "command-64",
   });
   channel.close();
 });
@@ -369,13 +387,13 @@ it("combines stable pages and reports bounded incomplete coverage", async () => 
     const page = request.page as number;
     const item = snapshot();
     item.page = page;
-    item.work_units = Array.from({ length: page === 8 ? 1 : 8 }, (_, index) => [
+    item.work_units = Array.from({ length: 8 }, (_, index) => [
       `work-${page * 8 + index}`,
       "ready",
       null,
       null,
     ]);
-    item.coverage.work_units = [page * 8, 65, page === 8];
+    item.coverage.work_units = [page * 8, 512, page === 63];
     socket.write(response(item));
   });
   const channel = createLocalOwnerTransport(client, "program");
@@ -383,7 +401,7 @@ it("combines stable pages and reports bounded incomplete coverage", async () => 
   expect(requests.map((request) => request.page)).toEqual([
     0, 1, 2, 3, 4, 5, 6, 7,
   ]);
-  expect(result.counts.work_units).toEqual({ sampled: 64, total: 65 });
+  expect(result.counts.work_units).toEqual({ sampled: 64, total: 512 });
   expect(result.workUnits).toHaveLength(64);
   const next = await channel.readSnapshot({
     page: 8,
@@ -391,9 +409,17 @@ it("combines stable pages and reports bounded incomplete coverage", async () => 
     sequence: result.sequence,
   });
   expect(next.startPage).toBe(8);
-  expect(next.counts.work_units).toEqual({ sampled: 1, total: 65 });
+  expect(next.counts.work_units).toEqual({ sampled: 64, total: 512 });
   expect(next.workUnits[0]?.[0]).toBe("work-64");
   expect(next.history).toBe("gap");
+  const last = await channel.readSnapshot({
+    page: 56,
+    epoch: result.epoch,
+    sequence: result.sequence,
+  });
+  expect(last.workUnits).toHaveLength(64);
+  expect(last.workUnits[63]?.[0]).toBe("work-511");
+  expect(last.history).toBe("gap");
   channel.close();
 });
 
