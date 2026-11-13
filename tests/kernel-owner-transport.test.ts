@@ -8,7 +8,10 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createApp } from "../server/app.ts";
 import { openState } from "../server/state.ts";
 import { createLocalOwnerTransport } from "../server/kernel-owner-transport.ts";
-import { prepareLocalOwnerCommand } from "../server/kernel-owner-v1.ts";
+import {
+  parseOwnerJson,
+  prepareLocalOwnerCommand,
+} from "../server/kernel-owner-v1.ts";
 
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => {
@@ -39,8 +42,8 @@ async function pair(
       data = Buffer.concat([data, part]);
       while (data.length >= 4 && data.length >= 4 + data.readUInt32BE()) {
         const size = data.readUInt32BE();
-        const request = JSON.parse(
-          data.subarray(4, 4 + size).toString(),
+        const request = parseOwnerJson(
+          data.subarray(4, 4 + size).toString("utf8"),
         ) as Record<string, unknown>;
         data = data.subarray(4 + size);
         requests.push(request);
@@ -158,11 +161,11 @@ function snapshot() {
     work_units: [] as unknown[],
     attempts: [] as unknown[],
     reservations: [],
-    commands: [],
+    commands: [] as unknown[],
     command_coverage: [0, 0, true],
     claims: [],
     correlations: [],
-    decisions: [],
+    decisions: [] as unknown[],
     usage_subtotals: [],
     budget_configured: false,
     budget_revoked: null,
@@ -189,6 +192,7 @@ it("reads a bounded snapshot without exposing command data", async () => {
     epoch: "a".repeat(32),
     sequence: "3",
     revision: "4",
+    startPage: 0,
     status: "running",
     history: "initial",
     counts: Object.fromEntries(
@@ -199,6 +203,8 @@ it("reads a bounded snapshot without exposing command data", async () => {
     ),
     workUnits: [],
     attempts: [],
+    decisions: [],
+    commandCoverage: { sampled: 0, total: 0, complete: true },
   });
   expect(result).not.toHaveProperty("commands");
   channel.close();
@@ -262,18 +268,64 @@ it("exposes bounded work and attempt facts while marking oversized records", asy
   channel.close();
 });
 
-it("combines stable pages and reports bounded incomplete coverage", async () => {
+it("retains sampled decision facts and distinguishes incomplete command coverage", async () => {
   const { client, requests } = await pair((socket, request) => {
     const page = request.page as number;
     const item = snapshot();
     item.page = page;
-    item.work_units = Array.from({ length: 8 }, (_, index) => [
+    item.commands = [["id", "report", "actor", "accepted", "recorded"]];
+    item.command_coverage = [1, 2, false];
+    item.decisions = Array.from({ length: page ? 1 : 8 }, (_, index) => ({
+      source: "served-command",
+      command_id: `command-${page * 8 + index}`,
+      attempt: null,
+      status: "review_unknown",
+      applicability: "unknown",
+    }));
+    item.coverage.decisions = [page * 8, 9, page === 1];
+    socket.write(response(item));
+  });
+  const channel = createLocalOwnerTransport(client, "program");
+  const result = await channel.readSnapshot();
+  expect(requests.map((request) => request.page)).toEqual([0, 1]);
+  expect(result.commandCoverage).toEqual({
+    sampled: 1,
+    total: 2,
+    complete: false,
+  });
+  expect(result.decisions).toHaveLength(9);
+  expect(result.decisions[8]).toEqual({
+    source: "served-command",
+    status: "review_unknown",
+    applicability: "unknown",
+    attempt: null,
+    commandId: "command-8",
+  });
+  channel.close();
+});
+
+it("combines stable pages and reports bounded incomplete coverage", async () => {
+  const { client, requests } = await pair((socket, request) => {
+    if (request.action === "events") {
+      socket.write(
+        response({
+          events: [],
+          position: { producer: "a".repeat(32), scope: "program", sequence: 3 },
+          gap: true,
+        }),
+      );
+      return;
+    }
+    const page = request.page as number;
+    const item = snapshot();
+    item.page = page;
+    item.work_units = Array.from({ length: page === 8 ? 1 : 8 }, (_, index) => [
       `work-${page * 8 + index}`,
       "ready",
       null,
       null,
     ]);
-    item.coverage.work_units = [page * 8, 65, false];
+    item.coverage.work_units = [page * 8, 65, page === 8];
     socket.write(response(item));
   });
   const channel = createLocalOwnerTransport(client, "program");
@@ -283,6 +335,15 @@ it("combines stable pages and reports bounded incomplete coverage", async () => 
   ]);
   expect(result.counts.work_units).toEqual({ sampled: 64, total: 65 });
   expect(result.workUnits).toHaveLength(64);
+  const next = await channel.readSnapshot({
+    page: 8,
+    epoch: result.epoch,
+    sequence: result.sequence,
+  });
+  expect(next.startPage).toBe(8);
+  expect(next.counts.work_units).toEqual({ sampled: 1, total: 65 });
+  expect(next.workUnits[0]?.[0]).toBe("work-64");
+  expect(next.history).toBe("gap");
   channel.close();
 });
 
@@ -349,6 +410,41 @@ it("distinguishes bounded continuity from a persistent progress gap", async () =
   channel.close();
 });
 
+it("retains exact int64 event positions without JavaScript rounding", async () => {
+  const sequence = "9007199254740993";
+  function send(socket: Socket, result: unknown) {
+    const body = Buffer.from(
+      JSON.stringify({ version: 1, ok: true, result }).replace(
+        '"__sequence__"',
+        sequence,
+      ),
+    );
+    const message = Buffer.alloc(body.length + 4);
+    message.writeUInt32BE(body.length);
+    body.copy(message, 4);
+    socket.write(message);
+  }
+  const { client } = await pair((socket, request) => {
+    const position = {
+      producer: "a".repeat(32),
+      scope: "program",
+      sequence: "__sequence__",
+    };
+    if (request.action === "snapshot")
+      send(socket, { ...snapshot(), position });
+    else {
+      expect((request.after as Record<string, unknown>).sequence).toBe(
+        9007199254740993n,
+      );
+      send(socket, { events: [], position, gap: false });
+    }
+  });
+  const channel = createLocalOwnerTransport(client, "program");
+  expect((await channel.readSnapshot()).sequence).toBe(sequence);
+  expect((await channel.readSnapshot()).history).toBe("continuous");
+  channel.close();
+});
+
 it("rejects a progress batch that falsely skips a sequence", async () => {
   const { client } = await pair((socket, request) => {
     if (request.action === "snapshot") socket.write(response(snapshot()));
@@ -374,6 +470,34 @@ it("rejects a progress batch that falsely skips a sequence", async () => {
   const channel = createLocalOwnerTransport(client, "program");
   await channel.readSnapshot();
   await expect(channel.readSnapshot()).rejects.toThrow();
+});
+
+it("requires resynchronization when a selected page changes during progress read", async () => {
+  const { client } = await pair((socket, request) => {
+    if (request.action === "snapshot") {
+      const item = snapshot();
+      item.page = request.page as number;
+      socket.write(response(item));
+    } else {
+      socket.write(
+        response({
+          events: [],
+          position: { producer: "a".repeat(32), scope: "program", sequence: 4 },
+          gap: true,
+        }),
+      );
+    }
+  });
+  const channel = createLocalOwnerTransport(client, "program");
+  const initial = await channel.readSnapshot();
+  await expect(
+    channel.readSnapshot({
+      page: 8,
+      epoch: initial.epoch,
+      sequence: initial.sequence,
+    }),
+  ).rejects.toThrow("Snapshot changed during pagination");
+  channel.close();
 });
 
 it("reads fragmented chunks over 1 MiB sequentially without sending before a call", async () => {

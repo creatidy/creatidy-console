@@ -9,7 +9,10 @@ import { join, resolve } from "node:path";
 import { createRequire } from "node:module";
 import { openState } from "./state.ts";
 import { createRouterObserver } from "./router.ts";
-import { SnapshotChanged } from "./kernel-owner-transport.ts";
+import {
+  SnapshotChanged,
+  type KernelDecision,
+} from "./kernel-owner-transport.ts";
 
 declare module "fastify" {
   interface Session {
@@ -26,16 +29,23 @@ export interface AppOptions {
   kernelOwner?: {
     scope: string;
     readProposal: () => Promise<{ digest: string; text: string }>;
-    readSnapshot?: () => Promise<{
+    readSnapshot?: (selection?: {
+      page: number;
+      epoch: string;
+      sequence: string;
+    }) => Promise<{
       scope: string;
       epoch: string;
       sequence: string;
       revision: string | null;
+      startPage: number;
       status: string;
       history: "initial" | "continuous" | "gap" | "unknown";
       counts: Record<string, { sampled: number; total: number }>;
       workUnits: ((string | null)[] | null)[];
       attempts: ((string | null)[] | null)[];
+      decisions: (KernelDecision | null)[];
+      commandCoverage: { sampled: number; total: number; complete: boolean };
     }>;
     close: () => void;
   };
@@ -379,20 +389,43 @@ export async function createApp(options: AppOptions) {
       release();
     }
   }
-  let proposalRead: Promise<{ digest: string; text: string }> | undefined;
+  const proposalReads = new Map<
+    string,
+    Promise<{ digest: string; text: string }>
+  >();
+  const snapshotReads = new Map<
+    string,
+    {
+      key: string;
+      pending: ReturnType<
+        NonNullable<NonNullable<AppOptions["kernelOwner"]>["readSnapshot"]>
+      >;
+    }
+  >();
+  const sessionKey = (request: import("fastify").FastifyRequest) =>
+    JSON.stringify([request.session.sessionStoreId, request.session.sessionId]);
   app.get("/api/kernel/owner", async (request, reply) => {
     if (!(await authenticated(request)))
       return reply.code(401).send({ error: "Login required" });
     const ownerChannel = options.kernelOwner;
     if (!ownerChannel) return { status: "unavailable", actions: [] };
+    const key = sessionKey(request);
+    if (
+      !proposalReads.has(key) &&
+      proposalReads.size + snapshotReads.size >= 16
+    )
+      return reply.code(503).send({ error: "Kernel read busy" });
     let proposal: { digest: string; text: string } | undefined;
     try {
-      proposalRead ??= serializeKernelRead(request, ownerChannel.readProposal);
-      const pending = proposalRead;
+      let pending = proposalReads.get(key);
+      if (!pending) {
+        pending = serializeKernelRead(request, ownerChannel.readProposal);
+        proposalReads.set(key, pending);
+      }
       try {
         proposal = await pending;
       } finally {
-        if (proposalRead === pending) proposalRead = undefined;
+        if (proposalReads.get(key) === pending) proposalReads.delete(key);
       }
     } catch {
       // Do not expose producer errors or retain partial observations.
@@ -415,27 +448,61 @@ export async function createApp(options: AppOptions) {
       .code(503)
       .send({ error: "Kernel owner capability unavailable" });
   });
-  let snapshotRead:
-    | ReturnType<
-        NonNullable<NonNullable<AppOptions["kernelOwner"]>["readSnapshot"]>
-      >
-    | undefined;
   app.post("/api/kernel/snapshot", async (request, reply) => {
     if (!(await authenticated(request)))
       return reply.code(401).send({ error: "Login required" });
     if (!options.kernelOwner?.readSnapshot) return { status: "unavailable" };
+    if (
+      !request.body ||
+      typeof request.body !== "object" ||
+      Array.isArray(request.body)
+    )
+      return reply.code(400).send({ error: "Invalid request" });
+    const input = request.body as Record<string, unknown>;
+    let selection:
+      { page: number; epoch: string; sequence: string } | undefined;
+    if (Object.keys(input).length !== 0) {
+      if (
+        Object.keys(input).length !== 3 ||
+        typeof input.page !== "number" ||
+        !Number.isSafeInteger(input.page) ||
+        input.page < 0 ||
+        input.page > 1000000 ||
+        typeof input.epoch !== "string" ||
+        !/^[0-9a-f]{32}$/.test(input.epoch) ||
+        typeof input.sequence !== "string" ||
+        !/^(0|[1-9][0-9]{0,18})$/.test(input.sequence)
+      )
+        return reply.code(400).send({ error: "Invalid request" });
+      selection = {
+        page: input.page,
+        epoch: input.epoch,
+        sequence: input.sequence,
+      };
+    }
+    const key = JSON.stringify(selection ?? null);
+    const session = sessionKey(request);
+    const existing = snapshotReads.get(session);
+    if (
+      (existing && existing.key !== key) ||
+      (!existing && proposalReads.size + snapshotReads.size >= 16)
+    )
+      return { status: "busy" };
     let snapshot;
     let changed = false;
     try {
-      snapshotRead ??= serializeKernelRead(
-        request,
-        options.kernelOwner.readSnapshot,
-      );
-      const pending = snapshotRead;
+      let pending = existing?.pending;
+      if (!pending) {
+        pending = serializeKernelRead(request, () =>
+          options.kernelOwner!.readSnapshot!(selection),
+        );
+        snapshotReads.set(session, { key, pending });
+      }
       try {
         snapshot = await pending;
       } finally {
-        if (snapshotRead === pending) snapshotRead = undefined;
+        if (snapshotReads.get(session)?.pending === pending)
+          snapshotReads.delete(session);
       }
     } catch (error) {
       // The producer channel does not distinguish refusal from disconnection.

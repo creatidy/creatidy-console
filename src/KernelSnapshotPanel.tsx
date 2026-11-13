@@ -1,15 +1,19 @@
 import { useEffect, useRef, useState } from "react";
+import type { KernelDecision } from "../server/kernel-owner-transport";
 
 type Snapshot = {
   scope: string;
   epoch: string;
   sequence: string;
   revision: string | null;
+  startPage: number;
   status: string;
   history: "initial" | "continuous" | "gap" | "unknown";
   counts: Record<string, { sampled: number; total: number }>;
   workUnits: ((string | null)[] | null)[];
   attempts: ((string | null)[] | null)[];
+  decisions: (KernelDecision | null)[];
+  commandCoverage: { sampled: number; total: number; complete: boolean };
 };
 
 export default function KernelSnapshotPanel({
@@ -19,6 +23,7 @@ export default function KernelSnapshotPanel({
 }) {
   const [snapshot, setSnapshot] = useState<Snapshot>();
   const [visible, setVisible] = useState(false);
+  const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("No snapshot requested.");
   const generation = useRef(0);
   const active = useRef<AbortController | null>(null);
@@ -31,6 +36,7 @@ export default function KernelSnapshotPanel({
       hasSnapshot.current = false;
       setSnapshot(undefined);
       setVisible(false);
+      setLoading(false);
       setMessage(
         "Snapshot hidden. Request another snapshot to view current data.",
       );
@@ -79,7 +85,11 @@ export default function KernelSnapshotPanel({
     };
   }, []);
 
-  async function refresh() {
+  async function refresh(page?: number) {
+    const selection =
+      page === undefined || !snapshot
+        ? {}
+        : { page, epoch: snapshot.epoch, sequence: snapshot.sequence };
     generation.current++;
     active.current?.abort();
     const current = generation.current;
@@ -90,11 +100,12 @@ export default function KernelSnapshotPanel({
     setSnapshot(undefined);
     setVisible(false);
     setMessage("Reading a bounded snapshot.");
+    setLoading(true);
     try {
       const response = await fetch("/api/kernel/snapshot", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: "{}",
+        body: JSON.stringify(selection),
         cache: "no-store",
         signal: controller.signal,
       });
@@ -111,9 +122,11 @@ export default function KernelSnapshotPanel({
         setMessage(
           result.status === "resync-required"
             ? "The snapshot changed during the read. Request a fresh snapshot; the missed interval remains unknown."
-            : result.status === "unavailable"
-              ? "No Kernel capability is configured."
-              : "Kernel snapshot unavailable; the read could not be completed.",
+            : result.status === "busy"
+              ? "Another snapshot read is in progress. Try again."
+              : result.status === "unavailable"
+                ? "No Kernel capability is configured."
+                : "Kernel snapshot unavailable; the read could not be completed.",
         );
         return;
       }
@@ -140,6 +153,7 @@ export default function KernelSnapshotPanel({
         setMessage("Kernel snapshot unavailable.");
     } finally {
       clearTimeout(deadline);
+      if (current === generation.current) setLoading(false);
     }
   }
 
@@ -147,7 +161,7 @@ export default function KernelSnapshotPanel({
     <section aria-labelledby="kernel-snapshot-heading">
       <h2 id="kernel-snapshot-heading">Kernel snapshot</h2>
       <p role="status">{message}</p>
-      <button type="button" onClick={() => void refresh()}>
+      <button type="button" disabled={loading} onClick={() => void refresh()}>
         Read snapshot
       </button>
       {snapshot && visible && (
@@ -163,7 +177,8 @@ export default function KernelSnapshotPanel({
           </p>
           <p>
             Counts are producer-reported snapshot coverage, not a complete event
-            history. Other collections and command history are not displayed.
+            history. Other collections and full command records are not
+            displayed.
           </p>
           <p>
             Progress since the preceding observation: {snapshot.history}.
@@ -177,6 +192,35 @@ export default function KernelSnapshotPanel({
               </li>
             ))}
           </ul>
+          <p>
+            Showing up to eight pages starting at producer page{" "}
+            {snapshot.startPage}.
+          </p>
+          <button
+            type="button"
+            onClick={() => void refresh(Math.max(0, snapshot.startPage - 8))}
+            disabled={loading || snapshot.startPage === 0}
+          >
+            Previous pages
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              void refresh(Math.min(1000000, snapshot.startPage + 8))
+            }
+            disabled={
+              loading ||
+              snapshot.startPage >= 1000000 ||
+              (snapshot.startPage + 8) * 8 >=
+                Math.max(
+                  snapshot.counts.work_units?.total ?? 0,
+                  snapshot.counts.attempts?.total ?? 0,
+                  snapshot.counts.decisions?.total ?? 0,
+                )
+            }
+          >
+            Next pages
+          </button>
           <h3>Sampled work units</h3>
           <ul>
             {snapshot.workUnits.map((row, index) => (
@@ -194,6 +238,38 @@ export default function KernelSnapshotPanel({
                 {row
                   ? `${row[0]}: ${row[2]}; work unit: ${row[1]}; actor: ${row[3]}`
                   : "Oversized record omitted."}
+              </li>
+            ))}
+          </ul>
+          <h3>Recorded decisions</h3>
+          <p>
+            Kernel sampled {snapshot.commandCoverage.sampled} of{" "}
+            {snapshot.commandCoverage.total} command records. Decision records
+            are producer facts, not an action queue; a pending record does not
+            by itself require owner action.
+          </p>
+          <ul>
+            {snapshot.decisions.map((decision, index) => (
+              <li key={index}>
+                {decision ? (
+                  <>
+                    Source: {decision.source}; status:{" "}
+                    {decision.status || "(empty string)"}; applicability:{" "}
+                    {decision.applicability}; attempt:{" "}
+                    {decision.attempt ?? "unavailable"}.
+                    {decision.commandId !== undefined && (
+                      <> Command: {decision.commandId}.</>
+                    )}
+                    {decision.decisionId !== undefined && (
+                      <> Decision: {decision.decisionId}.</>
+                    )}
+                    {decision.reviewOperationId !== undefined && (
+                      <> Review operation: {decision.reviewOperationId}.</>
+                    )}
+                  </>
+                ) : (
+                  "Oversized decision omitted."
+                )}
               </li>
             ))}
           </ul>

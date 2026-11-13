@@ -17,6 +17,16 @@ const CHUNK_LIMIT = 16 * 1024;
 
 export class SnapshotChanged extends Error {}
 
+export type KernelDecision = {
+  source: string;
+  status: string;
+  applicability: "pending" | "historical" | "unknown";
+  attempt: string | null;
+  commandId?: string;
+  decisionId?: string;
+  reviewOperationId?: string;
+};
+
 function record(value: unknown, keys: string[]): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw new Error("Invalid owner response");
@@ -71,7 +81,7 @@ export function createLocalOwnerTransport(
   let closed = false;
   let waiting: (() => void) | undefined;
   let lastPosition:
-    { producer: string; scope: string; sequence: number } | undefined;
+    { producer: string; scope: string; sequence: string } | undefined;
   let priorHistoryGap = false;
   let priorHistoryUnknown = false;
   let seenSnapshot = false;
@@ -166,7 +176,20 @@ export function createLocalOwnerTransport(
 
   return Object.freeze({
     close,
-    async readSnapshot() {
+    async readSnapshot(selection?: {
+      page: number;
+      epoch: string;
+      sequence: string;
+    }) {
+      if (
+        selection &&
+        (!Number.isSafeInteger(selection.page) ||
+          selection.page < 0 ||
+          selection.page > 1000000 ||
+          !/^[0-9a-f]{32}$/.test(selection.epoch) ||
+          !/^(0|[1-9][0-9]{0,18})$/.test(selection.sequence))
+      )
+        throw new Error("Invalid snapshot selection");
       return operation(async () => {
         const names = [
           "work_units",
@@ -180,6 +203,9 @@ export function createLocalOwnerTransport(
         const counts: Record<string, { sampled: number; total: number }> = {};
         const workUnits: ((string | null)[] | null)[] = [];
         const attempts: ((string | null)[] | null)[] = [];
+        const decisions: (KernelDecision | null)[] = [];
+        let commandCoverage:
+          { sampled: number; total: number; complete: boolean } | undefined;
         let identity:
           | {
               epoch: string;
@@ -188,7 +214,12 @@ export function createLocalOwnerTransport(
               status: string;
             }
           | undefined;
-        for (let page = 0; page < 8; page++) {
+        const startPage = selection?.page ?? 0;
+        for (
+          let page = startPage;
+          page < startPage + 8 && page <= 1000000;
+          page++
+        ) {
           const frame = await exchange(
             requestFrame({ version: 1, action: "snapshot", page }),
             RESPONSE_LIMIT,
@@ -274,6 +305,14 @@ export function createLocalOwnerTransport(
             status: snapshot.status,
           };
           if (
+            selection &&
+            (selection.epoch !== current.epoch ||
+              selection.sequence !== current.sequence)
+          ) {
+            priorHistoryGap = true;
+            throw new SnapshotChanged("Snapshot changed during pagination");
+          }
+          if (
             identity &&
             (identity.epoch !== current.epoch ||
               identity.sequence !== current.sequence ||
@@ -284,6 +323,33 @@ export function createLocalOwnerTransport(
             throw new SnapshotChanged("Snapshot changed during pagination");
           }
           identity ??= current;
+          const commands = snapshot.commands;
+          const command = snapshot.command_coverage;
+          if (
+            !Array.isArray(commands) ||
+            commands.length > 64 ||
+            !Array.isArray(command) ||
+            command.length !== 3 ||
+            command[0] !== commands.length ||
+            !Number.isSafeInteger(command[1]) ||
+            command[1] < command[0] ||
+            typeof command[2] !== "boolean" ||
+            command[2] !== (command[0] === command[1])
+          )
+            throw new Error("Invalid command coverage");
+          const currentCommand = {
+            sampled: command[0] as number,
+            total: command[1] as number,
+            complete: command[2] as boolean,
+          };
+          if (
+            commandCoverage &&
+            (commandCoverage.sampled !== currentCommand.sampled ||
+              commandCoverage.total !== currentCommand.total ||
+              commandCoverage.complete !== currentCommand.complete)
+          )
+            throw new Error("Command coverage changed");
+          commandCoverage ??= currentCommand;
           for (const name of names) {
             const items = snapshot[name];
             const itemCoverage = coverage[name];
@@ -347,26 +413,113 @@ export function createLocalOwnerTransport(
             });
           workUnits.push(...rows("work_units"));
           attempts.push(...rows("attempts"));
+          for (const [index, value] of (
+            snapshot.decisions as unknown[]
+          ).entries()) {
+            if (
+              value &&
+              typeof value === "object" &&
+              !Array.isArray(value) &&
+              "oversized" in value
+            ) {
+              const omitted = record(value, [
+                "oversized",
+                "index",
+                "bytes",
+                "sha256",
+              ]);
+              if (
+                omitted.oversized !== true ||
+                omitted.index !== page * 8 + index ||
+                !Number.isSafeInteger(omitted.bytes) ||
+                (omitted.bytes as number) <= 4096 ||
+                typeof omitted.sha256 !== "string" ||
+                !/^[0-9a-f]{64}$/.test(omitted.sha256)
+              )
+                throw new Error("Invalid oversized decision");
+              decisions.push(null);
+              continue;
+            }
+            if (!value || typeof value !== "object" || Array.isArray(value))
+              throw new Error("Invalid decision");
+            const raw = value as Record<string, unknown>;
+            const required = ["source", "attempt", "status", "applicability"];
+            const optional = [
+              "command_id",
+              "decision_id",
+              "review_operation_id",
+            ];
+            if (
+              Object.keys(raw).some(
+                (key) => !required.includes(key) && !optional.includes(key),
+              ) ||
+              required.some((key) => !Object.hasOwn(raw, key)) ||
+              ![
+                "product-review-operation",
+                "served-command",
+                "product-review",
+              ].includes(String(raw.source)) ||
+              typeof raw.status !== "string" ||
+              Buffer.byteLength(raw.status) > 4096 ||
+              !["pending", "historical", "unknown"].includes(
+                String(raw.applicability),
+              ) ||
+              (raw.attempt !== null &&
+                (typeof raw.attempt !== "string" ||
+                  Buffer.byteLength(raw.attempt) > 4096)) ||
+              optional.some(
+                (key) =>
+                  Object.hasOwn(raw, key) &&
+                  (typeof raw[key] !== "string" ||
+                    Buffer.byteLength(raw[key] as string) > 4096),
+              ) ||
+              (raw.source === "served-command" &&
+                typeof raw.command_id !== "string") ||
+              (raw.source !== "served-command" &&
+                (typeof raw.decision_id !== "string" ||
+                  typeof raw.attempt !== "string" ||
+                  Object.hasOwn(raw, "command_id") ||
+                  Object.hasOwn(raw, "review_operation_id")))
+            )
+              throw new Error("Invalid decision");
+            decisions.push({
+              source: raw.source as string,
+              status: raw.status,
+              applicability:
+                raw.applicability as KernelDecision["applicability"],
+              attempt: raw.attempt as string | null,
+              ...(Object.hasOwn(raw, "command_id")
+                ? { commandId: raw.command_id as string }
+                : {}),
+              ...(Object.hasOwn(raw, "decision_id")
+                ? { decisionId: raw.decision_id as string }
+                : {}),
+              ...(Object.hasOwn(raw, "review_operation_id")
+                ? { reviewOperationId: raw.review_operation_id as string }
+                : {}),
+            });
+          }
           if (
-            counts.work_units!.sampled === counts.work_units!.total &&
-            counts.attempts!.sampled === counts.attempts!.total
+            startPage * 8 + counts.work_units!.sampled >=
+              counts.work_units!.total &&
+            startPage * 8 + counts.attempts!.sampled >=
+              counts.attempts!.total &&
+            startPage * 8 + counts.decisions!.sampled >= counts.decisions!.total
           )
             break;
         }
         if (!identity) throw new Error("Snapshot unavailable");
         let history: "initial" | "continuous" | "gap" | "unknown" =
           priorHistoryGap ? "gap" : "initial";
-        const sequence = Number(identity.sequence);
-        if (lastPosition && Number.isSafeInteger(sequence)) {
-          const frame = await exchange(
-            requestFrame({
-              version: 1,
-              action: "events",
-              after: lastPosition,
-              limit: 256,
-            }),
-            RESPONSE_LIMIT,
+        if (lastPosition) {
+          // Sequence is an int64; validated decimal text avoids JS rounding.
+          const eventBody = Buffer.from(
+            `{"version":1,"action":"events","after":{"producer":${JSON.stringify(lastPosition.producer)},"scope":${JSON.stringify(lastPosition.scope)},"sequence":${lastPosition.sequence}},"limit":256}`,
           );
+          const eventFrame = Buffer.alloc(eventBody.length + 4);
+          eventFrame.writeUInt32BE(eventBody.length);
+          eventBody.copy(eventFrame, 4);
+          const frame = await exchange(eventFrame, RESPONSE_LIMIT);
           const envelope = record(payload(frame), ["version", "ok", "result"]);
           const batch = record(envelope.result, ["events", "position", "gap"]);
           const end = record(batch.position, ["producer", "scope", "sequence"]);
@@ -425,6 +578,14 @@ export function createLocalOwnerTransport(
             throw new Error("Invalid progress position");
           if (batch.gap) priorHistoryGap = true;
           if (
+            selection &&
+            (end.producer !== identity.epoch ||
+              BigInt(end.sequence) !== BigInt(identity.sequence))
+          ) {
+            priorHistoryGap = true;
+            throw new SnapshotChanged("Snapshot changed during pagination");
+          }
+          if (
             end.producer !== identity.epoch ||
             BigInt(end.sequence) !== BigInt(identity.sequence)
           )
@@ -434,15 +595,27 @@ export function createLocalOwnerTransport(
             : priorHistoryUnknown
               ? "unknown"
               : "continuous";
-        } else if (seenSnapshot || !Number.isSafeInteger(sequence)) {
+        } else if (seenSnapshot) {
           priorHistoryUnknown = true;
           history = priorHistoryGap ? "gap" : "unknown";
         }
-        lastPosition = Number.isSafeInteger(sequence)
-          ? { producer: identity.epoch, scope: cursorScope, sequence }
-          : undefined;
+        lastPosition = {
+          producer: identity.epoch,
+          scope: cursorScope,
+          sequence: identity.sequence,
+        };
         seenSnapshot = true;
-        return { scope, ...identity, counts, workUnits, attempts, history };
+        return {
+          scope,
+          ...identity,
+          startPage,
+          counts,
+          workUnits,
+          attempts,
+          decisions,
+          commandCoverage: commandCoverage!,
+          history,
+        };
       });
     },
     async readProposal() {

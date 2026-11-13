@@ -52,15 +52,16 @@ after the read. Labels check pairing, not producer identity; descriptor custody
 and the trusted supervisor are security assumptions. The producer's declarations
 are not the effective host policy, which remains unknown. No proposal data is
 cached by the adapter or persisted in browser storage. Snapshot reads expose
-bounded work-unit and attempt records and collection coverage, not commands or
-complete history; oversized records are omitted. They use the same supervisor
-provision and do not establish independently authenticated producer identity.
-Progress continuity is a bounded in-memory hint between observations; gaps and
-unknown intervals remain visible and a snapshot cannot restore missing history.
-A Console restart forgets the preceding observation. Synthetic tests do not
-establish installed consumer conformance. All owner commands remain unavailable.
-No Kernel HTTP server, arbitrary dispatcher, browser-selected principal, active
-SQLite peer or new authentication system follows from this decision.
+bounded work-unit, attempt and decision records and collection coverage, not
+full commands or complete history; oversized records are omitted. They use the
+same supervisor provision and do not establish independently authenticated
+producer identity. Progress continuity is a bounded in-memory hint between
+observations; gaps and unknown intervals remain visible and a snapshot cannot
+restore missing history. A Console restart forgets the preceding observation.
+Synthetic tests do not establish installed consumer conformance. All owner
+commands remain unavailable. No Kernel HTTP server, arbitrary dispatcher,
+browser-selected principal, active SQLite peer or new authentication system
+follows from this decision.
 
 While the proposal or snapshot is visible, Console checks the existing session
 without extending its idle or absolute expiry. The views hide their data while a

@@ -159,6 +159,7 @@ it.skipIf(!existsSync(chrome))(
       let snapshotReads = 0;
       await page.route("**/api/kernel/snapshot", (route) => {
         snapshotReads++;
+        const pageNumber = route.request().postDataJSON()?.page ?? 0;
         return route.fulfill({
           json: {
             status: "observed",
@@ -167,27 +168,35 @@ it.skipIf(!existsSync(chrome))(
               epoch: "a".repeat(32),
               sequence: "3",
               revision: "4",
+              startPage: pageNumber,
               status: "running",
               history: "initial",
-              counts: { work_units: { sampled: 8, total: 9 } },
+              counts: {
+                work_units: { sampled: pageNumber ? 1 : 64, total: 65 },
+              },
               workUnits: [[hostile, "pending", null, null], null],
               attempts: [],
+              decisions: [],
+              commandCoverage: { sampled: 0, total: 0, complete: true },
             },
           },
         });
       });
       expect(snapshotReads).toBe(0);
       await page.getByRole("button", { name: "Read snapshot" }).click();
-      await page.getByText("work_units: 9 total; 8 sampled").waitFor();
+      await page.getByText("work_units: 65 total; 64 sampled").waitFor();
       expect(snapshotReads).toBe(1);
       expect(await page.evaluate(() => window.ownerInjected)).toBeUndefined();
+      await page.getByRole("button", { name: "Next pages" }).click();
+      await page.getByText("work_units: 65 total; 1 sampled").waitFor();
+      expect(snapshotReads).toBe(2);
       await page.route("**/api/kernel/session-check", (route) =>
         route.fulfill({ status: 401, json: { error: "Login required" } }),
       );
       await page.getByRole("button", { name: "Read snapshot" }).click();
       await page.getByRole("heading", { name: "Sign in" }).waitFor();
       expect(
-        await page.getByText("work_units: 9 total; 8 sampled").count(),
+        await page.getByText("work_units: 65 total; 1 sampled").count(),
       ).toBe(0);
       await page.unroute("**/api/kernel/session-check");
       await page.unroute("**/api/kernel/snapshot");

@@ -64,6 +64,106 @@ afterEach(() => {
 });
 
 describe("authenticated application", () => {
+  it("does not let a revoked session cancel another session's queued snapshot", async () => {
+    let release!: () => void;
+    let started!: () => void;
+    let arrivals = 0;
+    let arrived!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const bothArrived = new Promise<void>((resolve) => {
+      arrived = resolve;
+    });
+    const readSnapshot = vi.fn(async () => ({
+      scope: "program",
+      epoch: "a".repeat(32),
+      sequence: "0",
+      revision: null,
+      startPage: 0,
+      status: "absent",
+      history: "initial" as const,
+      counts: {},
+      workUnits: [],
+      attempts: [],
+      decisions: [],
+      commandCoverage: { sampled: 0, total: 0, complete: true },
+    }));
+    const { app } = await fixture(() => Date.now(), {
+      scope: "program",
+      readProposal: () =>
+        new Promise((resolve) => {
+          release = () =>
+            resolve({ digest: "a".repeat(64), text: "synthetic" });
+          started();
+        }),
+      readSnapshot,
+      close: () => {},
+    });
+    app.addHook("onRequest", async (request) => {
+      if (request.url === "/api/kernel/snapshot" && ++arrivals === 2) arrived();
+    });
+    try {
+      await app.inject({
+        method: "POST",
+        url: "/api/bootstrap",
+        headers,
+        payload: { token, password },
+      });
+      const firstLogin = await app.inject({
+        method: "POST",
+        url: "/api/login",
+        headers,
+        payload: { password },
+      });
+      const secondLogin = await app.inject({
+        method: "POST",
+        url: "/api/login",
+        headers,
+        payload: { password },
+      });
+      const first = {
+        ...headers,
+        cookie: String(firstLogin.headers["set-cookie"]).split(";")[0]!,
+      };
+      const second = {
+        ...headers,
+        cookie: String(secondLogin.headers["set-cookie"]).split(";")[0]!,
+      };
+      const proposal = app.inject({
+        method: "GET",
+        url: "/api/kernel/owner",
+        headers: first,
+      });
+      await waiting;
+      const revoked = app.inject({
+        method: "POST",
+        url: "/api/kernel/snapshot",
+        headers: first,
+        payload: {},
+      });
+      const active = app.inject({
+        method: "POST",
+        url: "/api/kernel/snapshot",
+        headers: second,
+        payload: {},
+      });
+      await bothArrived;
+      await app.inject({
+        method: "POST",
+        url: "/api/logout",
+        headers: first,
+        payload: {},
+      });
+      release();
+      expect((await proposal).statusCode).toBe(401);
+      expect((await revoked).statusCode).toBe(401);
+      expect((await active).json().status).toBe("observed");
+      expect(readSnapshot).toHaveBeenCalledOnce();
+    } finally {
+      await app.close();
+    }
+  });
   it.each(["connected", "revoked"])(
     "serializes proposal and snapshot reads when %s",
     async (mode) => {
@@ -81,11 +181,14 @@ describe("authenticated application", () => {
         epoch: "a".repeat(32),
         sequence: "0",
         revision: null,
+        startPage: 0,
         status: "absent",
         history: "initial" as const,
         counts: {},
         workUnits: [],
         attempts: [],
+        decisions: [],
+        commandCoverage: { sampled: 0, total: 0, complete: true },
       }));
       const { app } = await fixture(() => Date.now(), {
         scope: "program",
@@ -159,11 +262,14 @@ describe("authenticated application", () => {
       epoch: string;
       sequence: string;
       revision: string | null;
+      startPage: number;
       status: string;
       history: "initial" | "continuous" | "gap" | "unknown";
       counts: Record<string, { sampled: number; total: number }>;
       workUnits: ((string | null)[] | null)[];
       attempts: ((string | null)[] | null)[];
+      decisions: import("../server/kernel-owner-transport.ts").KernelDecision[];
+      commandCoverage: { sampled: number; total: number; complete: boolean };
     }) => void;
     let started!: () => void;
     const waiting = new Promise<void>((resolve) => {
@@ -218,6 +324,23 @@ describe("authenticated application", () => {
       });
       const cookie = String(login.headers["set-cookie"]).split(";")[0]!;
       const auth = { ...headers, cookie };
+      for (const payload of [
+        { page: -1, epoch: "a".repeat(32), sequence: "1" },
+        { page: 1, epoch: "a".repeat(32), sequence: "01" },
+        { page: 1, epoch: "a".repeat(32), sequence: "1", extra: true },
+      ]) {
+        expect(
+          (
+            await app.inject({
+              method: "POST",
+              url: "/api/kernel/snapshot",
+              headers: auth,
+              payload,
+            })
+          ).statusCode,
+        ).toBe(400);
+      }
+      expect(readSnapshot).not.toHaveBeenCalled();
       const pending = app.inject({
         method: "POST",
         url: "/api/kernel/snapshot",
@@ -236,11 +359,14 @@ describe("authenticated application", () => {
         epoch: "a".repeat(32),
         sequence: "0",
         revision: null,
+        startPage: 0,
         status: "absent",
         history: "initial",
         counts: {},
         workUnits: [],
         attempts: [],
+        decisions: [],
+        commandCoverage: { sampled: 0, total: 0, complete: true },
       });
       const result = await pending;
       expect(result.statusCode).toBe(401);

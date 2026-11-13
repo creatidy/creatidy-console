@@ -278,10 +278,22 @@ does not itself cancel work or prove settlement. See the
 [merged producer contract](https://forgejo.creatidy.com/Creatidy/creatidy-kernel/src/commit/407f1be3195d3c698ac1f5e7c57e65e215d0c88a/docs/architecture/contracts.md).
 This delivery is not installed Console conformance or live integration evidence.
 The optional Linux supervisor-launched Console backend validates and retains the
-descriptor and greeting for authenticated proposal inspection. The default has
-no capability; submissions remain refused. Labels do not verify producer
-identity. A valid-looking receipt shape is not evidence of an authenticated
-producer or an observed effect.
+descriptor and greeting for authenticated proposal and snapshot inspection. The
+default has no capability; submissions remain refused. Labels do not verify
+producer identity. A valid-looking receipt shape is not evidence of an
+authenticated producer or an observed effect.
+
+The bounded snapshot view uses Kernel version-1 snapshot and progress frames at
+source revision `1bcb052e527933b7b2f419ac76017f2d20e88a1e`, specifically
+`ports/served.py` and `adapters/served_local.py`. Work units, attempts and
+decisions retain producer status and applicability; they are not a cross-product
+join or an owner-action queue. Each request samples at most eight pages with
+explicit collection and command coverage; navigation retains the observed epoch
+and sequence and requires resynchronization when that position changes.
+Oversized records are explicitly omitted. Progress state is process-local: gaps
+and unknown intervals remain visible and a new snapshot does not restore missing
+history. These synthetic checks are not installed/live Kernel conformance or
+verified producer identity.
 
 Kernel
 [PR #130](https://forgejo.creatidy.com/Creatidy/creatidy-kernel/pulls/130) was
