@@ -169,6 +169,15 @@ Separate the two acceptance levels:
   integration. Completed downstream components are not prerequisites merely to
   define or validate the initial MI contract.
 
+Console offers an explicitly selected, bounded offline file inspection for a
+narrow empty-publication subset of `mi.operator-working/1` at MI revision
+`c65df369f674b82347a2e08a27d5315d935ac1a4`. It validates a closed empty shape
+with unavailable health and refuses available publications rather than partially
+validating or activating them. It does not treat a same-envelope reference as
+publisher identity, claim full portable receiver conformance, preserve cut
+history, or connect to MI. A supported file shape is untrusted user-supplied
+evidence and is not an authenticated producer state.
+
 A missing or incompatible field must produce a concrete Console consumer
 requirement: affected behavior, evidence/negative case and expected semantics.
 Request a versioned producer change from MI and validate the supported revised

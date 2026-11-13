@@ -9,6 +9,7 @@ import { join, resolve } from "node:path";
 import { createRequire } from "node:module";
 import { openState } from "./state.ts";
 import { createRouterObserver } from "./router.ts";
+import { inspectEmptyMiSnapshot } from "./mi-empty-snapshot.ts";
 import {
   SnapshotChanged,
   type KernelDecision,
@@ -450,6 +451,27 @@ export async function createApp(options: AppOptions) {
       .code(503)
       .send({ error: "Kernel owner capability unavailable" });
   });
+  app.post(
+    "/api/mi/inspect-empty",
+    { bodyLimit: 512 * 1024 },
+    async (request, reply) => {
+      if (!(await authenticated(request)))
+        return reply.code(401).send({ error: "Login required" });
+      const body = request.body;
+      if (
+        !body ||
+        typeof body !== "object" ||
+        Array.isArray(body) ||
+        Object.keys(body).length !== 1 ||
+        typeof (body as Record<string, unknown>).text !== "string"
+      )
+        return reply.code(400).send({ error: "Invalid request" });
+      const result = inspectEmptyMiSnapshot((body as { text: string }).text);
+      if (!(await authenticated(request)))
+        return reply.code(401).send({ error: "Login required" });
+      return result;
+    },
+  );
   app.post("/api/kernel/snapshot", async (request, reply) => {
     if (!(await authenticated(request)))
       return reply.code(401).send({ error: "Login required" });

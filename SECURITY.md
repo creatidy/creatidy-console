@@ -82,6 +82,16 @@ the API; non-touch checks remain the fallback. A transient check failure hides
 the proposal; the snapshot is discarded and must be requested again. The
 proposal view retries the non-touch check at a bounded interval while visible.
 
+The optional offline Model Intelligence file inspector accepts an explicitly
+selected file of at most 256 KiB and sends it only to the authenticated local
+Console server for an in-memory shape check. It does not retain the file, read
+arbitrary server paths, connect to MI or activate any publication. Only the
+empty-publication subset with unavailable health is supported; other states are
+reported as unsupported. A matching shape does not authenticate an instance or
+publisher, establish an independently trusted reference, or authorize data
+redistribution. The displayed result is hidden during session checks and removed
+on visibility loss, logout, expiry or reload.
+
 The initial Router observer adapter accepts only explicitly configured literal
 loopback IP origins, not DNS names or arbitrary URLs. It does not follow
 redirects, and HTTPS uses normal certificate verification. A locally supplied

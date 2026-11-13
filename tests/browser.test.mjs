@@ -154,6 +154,59 @@ it.skipIf(!existsSync(chrome))(
           .getByRole("button", { name: /approve|stop|reconcile|start/i })
           .count(),
       ).toBe(0);
+      const mi = {
+        schema: "mi.operator-working/1",
+        product: "model-intelligence",
+        instance: '<img src=x onerror="window.miInjected=1">',
+        evaluated_at: "2026-11-13T00:00:00Z",
+        capabilities: {
+          reads: ["status", "inspect", "export"],
+          commands: [],
+          replay: false,
+        },
+        publication: {
+          state: "empty",
+          reference: null,
+          artifact: null,
+          diagnostics: [],
+        },
+        health: {
+          state: "missing",
+          sha256: null,
+          data: null,
+          correlation: "unavailable",
+        },
+        facts: {
+          latest: [],
+          future: [],
+          stale: [],
+          unknown_freshness: [],
+          notices: [],
+          uncertain_campaigns: [],
+          conflicts: [],
+          projection: { offers: [], models: [], surfaces: [], conflicts: [] },
+        },
+        history: {
+          scope: "retained-publication-cuts-only",
+          replay: false,
+          checkpoint: null,
+          relation: "unavailable",
+          evidence_added: [],
+          projection_changed: null,
+        },
+      };
+      await page
+        .getByLabel("Select an offline snapshot (maximum 256 KiB)")
+        .setInputFiles({
+          name: "synthetic-mi.json",
+          mimeType: "application/json",
+          buffer: Buffer.from(JSON.stringify(mi)),
+        });
+      await page.getByText(/Supported empty snapshot shape/).waitFor();
+      expect(await page.evaluate(() => window.miInjected)).toBeUndefined();
+      await page.reload();
+      await page.getByRole("heading", { name: "Your console" }).waitFor();
+      expect(await page.getByText(/Unverified file instance/).count()).toBe(0);
       const hostile =
         '<img src=x onerror="window.ownerInjected=1">' + "x".repeat(2048);
       let snapshotReads = 0;

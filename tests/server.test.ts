@@ -64,6 +64,128 @@ afterEach(() => {
 });
 
 describe("authenticated application", () => {
+  it("requires a session and same origin for offline MI inspection", async () => {
+    const { app } = await fixture();
+    const empty = {
+      schema: "mi.operator-working/1",
+      product: "model-intelligence",
+      instance: "synthetic-instance",
+      evaluated_at: "2026-11-13T00:00:00Z",
+      capabilities: {
+        reads: ["status", "inspect", "export"],
+        commands: [],
+        replay: false,
+      },
+      publication: {
+        state: "empty",
+        reference: null,
+        artifact: null,
+        diagnostics: [],
+      },
+      health: {
+        state: "missing",
+        sha256: null,
+        data: null,
+        correlation: "unavailable",
+      },
+      facts: {
+        latest: [],
+        future: [],
+        stale: [],
+        unknown_freshness: [],
+        notices: [],
+        uncertain_campaigns: [],
+        conflicts: [],
+        projection: { offers: [], models: [], surfaces: [], conflicts: [] },
+      },
+      history: {
+        scope: "retained-publication-cuts-only",
+        replay: false,
+        checkpoint: null,
+        relation: "unavailable",
+        evidence_added: [],
+        projection_changed: null,
+      },
+    };
+    const text = JSON.stringify(empty);
+    try {
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/api/mi/inspect-empty",
+            headers,
+            payload: { text },
+          })
+        ).statusCode,
+      ).toBe(401);
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/api/mi/inspect-empty",
+            headers: { ...headers, origin: "https://attacker.example" },
+            payload: { text },
+          })
+        ).statusCode,
+      ).toBe(403);
+      await app.inject({
+        method: "POST",
+        url: "/api/bootstrap",
+        headers,
+        payload: { token, password },
+      });
+      const login = await app.inject({
+        method: "POST",
+        url: "/api/login",
+        headers,
+        payload: { password },
+      });
+      const cookie = String(login.headers["set-cookie"]).split(";")[0]!;
+      const auth = { ...headers, cookie };
+      const result = await app.inject({
+        method: "POST",
+        url: "/api/mi/inspect-empty",
+        headers: auth,
+        payload: { text },
+      });
+      expect(result.json()).toEqual({
+        status: "empty",
+        instance: "synthetic-instance",
+        evaluatedAt: "2026-11-13T00:00:00Z",
+        health: "missing",
+      });
+      expect(result.headers["cache-control"]).toContain("no-store");
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/api/mi/inspect-empty",
+            headers: auth,
+            payload: { text, extra: true },
+          })
+        ).statusCode,
+      ).toBe(400);
+      await app.inject({
+        method: "POST",
+        url: "/api/logout",
+        headers: auth,
+        payload: {},
+      });
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/api/mi/inspect-empty",
+            headers: auth,
+            payload: { text },
+          })
+        ).statusCode,
+      ).toBe(401);
+    } finally {
+      await app.close();
+    }
+  });
   it("does not let a revoked session cancel another session's queued snapshot", async () => {
     let release!: () => void;
     let started!: () => void;

@@ -305,6 +305,27 @@ it("retains sampled decision facts and distinguishes incomplete command coverage
   channel.close();
 });
 
+it.each(["source", "applicability"])(
+  "rejects non-string decision %s",
+  async (field) => {
+    const item = snapshot();
+    const row: Record<string, unknown> = {
+      source: "served-command",
+      command_id: "cmd",
+      attempt: null,
+      status: "review_unknown",
+      applicability: "unknown",
+    };
+    row[field] = [row[field]];
+    item.decisions = [row];
+    item.coverage.decisions = [0, 1, true];
+    const { client } = await pair((socket) => socket.write(response(item)));
+    await expect(
+      createLocalOwnerTransport(client, "program").readSnapshot(),
+    ).rejects.toThrow();
+  },
+);
+
 it("presents only producer correlation fields and hides opaque handles", async () => {
   const item = snapshot();
   item.correlations = [
@@ -492,6 +513,33 @@ it("rejects a progress batch that falsely skips a sequence", async () => {
             },
           ],
           position: { producer: "a".repeat(32), scope: "program", sequence: 5 },
+          gap: false,
+        }),
+      );
+  });
+  const channel = createLocalOwnerTransport(client, "program");
+  await channel.readSnapshot();
+  await expect(channel.readSnapshot()).rejects.toThrow();
+});
+
+it("rejects a non-string progress event kind", async () => {
+  const { client } = await pair((socket, request) => {
+    if (request.action === "snapshot") socket.write(response(snapshot()));
+    else
+      socket.write(
+        response({
+          events: [
+            {
+              position: {
+                producer: "a".repeat(32),
+                scope: "program",
+                sequence: 4,
+              },
+              kind: ["snapshot-changed"],
+              revision: 4,
+            },
+          ],
+          position: { producer: "a".repeat(32), scope: "program", sequence: 4 },
           gap: false,
         }),
       );

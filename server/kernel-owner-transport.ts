@@ -463,15 +463,17 @@ export function createLocalOwnerTransport(
                 (key) => !required.includes(key) && !optional.includes(key),
               ) ||
               required.some((key) => !Object.hasOwn(raw, key)) ||
+              typeof raw.source !== "string" ||
               ![
                 "product-review-operation",
                 "served-command",
                 "product-review",
-              ].includes(String(raw.source)) ||
+              ].includes(raw.source) ||
               typeof raw.status !== "string" ||
               Buffer.byteLength(raw.status) > 4096 ||
+              typeof raw.applicability !== "string" ||
               !["pending", "historical", "unknown"].includes(
-                String(raw.applicability),
+                raw.applicability,
               ) ||
               (raw.attempt !== null &&
                 (typeof raw.attempt !== "string" ||
@@ -624,11 +626,12 @@ export function createLocalOwnerTransport(
                 typeof at.sequence !== "bigint") ||
               BigInt(at.sequence) < 1n ||
               BigInt(at.sequence) > 9223372036854775807n ||
+              typeof event.kind !== "string" ||
               ![
                 "snapshot-changed",
                 "decision-required",
                 "resync-required",
-              ].includes(String(event.kind)) ||
+              ].includes(event.kind) ||
               (typeof event.revision !== "number" &&
                 typeof event.revision !== "bigint") ||
               BigInt(event.revision) < 0n
