@@ -65,17 +65,17 @@ export default function KernelSnapshotPanel({
         if (response.status === 401) {
           hide();
           expired();
-        } else if (
-          !response.ok ||
-          (await response.json()).authenticated !== true
-        )
-          hide();
-        else if (
-          current === generation.current &&
-          document.visibilityState === "visible" &&
-          !controller.signal.aborted
-        )
-          setVisible(true);
+        } else {
+          const authenticated =
+            response.ok && (await response.json()).authenticated === true;
+          if (current !== generation.current) return;
+          if (!authenticated) hide();
+          else if (
+            document.visibilityState === "visible" &&
+            !controller.signal.aborted
+          )
+            setVisible(true);
+        }
       } catch {
         if (current === generation.current) hide();
       } finally {

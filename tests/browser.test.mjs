@@ -1,4 +1,5 @@
 import { execFile, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdtempSync,
@@ -204,9 +205,140 @@ it.skipIf(!existsSync(chrome))(
         });
       await page.getByText(/Supported empty snapshot shape/).waitFor();
       expect(await page.evaluate(() => window.miInjected)).toBeUndefined();
+      await page.evaluate(() => {
+        const original = window.fetch.bind(window);
+        let hold = true;
+        window.fetch = (...args) => {
+          if (hold && args[0] === "/api/kernel/session-check") {
+            hold = false;
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: () =>
+                new Promise((resolve) => {
+                  window.releaseOldMiCheck = () =>
+                    resolve({ authenticated: false });
+                }),
+            });
+          }
+          return original(...args);
+        };
+      });
+      await page.clock.fastForward(10000);
+      await page.waitForFunction(
+        () => typeof window.releaseOldMiCheck === "function",
+      );
+      await page
+        .getByLabel("Select an offline snapshot (maximum 256 KiB)")
+        .setInputFiles({
+          name: "synthetic-mi.json",
+          mimeType: "application/json",
+          buffer: Buffer.from(JSON.stringify(mi)),
+        });
+      await page.getByText(/Unverified file instance/).waitFor();
+      await page.evaluate(async () => {
+        window.releaseOldMiCheck();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(await page.getByText(/Unverified file instance/).count()).toBe(1);
       await page.reload();
       await page.getByRole("heading", { name: "Your console" }).waitFor();
       expect(await page.getByText(/Unverified file instance/).count()).toBe(0);
+      const payload = {
+        applicability: {
+          scope: "synthetic",
+          channel: null,
+          configuration: null,
+          source_ids: ["synthetic-source"],
+        },
+        observations: [
+          {
+            id: mi.instance,
+            source: "synthetic-source",
+            authority: "official",
+            type: "documentation",
+            reference: "https://example.invalid/",
+            revision: null,
+            rights: { distribution: "unknown", license: "unknown" },
+            times: {
+              acquired: "2026-01-01T00:00:00Z",
+              observed: null,
+              published: null,
+              fresh_until: null,
+            },
+          },
+        ],
+        statements: [],
+        notices: [],
+        uncertain_campaigns: [],
+      };
+      const frame = {
+        format_version: 1,
+        payload_schema: "mi.public-evidence-working/2",
+        produced_at: "2026-01-01T00:00:00Z",
+        scope: "synthetic",
+        members: [`observation:${mi.instance}`],
+        sources: [
+          {
+            source_id: "synthetic-source",
+            reference: "https://example.invalid/",
+            revision: null,
+          },
+        ],
+        payload: JSON.stringify(payload),
+      };
+      const artifact = JSON.stringify(frame);
+      const ref = {
+        format_version: 1,
+        payload_schema: frame.payload_schema,
+        sha256: createHash("sha256").update(artifact).digest("hex"),
+      };
+      const publication = {
+        ...mi,
+        publication: {
+          state: "available",
+          reference: ref,
+          artifact,
+          diagnostics: [],
+        },
+        history: { ...mi.history, relation: "initial" },
+      };
+      const file = {
+        name: "synthetic-publication.json",
+        mimeType: "application/json",
+        buffer: Buffer.from(JSON.stringify(publication)),
+      };
+      await page
+        .getByLabel("Expected artifact SHA-256", { exact: true })
+        .fill(ref.sha256);
+      await page
+        .getByLabel("Previous expected artifact SHA-256")
+        .fill(ref.sha256);
+      await page
+        .getByLabel("Previous offline snapshot (optional, maximum 256 KiB)")
+        .setInputFiles(file);
+      await page
+        .getByLabel("Select a current publication snapshot (maximum 256 KiB)")
+        .setInputFiles(file);
+      await page.getByText(/Comparison of supplied files: duplicate/).waitFor();
+      expect(
+        await page
+          .getByText(/Neither file nor reference is authenticated/)
+          .count(),
+      ).toBe(1);
+      await page
+        .getByText("Untrusted evidence records and reported rights")
+        .click();
+      expect(await page.getByText(/synthetic-source/).count()).toBeGreaterThan(
+        0,
+      );
+      expect(await page.evaluate(() => window.miInjected)).toBeUndefined();
+      await page.reload();
+      await page.getByRole("heading", { name: "Your console" }).waitFor();
+      expect(await page.getByText(/Comparison of supplied files/).count()).toBe(
+        0,
+      );
       const hostile =
         '<img src=x onerror="window.ownerInjected=1">' + "x".repeat(2048);
       let snapshotReads = 0;
@@ -244,13 +376,46 @@ it.skipIf(!existsSync(chrome))(
       await page.getByRole("button", { name: "Next pages" }).click();
       await page.getByText("work_units: 65 total; 1 sampled").waitFor();
       expect(snapshotReads).toBe(2);
+      await page.evaluate(() => {
+        const original = window.fetch.bind(window);
+        let hold = true;
+        window.fetch = (...args) => {
+          if (hold && args[0] === "/api/kernel/session-check") {
+            hold = false;
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: () =>
+                new Promise((resolve) => {
+                  window.releaseOldKernelCheck = () =>
+                    resolve({ authenticated: false });
+                }),
+            });
+          }
+          return original(...args);
+        };
+      });
+      await page.clock.fastForward(10000);
+      await page.waitForFunction(
+        () => typeof window.releaseOldKernelCheck === "function",
+      );
+      await page.getByRole("button", { name: "Read snapshot" }).click();
+      await page.getByText("work_units: 65 total; 64 sampled").waitFor();
+      await page.evaluate(async () => {
+        window.releaseOldKernelCheck();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(
+        await page.getByText("work_units: 65 total; 64 sampled").count(),
+      ).toBe(1);
       await page.route("**/api/kernel/session-check", (route) =>
         route.fulfill({ status: 401, json: { error: "Login required" } }),
       );
       await page.getByRole("button", { name: "Read snapshot" }).click();
       await page.getByRole("heading", { name: "Sign in" }).waitFor();
       expect(
-        await page.getByText("work_units: 65 total; 1 sampled").count(),
+        await page.getByText("work_units: 65 total; 64 sampled").count(),
       ).toBe(0);
       await page.unroute("**/api/kernel/session-check");
       await page.unroute("**/api/kernel/snapshot");

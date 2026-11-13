@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { request as httpRequest } from "node:http";
 import { spawnSync } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../server/app.ts";
@@ -64,6 +65,266 @@ afterEach(() => {
 });
 
 describe("authenticated application", () => {
+  it("does not close the producer capability when a browser request aborts", async () => {
+    let release!: () => void;
+    let started!: () => void;
+    let finished!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const completed = new Promise<void>((resolve) => {
+      finished = resolve;
+    });
+    const close = vi.fn();
+    const readSnapshot = vi.fn(
+      () =>
+        new Promise<{
+          scope: string;
+          epoch: string;
+          sequence: string;
+          revision: null;
+          startPage: number;
+          status: string;
+          history: "initial";
+          counts: Record<string, never>;
+          workUnits: never[];
+          attempts: never[];
+          decisions: never[];
+          correlations: never[];
+          commandCoverage: {
+            sampled: number;
+            total: number;
+            complete: boolean;
+          };
+        }>((resolve) => {
+          release = () => {
+            resolve({
+              scope: "synthetic",
+              epoch: "a".repeat(32),
+              sequence: "0",
+              revision: null,
+              startPage: 0,
+              status: "absent",
+              history: "initial",
+              counts: {},
+              workUnits: [],
+              attempts: [],
+              decisions: [],
+              correlations: [],
+              commandCoverage: { sampled: 0, total: 0, complete: true },
+            });
+            finished();
+          };
+          started();
+        }),
+    );
+    const { app } = await fixture(() => Date.now(), {
+      scope: "synthetic",
+      readProposal: async () => ({ digest: "a".repeat(64), text: "synthetic" }),
+      readSnapshot,
+      close,
+    });
+    try {
+      await app.inject({
+        method: "POST",
+        url: "/api/bootstrap",
+        headers,
+        payload: { token, password },
+      });
+      const login = await app.inject({
+        method: "POST",
+        url: "/api/login",
+        headers,
+        payload: { password },
+      });
+      const cookie = String(login.headers["set-cookie"]).split(";")[0]!;
+      await app.listen({ host: "127.0.0.1", port: 0 });
+      const address = app.server.address();
+      if (!address || typeof address === "string")
+        throw new Error("No local test port");
+      let client!: ReturnType<typeof httpRequest>;
+      const pending = new Promise<Error>((resolve) => {
+        client = httpRequest(
+          {
+            hostname: "127.0.0.1",
+            port: address.port,
+            path: "/api/kernel/snapshot",
+            method: "POST",
+            headers: { ...headers, cookie },
+          },
+          (response) => {
+            response.resume();
+            resolve(new Error(`Unexpected HTTP status ${response.statusCode}`));
+          },
+        );
+        client.once("error", resolve);
+        client.end("{}");
+      });
+      const early = await Promise.race([waiting.then(() => null), pending]);
+      if (early) throw early;
+      client.destroy();
+      const result = await pending;
+      expect(result).toBeInstanceOf(Error);
+      expect(close).not.toHaveBeenCalled();
+      release();
+      await completed;
+      expect(readSnapshot).toHaveBeenCalledOnce();
+      expect(close).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+  it("protects offline MI publication inspection and retained-file comparison", async () => {
+    const { app } = await fixture();
+    const payload = {
+      applicability: {
+        scope: "synthetic",
+        channel: null,
+        configuration: null,
+        source_ids: [],
+      },
+      observations: [],
+      statements: [],
+      notices: [],
+      uncertain_campaigns: [],
+    };
+    const frame = {
+      format_version: 1,
+      payload_schema: "mi.public-evidence-working/2",
+      produced_at: "2026-01-01T00:00:00Z",
+      scope: "synthetic",
+      members: [],
+      sources: [],
+      payload: JSON.stringify(payload),
+    };
+    const artifact = JSON.stringify(frame);
+    const expected = {
+      format_version: 1,
+      payload_schema: frame.payload_schema,
+      sha256: createHash("sha256").update(artifact).digest("hex"),
+    };
+    const snapshot = {
+      schema: "mi.operator-working/1",
+      product: "model-intelligence",
+      instance: "synthetic",
+      evaluated_at: "2026-01-01T00:00:00Z",
+      capabilities: {
+        reads: ["status", "inspect", "export"],
+        commands: [],
+        replay: false,
+      },
+      publication: {
+        state: "available",
+        reference: expected,
+        artifact,
+        diagnostics: [],
+      },
+      health: {
+        state: "missing",
+        sha256: null,
+        data: null,
+        correlation: "unavailable",
+      },
+      facts: {
+        latest: [],
+        future: [],
+        stale: [],
+        unknown_freshness: [],
+        notices: [],
+        uncertain_campaigns: [],
+        conflicts: [],
+        projection: { offers: [], models: [], surfaces: [], conflicts: [] },
+      },
+      history: {
+        scope: "retained-publication-cuts-only",
+        replay: false,
+        checkpoint: null,
+        relation: "initial",
+        evidence_added: [],
+        projection_changed: null,
+      },
+    };
+    const text = JSON.stringify(snapshot);
+    try {
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/api/mi/inspect-publication",
+            headers,
+            payload: { text, expected },
+          })
+        ).statusCode,
+      ).toBe(401);
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/api/mi/inspect-publication",
+            headers: { ...headers, origin: "https://attacker.example" },
+            payload: { text, expected },
+          })
+        ).statusCode,
+      ).toBe(403);
+      await app.inject({
+        method: "POST",
+        url: "/api/bootstrap",
+        headers,
+        payload: { token, password },
+      });
+      const login = await app.inject({
+        method: "POST",
+        url: "/api/login",
+        headers,
+        payload: { password },
+      });
+      const cookie = String(login.headers["set-cookie"]).split(";")[0]!;
+      const auth = { ...headers, cookie };
+      const result = await app.inject({
+        method: "POST",
+        url: "/api/mi/inspect-publication",
+        headers: auth,
+        payload: { text, expected, previous: { text, expected } },
+      });
+      expect(result.json().status).toBe("checked");
+      expect(result.json().comparison).toBe("duplicate");
+      expect(result.json().history).toBe("unavailable");
+      expect(result.headers["cache-control"]).toContain("no-store");
+      const mismatch = await app.inject({
+        method: "POST",
+        url: "/api/mi/inspect-publication",
+        headers: auth,
+        payload: { text, expected: { ...expected, sha256: "0".repeat(64) } },
+      });
+      expect(mismatch.json()).toEqual({ status: "rejected" });
+      const changed = JSON.stringify({ ...snapshot, instance: "different" });
+      const resync = await app.inject({
+        method: "POST",
+        url: "/api/mi/inspect-publication",
+        headers: auth,
+        payload: { text: changed, expected, previous: { text, expected } },
+      });
+      expect(resync.json()).toEqual({ status: "resync-required" });
+      await app.inject({
+        method: "POST",
+        url: "/api/logout",
+        headers: auth,
+        payload: {},
+      });
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/api/mi/inspect-publication",
+            headers: auth,
+            payload: { text, expected },
+          })
+        ).statusCode,
+      ).toBe(401);
+    } finally {
+      await app.close();
+    }
+  });
   it("requires a session and same origin for offline MI inspection", async () => {
     const { app } = await fixture();
     const empty = {

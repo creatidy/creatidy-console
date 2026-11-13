@@ -11,6 +11,11 @@ import { openState } from "./state.ts";
 import { createRouterObserver } from "./router.ts";
 import { inspectEmptyMiSnapshot } from "./mi-empty-snapshot.ts";
 import {
+  compareMiPublications,
+  inspectMiPublication,
+  type ExpectedMiReference,
+} from "./mi-publication.ts";
+import {
   SnapshotChanged,
   type KernelDecision,
   type KernelCorrelation,
@@ -470,6 +475,66 @@ export async function createApp(options: AppOptions) {
       if (!(await authenticated(request)))
         return reply.code(401).send({ error: "Login required" });
       return result;
+    },
+  );
+  app.post(
+    "/api/mi/inspect-publication",
+    { bodyLimit: 1024 * 1024 },
+    async (request, reply) => {
+      if (!(await authenticated(request)))
+        return reply.code(401).send({ error: "Login required" });
+      const body = request.body;
+      if (!body || typeof body !== "object" || Array.isArray(body))
+        return reply.code(400).send({ error: "Invalid request" });
+      const input = body as Record<string, unknown>;
+      if (
+        !Object.hasOwn(input, "text") ||
+        !Object.hasOwn(input, "expected") ||
+        Object.keys(input).some(
+          (key) => !["text", "expected", "previous"].includes(key),
+        ) ||
+        typeof input.text !== "string"
+      )
+        return reply.code(400).send({ error: "Invalid request" });
+      const expected = input.expected as ExpectedMiReference;
+      const inspection = inspectMiPublication(input.text, expected);
+      let comparison: ReturnType<typeof compareMiPublications> | undefined;
+      if (input.previous !== undefined) {
+        if (
+          !input.previous ||
+          typeof input.previous !== "object" ||
+          Array.isArray(input.previous)
+        )
+          return reply.code(400).send({ error: "Invalid request" });
+        const previous = input.previous as Record<string, unknown>;
+        if (
+          Object.keys(previous).length !== 2 ||
+          typeof previous.text !== "string" ||
+          !Object.hasOwn(previous, "expected")
+        )
+          return reply.code(400).send({ error: "Invalid request" });
+        comparison = compareMiPublications(
+          previous.text,
+          previous.expected as ExpectedMiReference,
+          input.text,
+          expected,
+        );
+      }
+      if (!(await authenticated(request)))
+        return reply.code(401).send({ error: "Login required" });
+      if (
+        inspection.status !== "checked" ||
+        (comparison &&
+          (comparison.status === "rejected" ||
+            comparison.status === "resync-required"))
+      )
+        return {
+          status:
+            comparison?.status === "resync-required"
+              ? "resync-required"
+              : "rejected",
+        };
+      return { ...inspection, comparison: comparison?.status ?? "unavailable" };
     },
   );
   app.post("/api/kernel/snapshot", async (request, reply) => {
