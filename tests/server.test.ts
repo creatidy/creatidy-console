@@ -87,6 +87,7 @@ describe("authenticated application", () => {
       workUnits: [],
       attempts: [],
       decisions: [],
+      correlations: [],
       commandCoverage: { sampled: 0, total: 0, complete: true },
     }));
     const { app } = await fixture(() => Date.now(), {
@@ -188,6 +189,7 @@ describe("authenticated application", () => {
         workUnits: [],
         attempts: [],
         decisions: [],
+        correlations: [],
         commandCoverage: { sampled: 0, total: 0, complete: true },
       }));
       const { app } = await fixture(() => Date.now(), {
@@ -269,6 +271,7 @@ describe("authenticated application", () => {
       workUnits: ((string | null)[] | null)[];
       attempts: ((string | null)[] | null)[];
       decisions: import("../server/kernel-owner-transport.ts").KernelDecision[];
+      correlations: import("../server/kernel-owner-transport.ts").KernelCorrelation[];
       commandCoverage: { sampled: number; total: number; complete: boolean };
     }) => void;
     let started!: () => void;
@@ -366,6 +369,7 @@ describe("authenticated application", () => {
         workUnits: [],
         attempts: [],
         decisions: [],
+        correlations: [],
         commandCoverage: { sampled: 0, total: 0, complete: true },
       });
       const result = await pending;

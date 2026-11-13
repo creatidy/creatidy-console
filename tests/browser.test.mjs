@@ -177,6 +177,7 @@ it.skipIf(!existsSync(chrome))(
               workUnits: [[hostile, "pending", null, null], null],
               attempts: [],
               decisions: [],
+              correlations: [],
               commandCoverage: { sampled: 0, total: 0, complete: true },
             },
           },

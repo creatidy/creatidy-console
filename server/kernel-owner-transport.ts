@@ -27,6 +27,14 @@ export type KernelDecision = {
   reviewOperationId?: string;
 };
 
+export type KernelCorrelation = {
+  attempt: string;
+  workspaceReference: string | null;
+  candidateHead: string | null;
+  candidateScope: string | null;
+  runtimeHandlePresent: boolean;
+};
+
 function record(value: unknown, keys: string[]): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw new Error("Invalid owner response");
@@ -204,6 +212,7 @@ export function createLocalOwnerTransport(
         const workUnits: ((string | null)[] | null)[] = [];
         const attempts: ((string | null)[] | null)[] = [];
         const decisions: (KernelDecision | null)[] = [];
+        const correlations: (KernelCorrelation | null)[] = [];
         let commandCoverage:
           { sampled: number; total: number; complete: boolean } | undefined;
         let identity:
@@ -499,12 +508,74 @@ export function createLocalOwnerTransport(
                 : {}),
             });
           }
+          for (const [index, value] of (
+            snapshot.correlations as unknown[]
+          ).entries()) {
+            if (
+              value &&
+              typeof value === "object" &&
+              !Array.isArray(value) &&
+              "oversized" in value
+            ) {
+              const omitted = record(value, [
+                "oversized",
+                "index",
+                "bytes",
+                "sha256",
+              ]);
+              if (
+                omitted.oversized !== true ||
+                omitted.index !== page * 8 + index ||
+                !Number.isSafeInteger(omitted.bytes) ||
+                (omitted.bytes as number) <= 4096 ||
+                typeof omitted.sha256 !== "string" ||
+                !/^[0-9a-f]{64}$/.test(omitted.sha256)
+              )
+                throw new Error("Invalid oversized correlation");
+              correlations.push(null);
+              continue;
+            }
+            const row = record(value, [
+              "attempt",
+              "workspace_reference",
+              "candidate_head",
+              "candidate_scope",
+              "runtime_handle",
+            ]);
+            if (
+              typeof row.attempt !== "string" ||
+              !row.attempt.trim() ||
+              Buffer.byteLength(row.attempt) > 4096 ||
+              [
+                row.workspace_reference,
+                row.candidate_head,
+                row.candidate_scope,
+                row.runtime_handle,
+              ].some(
+                (field) =>
+                  field !== null &&
+                  (typeof field !== "string" ||
+                    Buffer.byteLength(field) > 4096),
+              )
+            )
+              throw new Error("Invalid correlation");
+            correlations.push({
+              attempt: row.attempt,
+              workspaceReference: row.workspace_reference as string | null,
+              candidateHead: row.candidate_head as string | null,
+              candidateScope: row.candidate_scope as string | null,
+              runtimeHandlePresent: row.runtime_handle !== null,
+            });
+          }
           if (
             startPage * 8 + counts.work_units!.sampled >=
               counts.work_units!.total &&
             startPage * 8 + counts.attempts!.sampled >=
               counts.attempts!.total &&
-            startPage * 8 + counts.decisions!.sampled >= counts.decisions!.total
+            startPage * 8 + counts.decisions!.sampled >=
+              counts.decisions!.total &&
+            startPage * 8 + counts.correlations!.sampled >=
+              counts.correlations!.total
           )
             break;
         }
@@ -613,6 +684,7 @@ export function createLocalOwnerTransport(
           workUnits,
           attempts,
           decisions,
+          correlations,
           commandCoverage: commandCoverage!,
           history,
         };

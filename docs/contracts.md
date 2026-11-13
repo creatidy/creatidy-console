@@ -285,15 +285,16 @@ authenticated producer or an observed effect.
 
 The bounded snapshot view uses Kernel version-1 snapshot and progress frames at
 source revision `1bcb052e527933b7b2f419ac76017f2d20e88a1e`, specifically
-`ports/served.py` and `adapters/served_local.py`. Work units, attempts and
-decisions retain producer status and applicability; they are not a cross-product
-join or an owner-action queue. Each request samples at most eight pages with
-explicit collection and command coverage; navigation retains the observed epoch
-and sequence and requires resynchronization when that position changes.
-Oversized records are explicitly omitted. Progress state is process-local: gaps
-and unknown intervals remain visible and a new snapshot does not restore missing
-history. These synthetic checks are not installed/live Kernel conformance or
-verified producer identity.
+`ports/served.py` and `adapters/served_local.py`. Work units, attempts,
+decisions and correlation references retain producer facts; they are not a
+cross-product join or an owner-action queue. Opaque runtime handles are not
+displayed and do not establish effect settlement. Each request samples at most
+eight pages with explicit collection and command coverage; navigation retains
+the observed epoch and sequence and requires resynchronization when that
+position changes. Oversized records are explicitly omitted. Progress state is
+process-local: gaps and unknown intervals remain visible and a new snapshot does
+not restore missing history. These synthetic checks are not installed/live
+Kernel conformance or verified producer identity.
 
 Kernel
 [PR #130](https://forgejo.creatidy.com/Creatidy/creatidy-kernel/pulls/130) was

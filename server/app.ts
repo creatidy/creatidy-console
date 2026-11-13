@@ -12,6 +12,7 @@ import { createRouterObserver } from "./router.ts";
 import {
   SnapshotChanged,
   type KernelDecision,
+  type KernelCorrelation,
 } from "./kernel-owner-transport.ts";
 
 declare module "fastify" {
@@ -45,6 +46,7 @@ export interface AppOptions {
       workUnits: ((string | null)[] | null)[];
       attempts: ((string | null)[] | null)[];
       decisions: (KernelDecision | null)[];
+      correlations: (KernelCorrelation | null)[];
       commandCoverage: { sampled: number; total: number; complete: boolean };
     }>;
     close: () => void;

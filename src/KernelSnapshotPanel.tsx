@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import type { KernelDecision } from "../server/kernel-owner-transport";
+import type {
+  KernelCorrelation,
+  KernelDecision,
+} from "../server/kernel-owner-transport";
 
 type Snapshot = {
   scope: string;
@@ -13,6 +16,7 @@ type Snapshot = {
   workUnits: ((string | null)[] | null)[];
   attempts: ((string | null)[] | null)[];
   decisions: (KernelDecision | null)[];
+  correlations: (KernelCorrelation | null)[];
   commandCoverage: { sampled: number; total: number; complete: boolean };
 };
 
@@ -216,6 +220,7 @@ export default function KernelSnapshotPanel({
                   snapshot.counts.work_units?.total ?? 0,
                   snapshot.counts.attempts?.total ?? 0,
                   snapshot.counts.decisions?.total ?? 0,
+                  snapshot.counts.correlations?.total ?? 0,
                 )
             }
           >
@@ -269,6 +274,38 @@ export default function KernelSnapshotPanel({
                   </>
                 ) : (
                   "Oversized decision omitted."
+                )}
+              </li>
+            ))}
+          </ul>
+          <h3>Kernel correlation facts</h3>
+          <p>
+            These are Kernel-provided references, not verified cross-product
+            joins or evidence that external effects settled. Opaque runtime
+            handles are not displayed.
+          </p>
+          <ul>
+            {snapshot.correlations.map((row, index) => (
+              <li key={index}>
+                {row ? (
+                  <>
+                    Attempt: {row.attempt}; workspace:{" "}
+                    {row.workspaceReference ?? "unavailable"}; candidate head:{" "}
+                    {row.candidateHead === ""
+                      ? "(empty string)"
+                      : (row.candidateHead ?? "unavailable")}
+                    ; candidate scope:{" "}
+                    {row.candidateScope === ""
+                      ? "(empty string)"
+                      : (row.candidateScope ?? "unavailable")}
+                    ; runtime handle:{" "}
+                    {row.runtimeHandlePresent
+                      ? "present, hidden"
+                      : "unavailable"}
+                    .
+                  </>
+                ) : (
+                  "Oversized correlation omitted."
                 )}
               </li>
             ))}

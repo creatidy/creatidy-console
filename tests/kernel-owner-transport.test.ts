@@ -164,7 +164,7 @@ function snapshot() {
     commands: [] as unknown[],
     command_coverage: [0, 0, true],
     claims: [],
-    correlations: [],
+    correlations: [] as unknown[],
     decisions: [] as unknown[],
     usage_subtotals: [],
     budget_configured: false,
@@ -204,6 +204,7 @@ it("reads a bounded snapshot without exposing command data", async () => {
     workUnits: [],
     attempts: [],
     decisions: [],
+    correlations: [],
     commandCoverage: { sampled: 0, total: 0, complete: true },
   });
   expect(result).not.toHaveProperty("commands");
@@ -301,6 +302,34 @@ it("retains sampled decision facts and distinguishes incomplete command coverage
     attempt: null,
     commandId: "command-8",
   });
+  channel.close();
+});
+
+it("presents only producer correlation fields and hides opaque handles", async () => {
+  const item = snapshot();
+  item.correlations = [
+    {
+      attempt: "attempt-a",
+      workspace_reference: "workspace-a",
+      candidate_head: null,
+      candidate_scope: "scope-a",
+      runtime_handle: "synthetic-private-handle",
+    },
+  ];
+  item.coverage.correlations = [0, 1, true];
+  const { client } = await pair((socket) => socket.write(response(item)));
+  const channel = createLocalOwnerTransport(client, "program");
+  const result = await channel.readSnapshot();
+  expect(result.correlations).toEqual([
+    {
+      attempt: "attempt-a",
+      workspaceReference: "workspace-a",
+      candidateHead: null,
+      candidateScope: "scope-a",
+      runtimeHandlePresent: true,
+    },
+  ]);
+  expect(JSON.stringify(result)).not.toContain("synthetic-private-handle");
   channel.close();
 });
 
