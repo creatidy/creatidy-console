@@ -140,7 +140,16 @@ it.skipIf(!existsSync(chrome))(
       await page
         .getByLabel("Owner password", { exact: true })
         .fill("synthetic-owner-password");
-      await page.getByRole("button", { name: "Sign in" }).click();
+      const [loginResponse] = await Promise.all([
+        page.waitForResponse(
+          (response) =>
+            response.url() === `${origin}/api/login` &&
+            response.request().method() === "POST",
+          { timeout: 5000 },
+        ),
+        page.getByRole("button", { name: "Sign in" }).click(),
+      ]);
+      expect(loginResponse.status()).toBe(200);
       await page.getByRole("heading", { name: "Your console" }).waitFor();
       await page
         .getByRole("heading", { name: "Kernel owner actions" })
@@ -205,6 +214,44 @@ it.skipIf(!existsSync(chrome))(
         });
       await page.getByText(/Supported empty snapshot shape/).waitFor();
       expect(await page.evaluate(() => window.miInjected)).toBeUndefined();
+      for (const [state, expected] of [
+        ["invalid", /reports an invalid retained publication/],
+        ["unsupported", /reports an unsupported retained publication/],
+      ]) {
+        await page
+          .getByLabel("Select an offline snapshot (maximum 256 KiB)")
+          .setInputFiles({
+            name: "synthetic-mi-state.json",
+            mimeType: "application/json",
+            buffer: Buffer.from(
+              JSON.stringify({
+                ...mi,
+                publication: {
+                  state,
+                  reference: null,
+                  artifact: null,
+                  diagnostics: ["retained-publication-invalid-or-unreadable"],
+                },
+              }),
+            ),
+          });
+        await page.getByText(expected).waitFor();
+        await page
+          .getByText(/previous inspected file remains last known/)
+          .waitFor();
+        await page.getByText(/Unverified file instance/).waitFor();
+      }
+      await page
+        .getByLabel("Select an offline snapshot (maximum 256 KiB)")
+        .setInputFiles({
+          name: "invalid.json",
+          mimeType: "application/json",
+          buffer: Buffer.from("{invalid"),
+        });
+      await page
+        .getByText(/previous inspected file remains last known/)
+        .waitFor();
+      await page.getByText(/Unverified file instance/).waitFor();
       await page.evaluate(() => {
         const original = window.fetch.bind(window);
         let hold = true;
@@ -334,6 +381,32 @@ it.skipIf(!existsSync(chrome))(
         0,
       );
       expect(await page.evaluate(() => window.miInjected)).toBeUndefined();
+      await page
+        .getByLabel("Previous offline snapshot (optional, maximum 256 KiB)")
+        .setInputFiles(file);
+      const unrelated = {
+        ...file,
+        buffer: Buffer.from(
+          JSON.stringify({ ...publication, instance: "other-instance" }),
+        ),
+      };
+      await page
+        .getByLabel("Select a current publication snapshot (maximum 256 KiB)")
+        .setInputFiles(unrelated);
+      await page
+        .getByText(/do not establish a continuous retained cut/)
+        .waitFor();
+      await page
+        .getByText(/previous inspected file remains last known/)
+        .waitFor();
+      await page.getByText(/Comparison of supplied files: duplicate/).waitFor();
+      await page
+        .getByLabel("Select a current publication snapshot (maximum 256 KiB)")
+        .setInputFiles(unrelated);
+      await page
+        .getByText(/Unverified file instance: other-instance/)
+        .waitFor();
+      await page.getByText(/Earlier history: unavailable/).waitFor();
       await page.reload();
       await page.getByRole("heading", { name: "Your console" }).waitFor();
       expect(await page.getByText(/Comparison of supplied files/).count()).toBe(
@@ -422,7 +495,49 @@ it.skipIf(!existsSync(chrome))(
       await page
         .getByLabel("Owner password", { exact: true })
         .fill("synthetic-owner-password");
-      await page.getByRole("button", { name: "Sign in" }).click();
+      await page.evaluate(() => {
+        window.originalTestFetch = window.fetch;
+        window.fetch = async (...args) => {
+          const response = await window.originalTestFetch(...args);
+          if (new URL(response.url).pathname === "/api/login")
+            await response.clone().arrayBuffer();
+          return response;
+        };
+      });
+      try {
+        const [instrumentedLogin] = await Promise.all([
+          page.waitForResponse(
+            (response) =>
+              response.url() === `${origin}/api/login` &&
+              response.request().method() === "POST",
+            { timeout: 5000 },
+          ),
+          page.getByRole("button", { name: "Sign in" }).click(),
+        ]);
+        expect(instrumentedLogin.status()).toBe(200);
+        let timer;
+        try {
+          expect(
+            await Promise.race([
+              instrumentedLogin.json(),
+              new Promise((_, reject) => {
+                timer = setTimeout(
+                  () =>
+                    reject(new Error("Instrumented login body unavailable")),
+                  5000,
+                );
+              }),
+            ]),
+          ).toEqual({ ok: true });
+        } finally {
+          clearTimeout(timer);
+        }
+      } finally {
+        await page.evaluate(() => {
+          window.fetch = window.originalTestFetch;
+          delete window.originalTestFetch;
+        });
+      }
       await page.getByRole("heading", { name: "Your console" }).waitFor();
       let proposalReads = 0;
       await page.route("**/api/kernel/owner", (route) => {
@@ -683,6 +798,33 @@ it.skipIf(!existsSync(chrome))(
           }),
         ),
       ).not.toContain(key);
+      const observedCalls = calls;
+      await page.route("**/api/kernel/session-check", (route) =>
+        route.abort("failed"),
+      );
+      await page.clock.fastForward(10000);
+      await page.getByRole("button", { name: "Retry Router status" }).waitFor();
+      expect(await page.getByText("resource-a", { exact: false }).count()).toBe(
+        0,
+      );
+      await page.unroute("**/api/kernel/session-check");
+      await page.getByRole("button", { name: "Retry Router status" }).click();
+      await page.getByText("m".repeat(64), { exact: false }).waitFor();
+      expect(calls).toBe(observedCalls);
+      await page.route("**/api/kernel/session-check", (route) =>
+        route.fulfill({ status: 401, json: { error: "expired" } }),
+      );
+      await page.clock.fastForward(10000);
+      await page.getByRole("heading", { name: "Sign in" }).waitFor();
+      expect(await page.getByText("resource-a", { exact: false }).count()).toBe(
+        0,
+      );
+      await page.unroute("**/api/kernel/session-check");
+      await page
+        .getByLabel("Owner password", { exact: true })
+        .fill("synthetic-owner-password");
+      await page.getByRole("button", { name: "Sign in" }).click();
+      await page.getByText("m".repeat(64), { exact: false }).waitFor();
       upstreamMode = "disconnected";
       await page.getByRole("button", { name: "Refresh Router" }).click();
       await page

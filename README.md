@@ -20,9 +20,11 @@ evidence of an installed Router connection, and the UI does not simulate healthy
 resources.
 
 An optional Linux supervisor-launched Kernel channel supports authenticated,
-read-only inspection of a digest-verified proposal. Default startup has no
-Kernel capability; no Kernel commands are enabled. Synthetic tests do not prove
-an installed or live producer connection.
+read-only inspection of a digest-verified proposal and bounded snapshot facts.
+Default startup has no Kernel capability; no Kernel commands are enabled. MI
+offline files can be inspected as untrusted evidence without connecting to MI or
+activating a publication. Synthetic tests do not prove an installed or live
+producer connection.
 
 Console presents producer-owned facts and delivers authorized commands to their
 owners. It is not a scheduler, harness, inference gateway, model catalog, shared

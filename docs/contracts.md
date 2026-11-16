@@ -33,8 +33,107 @@ Consumer fixtures, browser security and installed/live receipts remain distinct;
 their completion is not a prerequisite for starting the code that creates them.
 The in-progress Router-only consumer uses fixed snapshot/replay paths and an
 opaque server-held cursor; it requests a fresh snapshot after replayed changes
-and does not claim reconstructed intermediate history. Its loopback-only
-connection scope and synthetic tests do not establish a live producer receipt.
+and does not claim reconstructed intermediate history. Two separately authorized
+isolated installed-Router attempts observed a nonempty synthetic unbound
+resource and its Console projection at Router
+`8fc4f91ff1aa4c52f4738d436fc2ac12d0b8acb1` and Console
+`88eead49216c359b7e224cb183e68aa712889c79`. Neither reached replay, retention
+overflow, recovery or revocation. One browser login response could not be read
+by the evidence collector; complete browser-response security evidence is
+unverified. The temporary run artifacts are unavailable in this checkout, so
+those prior observations have not been independently revalidated here. They are
+not provider collection, live production data, or packaged Console acceptance.
+
+### Pending Router Acceptance Procedure
+
+This procedure is preparation, not authorization for a new installed test. The
+previous two authorized attempts are exhausted; the owner must separately bound
+any new target, state-change count, execution time and access before execution.
+Use a fresh isolated loopback-only Router and Console, synthetic accounts and
+private state, and the pinned producer contract. Supply the observer credential
+to Console through its command's standard input, never a URL, argument, browser
+store or log. Do not enable an endpoint, worker, provider collection or
+inference. One proposed scope is one attempt, at most 264 Router state-changing
+operations including setup and revocation, and 15 minutes of execution. This is
+a proposal, not permission; stop earlier if event advancement or isolation
+cannot be proved.
+
+1. Bootstrap Router and issue an observer-scoped client using the documented
+   administrator interface. Register one synthetic `local_app_adapter` resource
+   without endpoint or worker binding, then verify its nonempty snapshot through
+   `GET /observer/v1/snapshot` and the authenticated Console projection.
+2. Preserve the producer-issued cursor. Change the resource's enabled state
+   through the supported administrator operation. Replay the original cursor
+   using `POST /observer/v1/replay`, verify actual events and advancing sequence
+   numbers, then refresh Console and retain its current cursor. The sequence is
+   inspected here only as acceptance evidence; Console treats cursors as opaque.
+3. Keep that baseline cursor unchanged. Alternate genuine enabled-state changes
+   and use a separate verification cursor to check that semantic events actually
+   advance; no-op updates and timestamp-only changes must not be counted as
+   events. Exceed the producer's 256-event retained window only within the newly
+   approved limit, without changing retention settings or writing its database.
+4. Replay the preserved cursor, record the producer's actual reason and resync
+   snapshot, and compare it with a fresh producer snapshot. Refresh Console and
+   verify its explicit gap notice and reconstructed current facts; never
+   describe the missing intermediate history as recovered. Revoke the observer
+   and verify denial, clearing, and credential isolation.
+5. Check browser login status and authenticated UI separately from response-body
+   capture. An ordinary authenticated HTTP client can inspect the login JSON; a
+   failed optional browser body capture must be reported separately and must not
+   prevent independent replay checks. It is not proof that browser responses are
+   credential-free: retain that security cell as unverified until inspected.
+
+The same login-capture symptom was reproduced with synthetic local state: the
+application checks the login response status without consuming its body, and
+Chrome 157.0.8103.78 with Playwright 1.65.0 did not report that response as
+finished to Playwright's body reader. An ordinary HTTP client received the
+complete JSON and an authenticated session. The original temporary collector is
+unavailable, so this does not prove its exact internal trigger. The browser
+regression separately checks unmodified login status/UI and, in another login,
+drains a response clone to make body inspection possible. That instrumentation
+changes timing; it does not prove unmodified browser body capture or repair the
+previous installed receipt.
+
+`tests/router.test.ts` exercises a separate synthetic 256-event fixture,
+including no-op changes, replay and expiry. It is not an installed producer
+receipt. The Router projection and cursor are process-local, not a persisted
+projection cache. Recreating the observer requests a snapshot and explicitly
+reports earlier history as unavailable; it does not change producer state. There
+is currently no projection-cache schema to migrate. The private `router.json`
+connection configuration is not disposable projection data and is not a
+cache-loss fixture.
+
+For that bounded scenario, the pinned Router's supported server entry point is
+`python -I -m scarcity_router.control_server --host 127.0.0.1 --port <port> --data-dir <private-dir>`;
+the same module with `--issue-bootstrap-claim` issues its one-time setup claim.
+Submit the claim to `POST /control/bootstrap/admin`, retrieve the administrator
+CSRF value from `/admin`, and issue `POST /control/clients` with role
+`observer`. Use `POST /control/resources` with this synthetic registration,
+leaving endpoint and worker bindings absent:
+
+```json
+{
+  "registration": {
+    "identity": {
+      "resource_id": "acceptance-local",
+      "channel": "local_app_adapter",
+      "provider": "ollama",
+      "model": "synthetic-local",
+      "entitlement": "unknown"
+    },
+    "freshness_ttl_seconds": 60
+  },
+  "enabled": false
+}
+```
+
+Alternate `POST /control/resources/acceptance-local/enabled` with a JSON
+`enabled` boolean, and revoke the client with `DELETE /control/clients/<id>`.
+Administrator mutations require the session cookie and `X-Scarcity-CSRF` header;
+observer requests require the separate bearer credential. Use a private client
+process or pipe to hold credentials and cursors, not shell arguments or retained
+logs. This configuration proves only a real Router's synthetic configured state,
+not provider health, quota or source discovery.
 
 ## Historical Integration Risks
 
@@ -180,7 +279,10 @@ unsupported valid encodings. It neither activates publications nor treats the
 supplied reference as authenticated publisher identity. Source ownership,
 freshness, rights and projected facts remain untrusted producer claims. It does
 not claim full portable receiver conformance, preserve cut history, or connect
-to MI.
+to MI. The empty-file inspector also distinguishes a file's reported invalid and
+unsupported publication states from malformed input. A failed later inspection
+keeps the prior file explicitly last-known only while the Console session
+remains valid; it does not accept a new cut or reconstruct missing history.
 
 A missing or incompatible field must produce a concrete Console consumer
 requirement: affected behavior, evidence/negative case and expected semantics.

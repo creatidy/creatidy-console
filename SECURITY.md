@@ -65,14 +65,15 @@ unavailable. No Kernel HTTP server, arbitrary dispatcher, browser-selected
 principal, active SQLite peer or new authentication system follows from this
 decision.
 
-While the proposal or snapshot is visible, Console checks the existing session
-without extending its idle or absolute expiry. The views hide their data while a
-check is pending and when the document is hidden; foregrounding requires a new
-check. External revocation is detected on the next check, not instantaneously,
-and browser scheduling or suspension can delay checks. This does not erase data
-already seen or copied by the user. The non-touch check uses the pinned
-`@fastify/session` internal cookie decoder and store generation verification;
-revalidate that coupling when the session dependency changes.
+While Router facts, the proposal or a snapshot are visible, Console checks the
+existing session without extending its idle or absolute expiry. The views hide
+their data while a check is pending and when the document is hidden;
+foregrounding requires a new check. External revocation is detected on the next
+check, not instantaneously, and browser scheduling or suspension can delay
+checks. This does not erase data already seen or copied by the user. The
+non-touch check uses the pinned `@fastify/session` internal cookie decoder and
+store generation verification; revalidate that coupling when the session
+dependency changes.
 
 Same-origin Console windows also send a payload-free BroadcastChannel signal
 after logout or an authentication denial, causing other windows to discard their

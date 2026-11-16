@@ -34,12 +34,14 @@ export default function MiSnapshotPanel({ expired }: { expired: () => void }) {
   const generation = useRef(0);
   const active = useRef<AbortController | null>(null);
   const hasSnapshot = useRef(false);
+  const inspecting = useRef(false);
 
   useEffect(() => {
     const hide = () => {
       generation.current++;
       active.current?.abort();
       hasSnapshot.current = false;
+      inspecting.current = false;
       setSnapshot(undefined);
       setPublication(undefined);
       setPrevious(undefined);
@@ -52,7 +54,11 @@ export default function MiSnapshotPanel({ expired }: { expired: () => void }) {
     };
     document.addEventListener("visibilitychange", visibility);
     const timer = setInterval(async () => {
-      if (!hasSnapshot.current || document.visibilityState !== "visible")
+      if (
+        !hasSnapshot.current ||
+        inspecting.current ||
+        document.visibilityState !== "visible"
+      )
         return;
       const current = generation.current;
       const controller = new AbortController();
@@ -98,11 +104,17 @@ export default function MiSnapshotPanel({ expired }: { expired: () => void }) {
     const controller = new AbortController();
     active.current = controller;
     const deadline = setTimeout(() => controller.abort(), 10000);
-    hasSnapshot.current = false;
-    setSnapshot(undefined);
-    setPublication(undefined);
+    inspecting.current = true;
     setVisible(false);
     setMessage("Inspecting an untrusted offline file.");
+    let displayed = false;
+    let sessionExpired = false;
+    const failure = (message: string) =>
+      setMessage(
+        hasSnapshot.current
+          ? `${message} The previous inspected file remains last known.`
+          : message,
+      );
     try {
       if (file.size > 256 * 1024) throw new Error();
       const text = new TextDecoder("utf-8", {
@@ -113,7 +125,7 @@ export default function MiSnapshotPanel({ expired }: { expired: () => void }) {
       let body: object = { text };
       if (mode === "publication") {
         if (!/^[0-9a-f]{64}$/.test(digest)) {
-          setMessage(
+          failure(
             "Enter the separately obtained 64-character expected digest first.",
           );
           return;
@@ -160,7 +172,13 @@ export default function MiSnapshotPanel({ expired }: { expired: () => void }) {
         },
       );
       if (current !== generation.current) return;
-      if (response.status === 401) return expired();
+      if (response.status === 401) {
+        sessionExpired = true;
+        hasSnapshot.current = false;
+        setSnapshot(undefined);
+        setPublication(undefined);
+        return expired();
+      }
       if (!response.ok) throw new Error();
       const result = await response.json();
       if (
@@ -172,12 +190,16 @@ export default function MiSnapshotPanel({ expired }: { expired: () => void }) {
         (mode === "empty" && result.status !== "empty") ||
         (mode === "publication" && result.status !== "checked")
       ) {
-        setMessage(
+        failure(
           result.status === "resync-required"
             ? "The files do not establish a continuous retained cut. Inspect a fresh file without a previous file to resynchronize; earlier history remains unavailable."
-            : result.status === "unsupported"
-              ? "This file uses a state or feature this limited inspector does not support. No publication was activated."
-              : "The file or reference is invalid or outside the supported validation bounds. No publication was activated.",
+            : result.status === "producer-invalid"
+              ? "The selected file reports an invalid retained publication. No publication was activated."
+              : result.status === "producer-unsupported"
+                ? "The selected file reports an unsupported retained publication. No publication was activated."
+                : result.status === "unsupported"
+                  ? "This file uses a state or feature this limited inspector does not support. No publication was activated."
+                  : "The file or reference is invalid or outside the supported validation bounds. No publication was activated.",
         );
         return;
       }
@@ -186,7 +208,13 @@ export default function MiSnapshotPanel({ expired }: { expired: () => void }) {
         signal: controller.signal,
       });
       if (current !== generation.current) return;
-      if (session.status === 401) return expired();
+      if (session.status === 401) {
+        sessionExpired = true;
+        hasSnapshot.current = false;
+        setSnapshot(undefined);
+        setPublication(undefined);
+        return expired();
+      }
       if (!session.ok || (await session.json()).authenticated !== true)
         throw new Error();
       if (
@@ -195,9 +223,15 @@ export default function MiSnapshotPanel({ expired }: { expired: () => void }) {
         document.visibilityState !== "visible"
       )
         return;
-      if (mode === "empty") setSnapshot(result as EmptySnapshot);
-      else setPublication(result as Publication);
+      if (mode === "empty") {
+        setPublication(undefined);
+        setSnapshot(result as EmptySnapshot);
+      } else {
+        setSnapshot(undefined);
+        setPublication(result as Publication);
+      }
       hasSnapshot.current = true;
+      displayed = true;
       setVisible(true);
       setMessage(
         mode === "empty"
@@ -206,10 +240,52 @@ export default function MiSnapshotPanel({ expired }: { expired: () => void }) {
       );
     } catch {
       if (current === generation.current)
-        setMessage("The file could not be inspected.");
+        failure("The file could not be inspected.");
     } finally {
       clearTimeout(deadline);
       if (current === generation.current) {
+        if (!displayed && !sessionExpired && hasSnapshot.current) {
+          const recheck = new AbortController();
+          const recheckDeadline = setTimeout(() => recheck.abort(), 5000);
+          try {
+            const session = await fetch("/api/kernel/session-check", {
+              cache: "no-store",
+              signal: recheck.signal,
+            });
+            if (current !== generation.current) return;
+            if (session.status === 401) {
+              hasSnapshot.current = false;
+              setSnapshot(undefined);
+              setPublication(undefined);
+              expired();
+            } else {
+              const authenticated =
+                session.ok && (await session.json()).authenticated === true;
+              if (current !== generation.current) return;
+              if (
+                authenticated &&
+                !recheck.signal.aborted &&
+                document.visibilityState === "visible"
+              )
+                setVisible(true);
+              else {
+                hasSnapshot.current = false;
+                setSnapshot(undefined);
+                setPublication(undefined);
+              }
+            }
+          } catch {
+            if (current === generation.current) {
+              hasSnapshot.current = false;
+              setSnapshot(undefined);
+              setPublication(undefined);
+            }
+          } finally {
+            clearTimeout(recheckDeadline);
+          }
+        }
+        if (current !== generation.current) return;
+        inspecting.current = false;
         setPrevious(undefined);
         if (previousInput.current) previousInput.current.value = "";
       }

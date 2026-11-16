@@ -65,6 +65,65 @@ afterEach(() => {
 });
 
 describe("authenticated application", () => {
+  it("exposes a complete login response to an ordinary HTTP client", async () => {
+    const { app } = await fixture();
+    try {
+      await app.inject({
+        method: "POST",
+        url: "/api/bootstrap",
+        headers,
+        payload: { token, password },
+      });
+      await app.listen({ host: "127.0.0.1", port: 0 });
+      const address = app.server.address();
+      if (!address || typeof address === "string")
+        throw new Error("No local test port");
+      const result = await new Promise<{
+        status: number | undefined;
+        body: string;
+        cookies: string[] | undefined;
+      }>((resolve, reject) => {
+        const request = httpRequest(
+          {
+            hostname: "127.0.0.1",
+            port: address.port,
+            path: "/api/login",
+            method: "POST",
+            headers,
+          },
+          (response) => {
+            const chunks: Buffer[] = [];
+            response.on("data", (chunk: Buffer) => chunks.push(chunk));
+            response.once("end", () =>
+              resolve({
+                status: response.statusCode,
+                body: Buffer.concat(chunks).toString("utf8"),
+                cookies: response.headers["set-cookie"],
+              }),
+            );
+            response.once("error", reject);
+          },
+        );
+        request.setTimeout(5000, () =>
+          request.destroy(new Error("HTTP timeout")),
+        );
+        request.once("error", reject);
+        request.end(JSON.stringify({ password }));
+      });
+      expect(result.status).toBe(200);
+      expect(JSON.parse(result.body)).toEqual({ ok: true });
+      const cookie = result.cookies?.[0]?.split(";")[0];
+      expect(cookie).toBeTruthy();
+      const session = await app.inject({
+        method: "GET",
+        url: "/api/session",
+        headers: { ...headers, cookie: cookie! },
+      });
+      expect(session.json().authenticated).toBe(true);
+    } finally {
+      await app.close();
+    }
+  });
   it("does not close the producer capability when a browser request aborts", async () => {
     let release!: () => void;
     let started!: () => void;
@@ -417,6 +476,28 @@ describe("authenticated application", () => {
         health: "missing",
       });
       expect(result.headers["cache-control"]).toContain("no-store");
+      for (const [state, status] of [
+        ["invalid", "producer-invalid"],
+        ["unsupported", "producer-unsupported"],
+      ] as const) {
+        const reported = await app.inject({
+          method: "POST",
+          url: "/api/mi/inspect-empty",
+          headers: auth,
+          payload: {
+            text: JSON.stringify({
+              ...empty,
+              publication: {
+                state,
+                reference: null,
+                artifact: null,
+                diagnostics: ["retained-publication-invalid-or-unreadable"],
+              },
+            }),
+          },
+        });
+        expect(reported.json()).toEqual({ status });
+      }
       expect(
         (
           await app.inject({

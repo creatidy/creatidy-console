@@ -108,4 +108,43 @@ describe("bounded offline MI empty snapshots", () => {
       status: "unsupported",
     });
   });
+  it("distinguishes producer-reported invalid and unsupported states from malformed input", () => {
+    const base = emptySnapshot();
+    for (const [state, expected] of [
+      ["invalid", "producer-invalid"],
+      ["unsupported", "producer-unsupported"],
+    ] as const) {
+      const value = {
+        ...base,
+        publication: {
+          state,
+          reference: null,
+          artifact: null,
+          diagnostics: ["retained-publication-invalid-or-unreadable"],
+        },
+      };
+      expect(inspectEmptyMiSnapshot(JSON.stringify(value))).toEqual({
+        status: expected,
+      });
+      expect(
+        inspectEmptyMiSnapshot(
+          JSON.stringify({
+            ...value,
+            publication: { ...value.publication, diagnostics: [] },
+          }),
+        ),
+      ).toEqual({ status: "invalid" });
+      expect(
+        inspectEmptyMiSnapshot(
+          JSON.stringify({
+            ...value,
+            publication: {
+              ...value.publication,
+              diagnostics: ["untrusted detail"],
+            },
+          }),
+        ),
+      ).toEqual({ status: "invalid" });
+    }
+  });
 });

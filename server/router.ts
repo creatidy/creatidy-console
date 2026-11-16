@@ -312,7 +312,10 @@ export function createRouterObserver(directory: string) {
   let status: RouterStatus = "unconfigured";
   let gap: string | null = null;
   let origin: string | null = null;
-  let pending: Promise<ReturnType<typeof view>> | null = null;
+  let pending: {
+    fingerprint: string | null;
+    promise: Promise<ReturnType<typeof view>>;
+  } | null = null;
 
   function configuration() {
     let config: RouterConfig | null;
@@ -322,6 +325,7 @@ export function createRouterObserver(directory: string) {
       status = "configuration_error";
       facts = null;
       position = undefined;
+      gap = null;
       origin = null;
       fingerprint = null;
       return null;
@@ -352,13 +356,19 @@ export function createRouterObserver(directory: string) {
   async function refresh() {
     const config = configuration();
     if (!config) return view();
-    if (pending) return await pending;
+    if (pending) {
+      if (pending.fingerprint === fingerprint) return await pending.promise;
+      const previous = pending;
+      await previous.promise;
+      if (pending === previous) pending = null;
+      return await refresh();
+    }
     const active = refreshOnce(config, fingerprint);
-    pending = active;
+    pending = { fingerprint, promise: active };
     try {
       return await active;
     } finally {
-      if (pending === active) pending = null;
+      if (pending?.promise === active) pending = null;
     }
   }
   async function refreshOnce(
@@ -401,7 +411,12 @@ export function createRouterObserver(directory: string) {
         return view();
       }
       if (result.status !== 200) {
-        if (result.status >= 500) status = "disconnected";
+        if (
+          result.status >= 500 ||
+          result.status === 408 ||
+          result.status === 429
+        )
+          status = "disconnected";
         else {
           status = "unsupported";
           facts = null;
@@ -422,6 +437,9 @@ export function createRouterObserver(directory: string) {
           gap === "Replay was rejected; resynchronization is required."
         )
           nextGap = "Replay was rejected; the snapshot was resynchronized.";
+        else if (!nextGap)
+          nextGap =
+            "Earlier Router progress is unavailable; this snapshot does not reconstruct history.";
       } else {
         const events = list(envelope.events);
         if (events.length > 256)
@@ -479,7 +497,12 @@ export function createRouterObserver(directory: string) {
             gap = null;
             return view();
           }
-          if (snapshot.status >= 500) throw new Error("Snapshot unavailable");
+          if (
+            snapshot.status >= 500 ||
+            snapshot.status === 408 ||
+            snapshot.status === 429
+          )
+            throw new Error("Snapshot unavailable");
           if (snapshot.status !== 200)
             throw new Unsupported("Snapshot unsupported");
           envelope = object(snapshot.data);

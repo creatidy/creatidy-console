@@ -37,11 +37,12 @@ function utc(value: unknown): value is string {
   );
 }
 
-export function inspectEmptyMiSnapshot(
-  text: string,
-):
+export function inspectEmptyMiSnapshot(text: string):
   | { status: "empty"; instance: string; evaluatedAt: string; health: string }
-  | { status: "unsupported" | "invalid" } {
+  | {
+      status:
+        "producer-invalid" | "producer-unsupported" | "unsupported" | "invalid";
+    } {
   try {
     if (typeof text !== "string" || Buffer.byteLength(text) > 256 * 1024)
       throw new Error("invalid");
@@ -84,11 +85,30 @@ export function inspectEmptyMiSnapshot(
       "artifact",
       "diagnostics",
     ]);
-    if (publication.state !== "empty") return { status: "unsupported" };
+    if (publication.state === "available") return { status: "unsupported" };
+    if (
+      typeof publication.state !== "string" ||
+      !["empty", "invalid", "unsupported"].includes(publication.state)
+    )
+      throw new Error("invalid");
+    const diagnostics = publication.diagnostics;
     if (
       publication.reference !== null ||
       publication.artifact !== null ||
-      !empty(publication.diagnostics)
+      !Array.isArray(diagnostics) ||
+      new Set(diagnostics).size !== diagnostics.length ||
+      diagnostics.some(
+        (item) =>
+          typeof item !== "string" ||
+          ![
+            "retained-publication-invalid-or-unreadable",
+            "publication-changed-during-read",
+            "retained-publication-unsupported",
+          ].includes(item),
+      ) ||
+      (publication.state === "empty"
+        ? diagnostics.length !== 0
+        : diagnostics.length === 0)
     )
       throw new Error("invalid");
     const health = object(root.health, [
@@ -154,6 +174,13 @@ export function inspectEmptyMiSnapshot(
       history.projection_changed !== null
     )
       throw new Error("invalid");
+    if (publication.state !== "empty")
+      return {
+        status:
+          publication.state === "invalid"
+            ? "producer-invalid"
+            : "producer-unsupported",
+      };
     return {
       status: "empty",
       instance: root.instance,

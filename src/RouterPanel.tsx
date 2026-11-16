@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { RouterView } from "../server/router.ts";
 
 const descriptions: Record<RouterView["status"], string> = {
@@ -21,8 +21,21 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
   const [view, setView] = useState<RouterView | null>(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
+  const [visible, setVisible] = useState(false);
+  const currentView = useRef<RouterView | null>(null);
+  const generation = useRef(0);
+  const active = useRef<AbortController | null>(null);
+  const loading = useRef(false);
 
   async function load(refresh = false) {
+    generation.current++;
+    active.current?.abort();
+    const current = generation.current;
+    const controller = new AbortController();
+    active.current = controller;
+    const deadline = setTimeout(() => controller.abort(), 10000);
+    loading.current = true;
+    setVisible(false);
     if (refresh) setPending(true);
     try {
       const response = await fetch(
@@ -32,43 +45,160 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: "{}",
+              signal: controller.signal,
             }
-          : { cache: "no-store" },
+          : { cache: "no-store", signal: controller.signal },
       );
+      if (current !== generation.current) return;
       if (response.status === 401) {
         expired();
         return;
       }
       if (!response.ok) throw new Error();
-      setView((await response.json()) as RouterView);
+      const next = (await response.json()) as RouterView;
+      if (current !== generation.current) return;
+      currentView.current = next;
+      setView(next);
       setError("");
     } catch {
+      if (current !== generation.current) return;
       setError(
         "Console could not retrieve Router status. Check the application connection.",
       );
-      setView((previous) =>
-        previous
-          ? {
-              ...previous,
-              status: "disconnected",
-              last_known: previous.facts !== null,
-            }
-          : null,
-      );
+      currentView.current = currentView.current
+        ? {
+            ...currentView.current,
+            status: "disconnected",
+            last_known: currentView.current.facts !== null,
+          }
+        : null;
+      setView(currentView.current);
     } finally {
-      if (refresh) setPending(false);
+      if (current === generation.current) {
+        if (
+          !currentView.current?.facts &&
+          !currentView.current?.origin &&
+          !currentView.current?.gap
+        ) {
+          clearTimeout(deadline);
+          loading.current = false;
+          if (refresh) setPending(false);
+          setVisible(true);
+          return;
+        }
+        try {
+          const session = await fetch("/api/kernel/session-check", {
+            cache: "no-store",
+            signal: controller.signal,
+          });
+          if (current !== generation.current) return;
+          if (session.status === 401) {
+            currentView.current = null;
+            setView(null);
+            expired();
+          } else if (
+            session.ok &&
+            (await session.json()).authenticated === true &&
+            current === generation.current &&
+            !controller.signal.aborted &&
+            document.visibilityState === "visible"
+          ) {
+            setVisible(true);
+          } else if (current === generation.current) {
+            currentView.current = null;
+            setView(null);
+          }
+        } catch {
+          if (current === generation.current) {
+            currentView.current = null;
+            setView(null);
+          }
+        } finally {
+          clearTimeout(deadline);
+          if (current === generation.current) {
+            loading.current = false;
+            if (refresh) setPending(false);
+          }
+        }
+      } else clearTimeout(deadline);
     }
   }
   useEffect(() => {
     void load();
+    const hide = () => {
+      generation.current++;
+      active.current?.abort();
+      loading.current = false;
+      currentView.current = null;
+      setView(null);
+      setVisible(false);
+      setPending(false);
+    };
+    const visibility = () => {
+      if (document.visibilityState !== "visible") hide();
+      else void load();
+    };
+    document.addEventListener("visibilitychange", visibility);
+    const timer = setInterval(async () => {
+      if (
+        document.visibilityState !== "visible" ||
+        !currentView.current ||
+        (!currentView.current.facts &&
+          !currentView.current.origin &&
+          !currentView.current.gap) ||
+        loading.current
+      )
+        return;
+      const current = generation.current;
+      const controller = new AbortController();
+      const deadline = setTimeout(() => controller.abort(), 5000);
+      setVisible(false);
+      try {
+        const response = await fetch("/api/kernel/session-check", {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (current !== generation.current) return;
+        if (response.status === 401) {
+          hide();
+          expired();
+        } else {
+          const authenticated =
+            response.ok && (await response.json()).authenticated === true;
+          if (current !== generation.current) return;
+          if (!authenticated) hide();
+          else if (
+            !controller.signal.aborted &&
+            document.visibilityState === "visible"
+          )
+            setVisible(true);
+        }
+      } catch {
+        if (current === generation.current) hide();
+      } finally {
+        clearTimeout(deadline);
+      }
+    }, 10000);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", visibility);
+      generation.current++;
+      active.current?.abort();
+      currentView.current = null;
+    };
   }, []);
 
   return (
     <section aria-labelledby="router-heading">
       <h2 id="router-heading">Router observer</h2>
       {error && <p role="alert">{error}</p>}
-      {!view ? (
-        <p>Checking connection configuration.</p>
+      {!view || !visible ? (
+        <>
+          <p>Checking connection configuration and session.</p>
+          <button type="button" disabled={pending} onClick={() => void load()}>
+            Retry Router status
+          </button>
+        </>
       ) : (
         <>
           <p role="status">{descriptions[view.status]}</p>
