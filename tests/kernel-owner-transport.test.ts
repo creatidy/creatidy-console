@@ -226,29 +226,43 @@ it("rejects inconsistent snapshot scope or coverage", async () => {
   ).rejects.toThrow();
 });
 
-it("verifies oversized scope markers against the independently bound scope", async () => {
-  const scope = "\u00e9".repeat(800);
-  const encoded = `"${"\\u00e9".repeat(800)}"`;
-  const digest = createHash("sha256").update(encoded).digest("hex");
-  const item = {
-    ...snapshot(),
-    scope: {
-      oversized: true,
-      index: 0,
-      bytes: Buffer.byteLength(encoded),
-      sha256: digest,
-    },
-    position: {
-      producer: "a".repeat(32),
-      scope: `sha256:${digest}`,
-      sequence: 3,
-    },
-  };
-  const { client } = await pair((socket) => socket.write(response(item)));
-  const channel = createLocalOwnerTransport(client, scope);
-  expect((await channel.readSnapshot()).scope).toBe(scope);
-  channel.close();
-});
+it.each([
+  ["non-ASCII", "\u00e9", "\\u00e9"],
+  ["DEL", "\u007f", "\\u007f"],
+])(
+  "verifies oversized %s scope markers and cursors",
+  async (_name, char, escaped) => {
+    const scope = char.repeat(800);
+    const encoded = `"${escaped.repeat(800)}"`;
+    const digest = createHash("sha256").update(encoded).digest("hex");
+    const item = {
+      ...snapshot(),
+      scope: {
+        oversized: true,
+        index: 0,
+        bytes: Buffer.byteLength(encoded),
+        sha256: digest,
+      },
+      position: {
+        producer: "a".repeat(32),
+        scope: `sha256:${digest}`,
+        sequence: 3,
+      },
+    };
+    const { client, requests } = await pair((socket, request) => {
+      if (request.action === "snapshot") socket.write(response(item));
+      else
+        socket.write(
+          response({ events: [], position: item.position, gap: false }),
+        );
+    });
+    const channel = createLocalOwnerTransport(client, scope);
+    expect((await channel.readSnapshot()).scope).toBe(scope);
+    expect((await channel.readSnapshot()).history).toBe("continuous");
+    expect(requests[2]?.after).toEqual(item.position);
+    channel.close();
+  },
+);
 
 it("exposes bounded work and attempt facts while marking oversized records", async () => {
   const item = snapshot();

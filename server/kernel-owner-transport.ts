@@ -94,7 +94,7 @@ export function createLocalOwnerTransport(
   let priorHistoryUnknown = false;
   let seenSnapshot = false;
   const encodedScope = JSON.stringify(scope).replace(
-    /[\u0080-\uffff]/g,
+    /[\u007f-\uffff]/g,
     (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`,
   );
   const scopeBytes = Buffer.byteLength(encodedScope);
