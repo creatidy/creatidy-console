@@ -41,15 +41,17 @@ desired verdict. Follow AGENTS.md's conversational-independence policy. The
 agent definition owns the JSON result contract and inherited model binding.
 Never resume a past reviewer.
 
-Preserve the same delivery ledger and 10-review ceiling used by finish-pr:
-reserve/persist the next ordinal before every whole-PR dispatch, including
-failed/COMMENT attempts. Apply the shared finite technical attempt/time limit;
-do not reset ordinals across reentry or dispatch review 11. Infrastructure
-failure requires diagnosis and changed environment/strategy, not identical
-retries. Independently inspect cited public pinned sources through alternative
-authorized reads or isolated exact-revision fetch/clone; never substitute the
-implementer's report. Distinguish findings, infrastructure failure and judgment
-uncertainty before escalation; complete the shared BLOCKED/decision contracts.
+Preserve the same delivery ledger and effective review ceiling used by
+finish-pr: reserve/persist the next ordinal before every whole-PR dispatch,
+including failed/COMMENT attempts. Apply the shared finite technical
+attempt/time limit; do not reset ordinals across reentry. Without an effective
+exception under the shared contract and higher-priority instructions, do not
+dispatch review 11. Infrastructure failure requires diagnosis and changed
+environment/strategy, not identical retries. Independently inspect cited public
+pinned sources through alternative authorized reads or isolated exact-revision
+fetch/clone; never substitute the implementer's report. Distinguish findings,
+infrastructure failure and judgment uncertainty before escalation; complete the
+shared BLOCKED/decision contracts.
 
 Require JSON fields reviewed_head, reviewed_base, verdict, findings,
 limitations, checks_run as defined in `.kilo/agents/pr-reviewer.md`. Validate

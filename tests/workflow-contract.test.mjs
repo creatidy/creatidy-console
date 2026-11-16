@@ -506,7 +506,7 @@ describe("ported Model Intelligence workflow contract", () => {
       "Before EVERY task dispatch reserve/persist the next review ordinal",
       "Reinvoking `/finish-pr`, changing phase, reviewer task, model or session MUST reuse the same delivery counter",
       "attempt bounded recovery from durable evidence; unresolved recovery is BLOCKED",
-      "Never dispatch review 11",
+      "Without an effective exception, never dispatch review 11",
       "without patches that cannot receive a fresh review",
       "not a target: stop as soon as an owner decision is clearly required",
     ])
@@ -528,6 +528,40 @@ describe("ported Model Intelligence workflow contract", () => {
       "canonical evidence, never from the ledger",
     ])
       expect(progress).toContain(requirement);
+  });
+
+  test("review exceptions remain explicit, bounded and subordinate", () => {
+    const policy = text(".kilo/rules/30-implementation-discipline.md");
+    for (const requirement of [
+      "The default is 10",
+      "controlling higher-priority execution instructions permit it",
+      "owner explicitly authorizes the identified issue and PR",
+      "increased maximum and reason",
+      "resumption of a stopped delivery",
+      "preserve all earlier ordinals and verdicts; never reset them",
+      "An unmerged policy PR, repository wording or a new session alone cannot override controlling instructions",
+      "no patch without a fresh-review slot under the effective ceiling",
+      "Independent review, validation, security and merge requirements are unchanged",
+      "For Console issue #34 / PR #39",
+      "PR comment #22232",
+      "issue #40 comment #22267",
+      "Unicode validation defect found at the review bound",
+      "Ordinals 1-10 remain counted",
+      "only 11 and 12 could follow",
+      "after this policy amendment is integrated into canonical `develop`",
+      "The current execution instructions prohibit review 11",
+    ])
+      expect(policy).toContain(requirement);
+    for (const path of [
+      "AGENTS.md",
+      ".kilo/rules/10-task-system.md",
+      ".kilo/command/finish-pr.md",
+      ".kilo/command/loop.md",
+      ".kilo/command/review-pr.md",
+      "CONTRIBUTING.md",
+    ]) {
+      expect(text(path)).toMatch(/effective|controlling/u);
+    }
   });
 
   test("exact approval and loop-only PR merge", () => {

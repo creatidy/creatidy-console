@@ -109,8 +109,29 @@ paths and a finite attempt/time limit. Default to at most three technical
 remediation attempts per distinct obstacle across reentry; do not rename the
 same obstacle to reset its budget. Setup/probes do not consume review ordinals;
 every dispatched whole-PR review, including failed/COMMENT attempts, consumes
-the next ordinal within the existing 10-review delivery ceiling. Preserve all
-attempts, changed conditions and outcomes; no patch without a fresh-review slot.
+the next ordinal within the effective delivery ceiling. The default is 10. An
+exception is effective only if controlling higher-priority execution
+instructions permit it and the owner explicitly authorizes the identified issue
+and PR, the increased maximum and reason, and resumption of a stopped delivery.
+Record that authorization and preserve all earlier ordinals and verdicts; never
+reset them. An unmerged policy PR, repository wording or a new session alone
+cannot override controlling instructions. Preserve all attempts, changed
+conditions and outcomes; no patch without a fresh-review slot under the
+effective ceiling. Independent review, validation, security and merge
+requirements are unchanged.
+
+For Console issue #34 / PR #39, the owner requested a maximum of 12 in
+[PR comment #22232](https://forgejo.creatidy.com/Creatidy/creatidy-console/pulls/39#issuecomment-22232).
+The subsequent policy-maintenance mandate explicitly authorizes resumption after
+STOP_REVISE, as recorded in
+[issue #40 comment #22267](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/40#issuecomment-22267).
+The reason is the actionable Unicode validation defect found at the review bound
+with no remaining fresh review slot. Ordinals 1-10 remain counted; only 11 and
+12 could follow. The requested exception can become effective only after this
+policy amendment is integrated into canonical `develop` and controlling
+instructions permit it. The current execution instructions prohibit review 11;
+this record is not permission to dispatch it or patch PR #39 in the current
+session.
 
 Choose the smallest suitable existing mechanism, not Docker automatically:
 
@@ -196,9 +217,10 @@ recovery must be diagnosed/recovered from durable evidence, never reset.
 Continue implementation, validation, independent review, ordinary remediation
 and fresh validation/review until exact independent APPROVE with acceptance
 satisfied, a genuinely exhausted budget, an external condition without an
-authorized workaround, or a genuine owner decision. At review exhaustion retain
-STOP_REVISE for actionable defects and BLOCKED for inability to establish a
-verdict; never issue review 11. Security, validation, independence, exact-HEAD
-and delegated merge/release/deploy authority remain unchanged.
+authorized workaround, or a genuine owner decision. At the effective review
+ceiling retain STOP_REVISE for actionable defects and BLOCKED for inability to
+establish a verdict; never exceed that ceiling. Without an effective exception,
+never issue review 11. Security, validation, independence, exact-HEAD and
+delegated merge/release/deploy authority remain unchanged.
 
 <!-- Adapted from Model Intelligence 013cbb43e11d7f698d359db5a456d26d8075e34e: Console authoritative product/security/reuse boundaries; scope and autonomy semantics preserved. See NOTICE. -->
