@@ -9,6 +9,11 @@ import { join, resolve } from "node:path";
 import { createRequire } from "node:module";
 import { openState } from "./state.ts";
 import { createRouterObserver } from "./router.ts";
+import {
+  parseOwnerJson,
+  prepareLocalOwnerCommand,
+  type OwnerObservation,
+} from "./kernel-owner-v1.ts";
 
 declare module "fastify" {
   interface Session {
@@ -25,6 +30,25 @@ export interface AppOptions {
   kernelOwner?: {
     scope: string;
     readProposal: () => Promise<{ digest: string; text: string }>;
+    readApprovalScope?: () => Promise<{
+      digest: string;
+      proposalDigest: string;
+      text: string;
+    }>;
+    readRevision?: () => Promise<{
+      revision: string;
+      status: string;
+      specDigest?: string;
+    }>;
+    sendCommand?: (
+      command: ReturnType<typeof prepareLocalOwnerCommand>,
+    ) => Promise<OwnerObservation>;
+    canReplay?: (
+      command: ReturnType<typeof prepareLocalOwnerCommand>,
+    ) => boolean;
+    replayCommand?: (
+      command: ReturnType<typeof prepareLocalOwnerCommand>,
+    ) => Promise<OwnerObservation>;
     close: () => void;
   };
 }
@@ -50,6 +74,10 @@ export async function createApp(options: AppOptions) {
     store,
     revoke,
     clock: now,
+    beginOwnerCommand,
+    beginOwnerReplay,
+    dispatchOwnerCommand,
+    recordOwnerReceipt,
   } = openState(options.stateDirectory, options.now);
   let signing = db
     .prepare("SELECT value FROM settings WHERE name = 'signing_key'")
@@ -372,18 +400,328 @@ export async function createApp(options: AppOptions) {
     if (!proposal) return { status: "disconnected", actions: [] };
     return {
       status: "connected",
-      actions: [],
+      actions:
+        ownerChannel.sendCommand &&
+        ownerChannel.readApprovalScope &&
+        ownerChannel.readRevision
+          ? ["approve"]
+          : [],
       scope: ownerChannel.scope,
       digest: proposal.digest,
       text: proposal.text,
     };
   });
+  let approvalScopeRead:
+    | Promise<{ digest: string; proposalDigest: string; text: string }>
+    | undefined;
+  app.get("/api/kernel/approval-scope", async (request, reply) => {
+    if (!(await authenticated(request)))
+      return reply.code(401).send({ error: "Login required" });
+    const channel = options.kernelOwner;
+    if (!channel?.readApprovalScope) return { status: "unavailable" };
+    let observation:
+      { digest: string; proposalDigest: string; text: string } | undefined;
+    try {
+      approvalScopeRead ??= channel.readApprovalScope();
+      const pending = approvalScopeRead;
+      try {
+        observation = await pending;
+      } finally {
+        if (approvalScopeRead === pending) approvalScopeRead = undefined;
+      }
+    } catch {
+      // Do not expose producer errors or retain partial observations.
+    }
+    if (!(await authenticated(request)))
+      return reply.code(401).send({ error: "Login required" });
+    return observation
+      ? { status: "connected", scope: channel.scope, ...observation }
+      : { status: "disconnected" };
+  });
+  const replayable = new Map<
+    string,
+    ReturnType<typeof prepareLocalOwnerCommand>
+  >();
+  app.get("/api/kernel/owner-journal", async (request, reply) => {
+    if (!(await authenticated(request)))
+      return reply.code(401).send({ error: "Login required" });
+    const channel = options.kernelOwner;
+    if (!channel) return { status: "unavailable" };
+    try {
+      const rows = db
+        .prepare(
+          "SELECT command_id, input, outcome, receipt, created FROM owner_commands WHERE scope = ? ORDER BY created DESC, command_id LIMIT 128",
+        )
+        .all(channel.scope);
+      const commands = rows.map((row) => {
+        const input = Buffer.from(row.input as Uint8Array);
+        if (input.length < 5 || input.readUInt32BE(0) !== input.length - 4)
+          throw new Error("Invalid journal frame");
+        const parsed = parseOwnerJson(
+          new TextDecoder("utf-8", { fatal: true }).decode(input.subarray(4)),
+        );
+        if (
+          !parsed ||
+          typeof parsed !== "object" ||
+          Array.isArray(parsed) ||
+          !("action" in parsed) ||
+          !("command_id" in parsed) ||
+          parsed.command_id !== row.command_id ||
+          !["approve", "start-managed", "stop", "reconcile"].includes(
+            String(parsed.action),
+          )
+        )
+          throw new Error("Invalid journal record");
+        const receipt =
+          row.receipt === null ? null : JSON.parse(String(row.receipt));
+        if (
+          (row.outcome !== "unknown" && row.outcome !== "historical") ||
+          (row.outcome === "unknown" && receipt !== null) ||
+          (row.outcome === "historical" &&
+            (!receipt || receipt.kind !== "historical-receipt-shape"))
+        )
+          throw new Error("Invalid journal outcome");
+        const command = replayable.get(String(row.command_id));
+        return {
+          commandId: row.command_id,
+          action: parsed.action,
+          outcome: row.outcome,
+          receipt,
+          created: row.created,
+          canReplay:
+            row.outcome === "unknown" &&
+            !!command &&
+            !!channel.canReplay?.(command) &&
+            !!channel.replayCommand,
+        };
+      });
+      if (!(await authenticated(request)))
+        return reply.code(401).send({ error: "Login required" });
+      return { status: "available", scope: channel.scope, commands };
+    } catch {
+      return reply.code(503).send({ error: "Command history unavailable" });
+    }
+  });
+  type Review = {
+    binding: string;
+    expires: number;
+    scopeDigest: string;
+    proposalDigest: string;
+    revision: string;
+    approvalExpiry: string;
+  };
+  const reviews = new Map<string, Review>();
+  const binding = (request: import("fastify").FastifyRequest) =>
+    createHash("sha256")
+      .update(request.session.sessionStoreId)
+      .update("\0")
+      .update(request.session.sessionId)
+      .digest("hex");
+  app.post("/api/kernel/owner-review", async (request, reply) => {
+    if (!(await authenticated(request)))
+      return reply.code(401).send({ error: "Login required" });
+    const channel = options.kernelOwner;
+    if (
+      !channel?.readApprovalScope ||
+      !channel.readRevision ||
+      !channel.sendCommand
+    )
+      return reply
+        .code(503)
+        .send({ error: "Kernel owner capability unavailable" });
+    if (
+      db
+        .prepare(
+          "SELECT 1 FROM owner_commands WHERE scope = ? AND outcome = 'unknown'",
+        )
+        .get(channel.scope)
+    )
+      return reply
+        .code(409)
+        .send({ error: "Unresolved command; inspect history" });
+    const body = request.body;
+    if (!body || typeof body !== "object" || Array.isArray(body))
+      return reply.code(400).send({ error: "Invalid request" });
+    const input = body as Record<string, unknown>;
+    if (
+      Object.keys(input).length !== 1 ||
+      typeof input.expires_at !== "string" ||
+      !/^[1-9][0-9]{0,18}$/.test(input.expires_at) ||
+      BigInt(input.expires_at) > 9223372036854775807n
+    )
+      return reply.code(400).send({ error: "Invalid request" });
+    const originalBinding = binding(request);
+    try {
+      const proposal = await channel.readProposal();
+      const scope = await channel.readApprovalScope();
+      const revision = await channel.readRevision();
+      if (
+        !(await authenticated(request)) ||
+        binding(request) !== originalBinding
+      )
+        return reply.code(401).send({ error: "Login required" });
+      if (scope.proposalDigest !== proposal.digest)
+        return reply.code(409).send({ error: "Review changed" });
+      const time = now();
+      for (const [key, value] of reviews)
+        if (value.expires <= time) reviews.delete(key);
+      if (reviews.size >= 32)
+        return reply.code(503).send({ error: "Review unavailable" });
+      const review = randomBytes(32).toString("hex");
+      reviews.set(review, {
+        binding: originalBinding,
+        expires: time + 60_000,
+        scopeDigest: scope.digest,
+        proposalDigest: proposal.digest,
+        revision: revision.revision,
+        approvalExpiry: input.expires_at,
+      });
+      return {
+        review,
+        scope: channel.scope,
+        scopeDigest: scope.digest,
+        proposalDigest: proposal.digest,
+        revision: revision.revision,
+        status: revision.status,
+        approvalExpiry: input.expires_at,
+        text: scope.text,
+      };
+    } catch {
+      return reply.code(503).send({ error: "Review unavailable" });
+    }
+  });
   app.post("/api/kernel/owner", async (request, reply) => {
     if (!(await authenticated(request)))
       return reply.code(401).send({ error: "Login required" });
-    return reply
-      .code(503)
-      .send({ error: "Kernel owner capability unavailable" });
+    const channel = options.kernelOwner;
+    if (
+      !channel?.readApprovalScope ||
+      !channel.readRevision ||
+      !channel.sendCommand
+    )
+      return reply
+        .code(503)
+        .send({ error: "Kernel owner capability unavailable" });
+    const body = request.body;
+    if (!body || typeof body !== "object" || Array.isArray(body))
+      return reply.code(400).send({ error: "Invalid request" });
+    const input = body as Record<string, unknown>;
+    if (
+      Object.keys(input).length !== 2 ||
+      input.action !== "approve" ||
+      typeof input.review !== "string" ||
+      !/^[0-9a-f]{64}$/.test(input.review)
+    )
+      return reply.code(400).send({ error: "Invalid request" });
+    const review = reviews.get(input.review);
+    if (
+      !review ||
+      review.binding !== binding(request) ||
+      review.expires <= now()
+    )
+      return reply.code(409).send({ error: "Review unavailable" });
+    reviews.delete(input.review);
+    try {
+      const scope = await channel.readApprovalScope();
+      const revision = await channel.readRevision();
+      if (
+        !(await authenticated(request)) ||
+        binding(request) !== review.binding
+      )
+        return reply.code(401).send({ error: "Login required" });
+      if (
+        review.expires <= now() ||
+        scope.digest !== review.scopeDigest ||
+        scope.proposalDigest !== review.proposalDigest ||
+        revision.revision !== review.revision
+      )
+        return reply.code(409).send({ error: "Review changed" });
+      const command = prepareLocalOwnerCommand(channel.scope, {
+        action: "approve",
+        expected_revision: BigInt(review.revision),
+        decision_id: randomBytes(32).toString("hex"),
+        expires_at: BigInt(review.approvalExpiry),
+        proposal_digest: review.proposalDigest,
+        scope_digest: review.scopeDigest,
+      });
+      const token = beginOwnerCommand(
+        request.session.sessionStoreId,
+        request.session.sessionId,
+        command,
+      );
+      const pending = dispatchOwnerCommand(token, (prepared) =>
+        channel.sendCommand!(prepared),
+      );
+      const result = await pending;
+      recordOwnerReceipt(command, result);
+      if (
+        result.kind === "unknown" &&
+        channel.canReplay?.(command) &&
+        channel.replayCommand
+      )
+        replayable.set(command.commandId, command);
+      if (!(await authenticated(request)))
+        return reply.code(401).send({ error: "Login required" });
+      return JSON.parse(
+        JSON.stringify(result, (_key, value: unknown) =>
+          typeof value === "bigint" ? value.toString() : value,
+        ),
+      );
+    } catch {
+      return reply
+        .code(503)
+        .send({ error: "Command unavailable or outcome unknown" });
+    }
+  });
+  app.post("/api/kernel/owner-replay", async (request, reply) => {
+    if (!(await authenticated(request)))
+      return reply.code(401).send({ error: "Login required" });
+    const channel = options.kernelOwner;
+    const body = request.body;
+    if (!body || typeof body !== "object" || Array.isArray(body))
+      return reply.code(400).send({ error: "Invalid request" });
+    const input = body as Record<string, unknown>;
+    if (
+      Object.keys(input).length !== 1 ||
+      typeof input.commandId !== "string" ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
+        input.commandId,
+      )
+    )
+      return reply.code(400).send({ error: "Invalid request" });
+    const command = replayable.get(input.commandId);
+    if (!command || !channel?.canReplay?.(command) || !channel.replayCommand) {
+      replayable.delete(input.commandId);
+      return reply
+        .code(409)
+        .send({ error: "Original owner channel unavailable" });
+    }
+    replayable.delete(input.commandId);
+    try {
+      const token = beginOwnerReplay(
+        request.session.sessionStoreId,
+        request.session.sessionId,
+        command,
+      );
+      const pending = dispatchOwnerCommand(token, (prepared) =>
+        channel.replayCommand!(prepared),
+      );
+      const result = await pending;
+      recordOwnerReceipt(command, result);
+      if (result.kind === "unknown" && channel.canReplay(command))
+        replayable.set(command.commandId, command);
+      if (!(await authenticated(request)))
+        return reply.code(401).send({ error: "Login required" });
+      return JSON.parse(
+        JSON.stringify(result, (_key, value: unknown) =>
+          typeof value === "bigint" ? value.toString() : value,
+        ),
+      );
+    } catch {
+      return reply
+        .code(503)
+        .send({ error: "Original outcome remains unknown" });
+    }
   });
   await app.register(fastifyStatic, {
     root: resolve(options.staticDirectory ?? "dist"),

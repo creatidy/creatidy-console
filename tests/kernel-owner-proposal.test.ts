@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
+  assembleLocalOwnerApprovalScope,
   assembleLocalOwnerProposal,
   MAX_PROPOSAL_BYTES,
 } from "../server/kernel-owner-proposal.ts";
@@ -100,6 +101,128 @@ function frames(items: unknown[]) {
 }
 
 describe("synthetic Kernel proposal chunks", () => {
+  it("validates bounded, digest-verified approval-scope evidence", () => {
+    const reference = { policy_id: "p", version: "v", digest: "d" };
+    const budget = {
+      version: 1,
+      counts: Object.fromEntries(
+        [
+          "attempt",
+          "review",
+          "remediation",
+          "tool",
+          "retry",
+          "helper",
+          "verification",
+          "auxiliary",
+        ].map((name) => [name, 1]),
+      ),
+      max_active: 1,
+      retained_bytes: 1,
+      resources: [],
+      strict_inference: false,
+    };
+    const value = {
+      kind: "ordinary-approval-scope",
+      version: 1,
+      owner: "owner",
+      proposal: proposal(),
+      policy: {
+        reference,
+        budget: { max_attempts: 1, max_active_attempts: 1 },
+        authority: {
+          owner_id: "owner",
+          allowed_actions: [],
+          max_attempts: 1,
+          trusted_satisfaction_issuers: [],
+          delegated_actor_ids: [],
+        },
+        paths: [],
+        network: [],
+        effects: [],
+        recipes: ["recipe"],
+        evidence_producers: ["producer"],
+        freshness_seconds: 1,
+        repair_baseline_reference: null,
+        work_budget: budget,
+        project_budget: budget,
+        project_id: "project",
+      },
+      verification: {
+        reference,
+        checks: ["paths", "structural", "commands"],
+        reviewer_required: true,
+      },
+      execution_profile: {
+        harness: "codex",
+        provider: null,
+        model: null,
+        effort: null,
+        trust: "trusted_development",
+      },
+      execution_reference: `basic-harness-policy:${createHash("sha256").update('{"effort":null,"harness":"codex","model":null,"provider":null,"trust":"trusted_development"}').digest("hex")}`,
+    };
+    value.proposal.objective = `\u{1f680} ${value.proposal.objective}`;
+    const raw = Buffer.from(JSON.stringify(value));
+    const sorted = (input: unknown): unknown => {
+      if (Array.isArray(input)) return input.map(sorted);
+      if (input && typeof input === "object")
+        return Object.fromEntries(
+          Object.entries(input)
+            .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+            .map(([key, item]) => [key, sorted(item)]),
+        );
+      return input;
+    };
+    const canonical = JSON.stringify(sorted(value.proposal)).replace(
+      /[\u007f-\uffff]/g,
+      (character) =>
+        `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
+    );
+    expect(
+      assembleLocalOwnerApprovalScope(frames(chunks(raw)), "program"),
+    ).toEqual(
+      expect.objectContaining({
+        digest: createHash("sha256").update(raw).digest("hex"),
+        text: raw.toString(),
+        proposalDigest: createHash("sha256").update(canonical).digest("hex"),
+      }),
+    );
+    for (const altered of [
+      { ...value, version: 2 },
+      { ...value, policy: null },
+      {
+        ...value,
+        policy: {
+          ...value.policy,
+          authority: {
+            ...value.policy.authority,
+            allowed_actions: ["future_action"],
+          },
+        },
+      },
+      {
+        ...value,
+        policy: { ...value.policy, work_budget: { ...budget, version: 2 } },
+      },
+      {
+        ...value,
+        verification: { ...value.verification, reviewer_required: false },
+      },
+      {
+        ...value,
+        execution_reference: `basic-harness-policy:${"f".repeat(64)}`,
+      },
+      { ...value, unexpected: true },
+      { ...value, proposal: { ...value.proposal, program: "other" } },
+    ])
+      expect(() =>
+        assembleLocalOwnerApprovalScope(
+          frames(chunks(Buffer.from(JSON.stringify(altered)))),
+          "program",
+        ),
+      ).toThrow();
+  });
   it("assembles a proposal larger than one producer response", () => {
     const value = proposal();
     value.objective = "x".repeat(1024 * 1024 + 1);

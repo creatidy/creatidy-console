@@ -310,6 +310,30 @@ requires separate owner authorization and its applicable security and evidence
 gates. The requested expiry is an upper bound, not a guaranteed effective
 deadline.
 
+Kernel
+[PR #132](https://forgejo.creatidy.com/Creatidy/creatidy-kernel/pulls/132) adds
+a separately digest-bound approval scope containing the producer's policy,
+verification and execution inputs as well as the proposal. Console can inspect a
+supported version-1 scope as complete untrusted text after checking the scope
+and embedded proposal digests; unsupported or oversized data remains
+unavailable. The execution profile reference is accepted only when the profile
+has a canonically reproducible encoding, because the producer may hash other
+original encodings that its scope does not expose. This is a supported subset,
+not proof that every producer profile is canonical. The host's label still does
+not prove producer identity, and the displayed scope is not itself a grant.
+
+The development admission path accepts only a reviewed approval with exact
+scope, proposal, revision and requested expiry. It records the original input
+and an unknown outcome before a possible send, preserves unresolved records
+across restart and bounds storage by aging out historical records first. A
+manual exact receipt check is available only on the same retained channel after
+it reported the original intent without a receipt; a lost channel or restart
+does not establish continuity. No snapshot label clears an unknown outcome.
+Historical receipts do not prove a present grant or effect. The production
+launcher does not yet enable this command path: synthetic tests and an isolated
+producer probe are not installed Console conformance or authority to operate a
+real producer.
+
 Each real command additionally requires idempotency/input/reconciliation, audit
 receipt and negative tests for denial, expiration, stale subject, multiple
 clients and timeout-after-acceptance. Receipt != observed effect. No blind

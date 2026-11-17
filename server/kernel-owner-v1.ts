@@ -83,6 +83,7 @@ export function prepareLocalOwnerCommand(
           "decision_id",
           "expires_at",
           "proposal_digest",
+          "scope_digest",
         ]
       : action === "stop"
         ? ["action", "expected_revision", "reason"]
@@ -101,6 +102,10 @@ export function prepareLocalOwnerCommand(
     const digest = text(intent.proposal_digest, 64);
     if (!/^[0-9a-f]{64}$/.test(digest)) throw new Error("Invalid owner intent");
     details.proposal_digest = digest;
+    const scopeDigest = text(intent.scope_digest, 64);
+    if (!/^[0-9a-f]{64}$/.test(scopeDigest))
+      throw new Error("Invalid owner intent");
+    details.scope_digest = scopeDigest;
   } else if (action === "stop") {
     details.reason = text(intent.reason, 512);
   } else if (action === "reconcile") {
@@ -189,6 +194,8 @@ export function classifyLocalOwnerResult(
       result.status === "approved" &&
       typeof request.proposal_digest === "string" &&
       /^[0-9a-f]{64}$/.test(request.proposal_digest) &&
+      typeof request.scope_digest === "string" &&
+      /^[0-9a-f]{64}$/.test(request.scope_digest) &&
       typeof result.decision_id === "string" &&
       result.decision_id.trim().length > 0 &&
       Array.from(result.decision_id).length <= 256 &&

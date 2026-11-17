@@ -1,5 +1,6 @@
 import { Socket } from "node:net";
 import {
+  assembleLocalOwnerApprovalScope,
   assembleLocalOwnerProposal,
   MAX_PROPOSAL_BYTES,
 } from "./kernel-owner-proposal.ts";
@@ -66,6 +67,7 @@ export function createLocalOwnerTransport(
   }
   let busy = false;
   let closed = false;
+  const observedUnknown = new WeakSet<object>();
   let waiting: (() => void) | undefined;
   const close = () => {
     closed = true;
@@ -148,65 +150,146 @@ export function createLocalOwnerTransport(
     }
   }
 
+  async function readChunks(action: "proposal-chunk" | "approval-scope-chunk") {
+    const frames: Buffer[] = [];
+    let offset = 0;
+    let digest: string | null = null;
+    let total = 0;
+    do {
+      const frame = await exchange(
+        requestFrame({
+          version: 1,
+          action,
+          offset,
+          ...(action === "proposal-chunk"
+            ? { proposal_digest: digest }
+            : { scope_digest: digest }),
+        }),
+        CHUNK_LIMIT,
+      );
+      const envelope = record(payload(frame), ["version", "ok", "result"]);
+      const item = record(envelope.result, [
+        "version",
+        "digest",
+        "offset",
+        "bytes",
+        "data_base64",
+        "complete",
+      ]);
+      if (
+        envelope.version !== 1 ||
+        envelope.ok !== true ||
+        item.version !== 1 ||
+        typeof item.digest !== "string" ||
+        !/^[0-9a-f]{64}$/.test(item.digest) ||
+        (digest !== null && item.digest !== digest) ||
+        item.offset !== offset ||
+        typeof item.bytes !== "number" ||
+        !Number.isSafeInteger(item.bytes) ||
+        item.bytes < 1 ||
+        item.bytes > MAX_PROPOSAL_BYTES ||
+        (total !== 0 && total !== item.bytes) ||
+        typeof item.data_base64 !== "string" ||
+        item.data_base64.length > 10924 ||
+        typeof item.complete !== "boolean"
+      )
+        throw new Error("Invalid proposal chunk");
+      const bytes = Buffer.from(item.data_base64, "base64");
+      if (
+        bytes.toString("base64") !== item.data_base64 ||
+        bytes.length !== Math.min(8192, item.bytes - offset)
+      )
+        throw new Error("Invalid proposal chunk");
+      digest = item.digest;
+      total = item.bytes;
+      offset += bytes.length;
+      if (item.complete !== (offset === total))
+        throw new Error("Invalid proposal chunk");
+      frames.push(frame);
+    } while (offset < total);
+    return frames;
+  }
+
   return Object.freeze({
     close,
     async readProposal() {
+      return operation(async () =>
+        assembleLocalOwnerProposal(await readChunks("proposal-chunk"), scope),
+      );
+    },
+    async readApprovalScope() {
+      return operation(async () =>
+        assembleLocalOwnerApprovalScope(
+          await readChunks("approval-scope-chunk"),
+          scope,
+        ),
+      );
+    },
+    async readRevision() {
       return operation(async () => {
-        const frames: Buffer[] = [];
-        let offset = 0;
-        let digest: string | null = null;
-        let total = 0;
-        do {
-          const frame = await exchange(
-            requestFrame({
-              version: 1,
-              action: "proposal-chunk",
-              offset,
-              proposal_digest: digest,
-            }),
-            CHUNK_LIMIT,
-          );
-          const envelope = record(payload(frame), ["version", "ok", "result"]);
-          const item = record(envelope.result, [
-            "version",
-            "digest",
-            "offset",
-            "bytes",
-            "data_base64",
-            "complete",
-          ]);
-          if (
-            envelope.version !== 1 ||
-            envelope.ok !== true ||
-            item.version !== 1 ||
-            typeof item.digest !== "string" ||
-            !/^[0-9a-f]{64}$/.test(item.digest) ||
-            (digest !== null && item.digest !== digest) ||
-            item.offset !== offset ||
-            typeof item.bytes !== "number" ||
-            !Number.isSafeInteger(item.bytes) ||
-            item.bytes < 1 ||
-            item.bytes > MAX_PROPOSAL_BYTES ||
-            (total !== 0 && total !== item.bytes) ||
-            typeof item.data_base64 !== "string" ||
-            item.data_base64.length > 10924 ||
-            typeof item.complete !== "boolean"
-          )
-            throw new Error("Invalid proposal chunk");
-          const bytes = Buffer.from(item.data_base64, "base64");
-          if (
-            bytes.toString("base64") !== item.data_base64 ||
-            bytes.length !== Math.min(8192, item.bytes - offset)
-          )
-            throw new Error("Invalid proposal chunk");
-          digest = item.digest;
-          total = item.bytes;
-          offset += bytes.length;
-          if (item.complete !== (offset === total))
-            throw new Error("Invalid proposal chunk");
-          frames.push(frame);
-        } while (offset < total);
-        return assembleLocalOwnerProposal(frames, scope);
+        const frame = await exchange(
+          requestFrame({ version: 1, action: "snapshot" }),
+          RESPONSE_LIMIT,
+        );
+        const envelope = record(payload(frame), ["version", "ok", "result"]);
+        const snapshot = record(envelope.result, [
+          "version",
+          "producer",
+          "scope",
+          "program_revision",
+          "spec_digest",
+          "status",
+          "work_units",
+          "attempts",
+          "reservations",
+          "commands",
+          "command_coverage",
+          "claims",
+          "correlations",
+          "decisions",
+          "usage_subtotals",
+          "budget_configured",
+          "budget_revoked",
+          "authority",
+          "missing_usage",
+          "route_identity",
+          "physical_settlement",
+          "page",
+          "coverage",
+          "position",
+        ]);
+        if (
+          envelope.version !== 1 ||
+          envelope.ok !== true ||
+          snapshot.version !== 1 ||
+          snapshot.scope !== scope ||
+          snapshot.page !== 0
+        )
+          throw new Error("Invalid owner snapshot");
+        if (
+          snapshot.status === "absent" &&
+          snapshot.program_revision === null &&
+          snapshot.spec_digest === null
+        )
+          return { revision: "-1", status: "absent" };
+        if (
+          !["draft", "active", "paused", "completed", "cancelled"].includes(
+            String(snapshot.status),
+          ) ||
+          typeof snapshot.spec_digest !== "string" ||
+          !/^[0-9a-f]{64}$/.test(snapshot.spec_digest) ||
+          (typeof snapshot.program_revision !== "number" &&
+            typeof snapshot.program_revision !== "bigint")
+        )
+          throw new Error("Invalid owner snapshot");
+        const revision = BigInt(snapshot.program_revision);
+        if (revision < 0n || revision > 9223372036854775807n)
+          throw new Error("Invalid owner revision");
+        return {
+          revision: revision.toString(),
+          status: String(snapshot.status),
+          specDigest: snapshot.spec_digest,
+        };
       });
     },
     async sendCommand(
@@ -232,11 +315,49 @@ export function createLocalOwnerTransport(
               unknown.settlement !== "unknown"
             )
               throw new Error("Invalid owner receipt");
+            if (command.request.action === "approve")
+              observedUnknown.add(command);
+          } else {
+            observedUnknown.delete(command);
           }
           return result;
         });
       } catch {
+        observedUnknown.delete(command);
         return { kind: "unknown" };
+      }
+    },
+    canReplay(command: ReturnType<typeof prepareLocalOwnerCommand>) {
+      return !closed && observedUnknown.has(command);
+    },
+    async replayCommand(command: ReturnType<typeof prepareLocalOwnerCommand>) {
+      if (closed || !observedUnknown.has(command))
+        throw new Error("Original owner channel unavailable");
+      observedUnknown.delete(command);
+      try {
+        return await operation(async () => {
+          const frame = await exchange(command.frame(), RESPONSE_LIMIT);
+          const envelope = record(payload(frame), ["version", "ok", "result"]);
+          if (envelope.version !== 1 || envelope.ok !== true)
+            throw new Error("Invalid owner envelope");
+          const result = classifyLocalOwnerResult(
+            command.request,
+            envelope.result,
+          );
+          if (result.kind === "unknown") {
+            const unknown = record(envelope.result, ["status", "settlement"]);
+            if (
+              unknown.status !== "unknown" ||
+              unknown.settlement !== "unknown"
+            )
+              throw new Error("Invalid owner receipt");
+            observedUnknown.add(command);
+          }
+          return result;
+        });
+      } catch {
+        observedUnknown.delete(command);
+        return { kind: "unknown" } as const;
       }
     },
   });

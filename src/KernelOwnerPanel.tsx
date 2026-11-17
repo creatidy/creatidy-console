@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 export default function KernelOwnerPanel({ expired }: { expired: () => void }) {
   const [status, setStatus] = useState<
@@ -10,12 +10,115 @@ export default function KernelOwnerPanel({ expired }: { expired: () => void }) {
     text: string;
   }>();
   const [visible, setVisible] = useState(false);
+  const [canApprove, setCanApprove] = useState(false);
+  const [approvalScope, setApprovalScope] = useState<{
+    digest: string;
+    text: string;
+  }>();
+  const [scopeStatus, setScopeStatus] = useState("");
+  const scopeGeneration = useRef(0);
+  const scopeRequest = useRef<AbortController | undefined>(undefined);
+
+  useEffect(() => {
+    const hide = () => {
+      scopeGeneration.current++;
+      scopeRequest.current?.abort();
+      setApprovalScope(undefined);
+      setScopeStatus("");
+    };
+    const visibility = () => {
+      if (document.visibilityState !== "visible") hide();
+    };
+    document.addEventListener("visibilitychange", visibility);
+    return () => {
+      document.removeEventListener("visibilitychange", visibility);
+      hide();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!visible || status !== "connected") {
+      scopeGeneration.current++;
+      scopeRequest.current?.abort();
+    }
+    if (status !== "connected") {
+      setApprovalScope(undefined);
+      setScopeStatus("");
+    }
+  }, [visible, status]);
+
+  async function readApprovalScope() {
+    const current = ++scopeGeneration.current;
+    scopeRequest.current?.abort();
+    const controller = new AbortController();
+    scopeRequest.current = controller;
+    const timer = setTimeout(() => controller.abort(), 5000);
+    setApprovalScope(undefined);
+    setScopeStatus("Reading approval scope.");
+    try {
+      const response = await fetch("/api/kernel/approval-scope", {
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      if (response.status === 401) {
+        if (current === scopeGeneration.current) expired();
+        return;
+      }
+      if (!response.ok) throw new Error();
+      const result = (await response.json()) as {
+        status?: unknown;
+        scope?: unknown;
+        digest?: unknown;
+        proposalDigest?: unknown;
+        text?: unknown;
+      };
+      if (
+        result.status !== "connected" ||
+        result.scope !== proposal?.scope ||
+        !proposal ||
+        result.proposalDigest !== proposal.digest ||
+        typeof result.digest !== "string" ||
+        !/^[0-9a-f]{64}$/.test(result.digest) ||
+        typeof result.text !== "string"
+      )
+        throw new Error();
+      const session = await fetch("/api/kernel/session-check", {
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      if (session.status === 401) {
+        if (current === scopeGeneration.current) expired();
+        return;
+      }
+      if (!session.ok || (await session.json()).authenticated !== true)
+        throw new Error();
+      if (
+        current !== scopeGeneration.current ||
+        controller.signal.aborted ||
+        document.visibilityState !== "visible"
+      )
+        return;
+      setApprovalScope({ digest: result.digest, text: result.text });
+      setScopeStatus(
+        "Approval scope received. It may have changed; this is not an approval.",
+      );
+    } catch {
+      if (current === scopeGeneration.current)
+        setScopeStatus(
+          "Approval scope unavailable. No owner command is available.",
+        );
+    } finally {
+      clearTimeout(timer);
+    }
+  }
 
   useEffect(() => {
     let generation = 0;
     let controller: AbortController | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    let cached: { scope: string; digest: string; text: string } | undefined;
+    let cached:
+      | { scope: string; digest: string; text: string; canApprove: boolean }
+      | undefined;
     const hide = () => {
       generation++;
       controller?.abort();
@@ -50,7 +153,11 @@ export default function KernelOwnerPanel({ expired }: { expired: () => void }) {
           };
           if (current !== generation) return;
           if (signal.aborted) throw new Error();
-          if (!Array.isArray(result.actions) || result.actions.length !== 0)
+          if (
+            !Array.isArray(result.actions) ||
+            (result.actions.length !== 0 &&
+              !(result.actions.length === 1 && result.actions[0] === "approve"))
+          )
             throw new Error();
           if (
             result.status === "connected" &&
@@ -63,6 +170,7 @@ export default function KernelOwnerPanel({ expired }: { expired: () => void }) {
               scope: result.scope,
               digest: result.digest,
               text: result.text,
+              canApprove: result.actions.length === 1,
             };
           } else if (
             result.status === "unavailable" ||
@@ -88,6 +196,7 @@ export default function KernelOwnerPanel({ expired }: { expired: () => void }) {
           return;
         if (signal.aborted) throw new Error();
         setProposal(cached);
+        setCanApprove(cached.canApprove);
         setStatus("connected");
         setVisible(true);
         timer = setTimeout(() => void check(), 10000);
@@ -122,7 +231,7 @@ export default function KernelOwnerPanel({ expired }: { expired: () => void }) {
           : status === "unavailable"
             ? "Unavailable: no verified Kernel owner capability is connected. Console login does not grant Kernel authority."
             : status === "connected"
-              ? "Verified proposal received when this view opened; it may have changed. Reload to recheck. No owner commands are available."
+              ? `Verified proposal received when this view opened; it may have changed. Reload to recheck. ${canApprove ? "Approval requires a fresh review." : "No owner commands are available."}`
               : "Kernel proposal unavailable: the channel disconnected, refused the read, or returned invalid or oversized data. No owner commands are available."}
       </p>
       {proposal && status === "connected" && visible && (
@@ -135,6 +244,434 @@ export default function KernelOwnerPanel({ expired }: { expired: () => void }) {
             approval.
           </p>
           <pre>{proposal.text}</pre>
+          <button type="button" onClick={() => void readApprovalScope()}>
+            Inspect approval scope
+          </button>
+          <p role="status">{scopeStatus}</p>
+          {approvalScope && (
+            <>
+              <p>Approval scope SHA-256: {approvalScope.digest}</p>
+              <p>
+                The scope is untrusted producer data. A digest does not verify
+                producer identity or grant authority.
+              </p>
+              <pre>{approvalScope.text}</pre>
+            </>
+          )}
+        </>
+      )}
+      {proposal && canApprove && (
+        <KernelApprovalPanel
+          visible={visible && status === "connected"}
+          scope={proposal.scope}
+          proposalDigest={proposal.digest}
+          expired={expired}
+        />
+      )}
+    </section>
+  );
+}
+
+function KernelApprovalPanel({
+  visible,
+  scope,
+  proposalDigest,
+  expired,
+}: {
+  visible: boolean;
+  scope: string;
+  proposalDigest: string;
+  expired: () => void;
+}) {
+  const [expiry, setExpiry] = useState("");
+  const [message, setMessage] = useState("");
+  const [review, setReview] = useState<{
+    review: string;
+    scopeDigest: string;
+    revision: string;
+    status: string;
+    approvalExpiry: string;
+    text: string;
+  }>();
+  const [pending, setPending] = useState(false);
+  const [history, setHistory] = useState<
+    Array<{
+      commandId: string;
+      action: string;
+      outcome: "unknown" | "historical";
+      canReplay: boolean;
+    }>
+  >();
+  const generation = useRef(0);
+  const active = useRef<AbortController | undefined>(undefined);
+  useEffect(() => {
+    const clear = () => {
+      generation.current++;
+      active.current?.abort();
+      setReview(undefined);
+      setPending(false);
+      setHistory(undefined);
+    };
+    const visibility = () => {
+      if (document.visibilityState !== "visible") clear();
+    };
+    document.addEventListener("visibilitychange", visibility);
+    return () => {
+      document.removeEventListener("visibilitychange", visibility);
+      clear();
+    };
+  }, []);
+
+  async function prepare() {
+    const current = ++generation.current;
+    active.current?.abort();
+    const controller = new AbortController();
+    active.current = controller;
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    setReview(undefined);
+    setPending(true);
+    setMessage("Reading current review evidence.");
+    try {
+      const response = await fetch("/api/kernel/owner-review", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ expires_at: expiry }),
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      if (response.status === 401) {
+        if (current === generation.current) expired();
+        return;
+      }
+      if (response.status === 409) {
+        const refusal = (await response.json()) as { error?: unknown };
+        if (current === generation.current)
+          setMessage(
+            refusal.error === "Unresolved command; inspect history"
+              ? "A previous command is unresolved; inspect command history. No approval was sent."
+              : "The proposal changed during review. No approval was sent.",
+          );
+        return;
+      }
+      if (!response.ok) throw new Error();
+      const result = (await response.json()) as Record<string, unknown>;
+      if (
+        typeof result.review !== "string" ||
+        !/^[0-9a-f]{64}$/.test(result.review) ||
+        result.scope !== scope ||
+        result.proposalDigest !== proposalDigest ||
+        typeof result.scopeDigest !== "string" ||
+        !/^[0-9a-f]{64}$/.test(result.scopeDigest) ||
+        typeof result.revision !== "string" ||
+        !/^(?:-1|0|[1-9][0-9]*)$/.test(result.revision) ||
+        typeof result.status !== "string" ||
+        result.approvalExpiry !== expiry ||
+        typeof result.text !== "string"
+      )
+        throw new Error();
+      const session = await fetch("/api/kernel/session-check", {
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      if (session.status === 401) {
+        if (current === generation.current) expired();
+        return;
+      }
+      if (!session.ok || (await session.json()).authenticated !== true)
+        throw new Error();
+      if (
+        current !== generation.current ||
+        controller.signal.aborted ||
+        document.visibilityState !== "visible"
+      )
+        return;
+      setReview({
+        review: result.review,
+        scopeDigest: result.scopeDigest,
+        revision: result.revision,
+        status: result.status,
+        approvalExpiry: expiry,
+        text: result.text,
+      });
+      setMessage(
+        "Review these exact values before confirming. The producer may refuse stale or unauthorized requests.",
+      );
+    } catch {
+      if (current === generation.current)
+        setMessage("Review unavailable; no approval was sent.");
+    } finally {
+      clearTimeout(timeout);
+      if (current === generation.current) setPending(false);
+    }
+  }
+
+  async function approve() {
+    if (!review || pending || !visible) return;
+    const selected = review;
+    setReview(undefined);
+    setPending(true);
+    setMessage("Submitting approval; a lost reply cannot prove its outcome.");
+    const controller = new AbortController();
+    active.current = controller;
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    try {
+      const response = await fetch("/api/kernel/owner", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "approve", review: selected.review }),
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      if (response.status === 401) {
+        expired();
+        return;
+      }
+      if (response.status === 409) {
+        setMessage("Review expired or changed; no approval was sent.");
+        return;
+      }
+      if (!response.ok) throw new Error();
+      const result = (await response.json()) as {
+        kind?: unknown;
+        action?: unknown;
+      };
+      setMessage(
+        result.kind === "historical-receipt-shape" &&
+          result.action === "approve"
+          ? "A historical approval receipt was returned. It is not proof of a current grant or observed effect."
+          : "Approval outcome is unknown; do not retry blindly. Check command history and producer evidence.",
+      );
+    } catch {
+      setMessage(
+        "Approval outcome may be unknown; do not retry blindly. Check command history and producer evidence.",
+      );
+    } finally {
+      clearTimeout(timeout);
+      setPending(false);
+    }
+  }
+
+  async function readHistory() {
+    const current = ++generation.current;
+    active.current?.abort();
+    const controller = new AbortController();
+    active.current = controller;
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    setHistory(undefined);
+    setReview(undefined);
+    setPending(true);
+    try {
+      const response = await fetch("/api/kernel/owner-journal", {
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      if (response.status === 401) {
+        if (current === generation.current) expired();
+        return;
+      }
+      if (!response.ok) throw new Error();
+      const result = (await response.json()) as {
+        status?: unknown;
+        scope?: unknown;
+        commands?: unknown;
+      };
+      if (
+        result.status !== "available" ||
+        result.scope !== scope ||
+        !Array.isArray(result.commands) ||
+        result.commands.length > 128
+      )
+        throw new Error();
+      const commands = result.commands.map(
+        (
+          item: unknown,
+        ): {
+          commandId: string;
+          action: string;
+          outcome: "unknown" | "historical";
+          canReplay: boolean;
+        } => {
+          if (
+            !item ||
+            typeof item !== "object" ||
+            !("commandId" in item) ||
+            !("action" in item) ||
+            !("outcome" in item) ||
+            !("canReplay" in item) ||
+            typeof item.commandId !== "string" ||
+            typeof item.action !== "string" ||
+            typeof item.canReplay !== "boolean" ||
+            (item.outcome !== "unknown" && item.outcome !== "historical")
+          )
+            throw new Error();
+          return {
+            commandId: item.commandId,
+            action: item.action,
+            outcome: item.outcome,
+            canReplay: item.canReplay,
+          };
+        },
+      );
+      const session = await fetch("/api/kernel/session-check", {
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      if (session.status === 401) {
+        if (current === generation.current) expired();
+        return;
+      }
+      if (!session.ok || (await session.json()).authenticated !== true)
+        throw new Error();
+      if (
+        current !== generation.current ||
+        controller.signal.aborted ||
+        document.visibilityState !== "visible"
+      )
+        return;
+      setHistory(commands);
+      setMessage(
+        "Command history is local evidence, not proof of current authority or effects.",
+      );
+    } catch {
+      if (current === generation.current)
+        setMessage("Command history unavailable.");
+    } finally {
+      clearTimeout(timeout);
+      if (current === generation.current) setPending(false);
+    }
+  }
+
+  async function replay(commandId: string) {
+    if (pending || !visible) return;
+    setHistory(undefined);
+    setPending(true);
+    setMessage("Checking the exact original command on its original channel.");
+    const controller = new AbortController();
+    active.current = controller;
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    try {
+      const response = await fetch("/api/kernel/owner-replay", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ commandId }),
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      if (response.status === 401) {
+        expired();
+        return;
+      }
+      if (response.status === 409) {
+        setMessage(
+          "The original channel is unavailable; the outcome remains unknown.",
+        );
+        return;
+      }
+      if (!response.ok) throw new Error();
+      const result = (await response.json()) as { kind?: unknown };
+      setMessage(
+        result.kind === "historical-receipt-shape"
+          ? "A historical receipt was returned; it is not proof of current authority or an effect."
+          : "The outcome remains unknown; do not issue a new command blindly.",
+      );
+    } catch {
+      setMessage(
+        "The outcome remains unknown; do not issue a new command blindly.",
+      );
+    } finally {
+      clearTimeout(timeout);
+      setPending(false);
+    }
+  }
+
+  return (
+    <section aria-label="Review approval" hidden={!visible}>
+      <h3>Review approval</h3>
+      <p>
+        Enter the approval expiry as a positive integer in the producer's clock
+        units. The producer may cap it to earlier evidence expiry.
+      </p>
+      <label htmlFor="kernel-approval-expiry">Requested producer expiry</label>
+      <input
+        id="kernel-approval-expiry"
+        inputMode="numeric"
+        disabled={pending}
+        value={expiry}
+        onChange={(event) => {
+          generation.current++;
+          active.current?.abort();
+          setPending(false);
+          setExpiry(event.target.value);
+          setReview(undefined);
+        }}
+      />
+      <button
+        type="button"
+        disabled={pending || !/^[1-9][0-9]{0,18}$/.test(expiry)}
+        onClick={() => void prepare()}
+      >
+        Review exact approval
+      </button>
+      <button
+        type="button"
+        disabled={pending}
+        onClick={() => void readHistory()}
+      >
+        Inspect command history
+      </button>
+      <p role="status">{message}</p>
+      {history && (
+        <ul>
+          {history.map((entry) => (
+            <li key={entry.commandId}>
+              {entry.action}:{" "}
+              {entry.outcome === "unknown"
+                ? "outcome unknown; do not retry blindly"
+                : "historical receipt only"}{" "}
+              (command {entry.commandId}){" "}
+              {entry.canReplay && entry.outcome === "unknown" && (
+                <>
+                  <p>
+                    The original channel reported an existing intent without a
+                    receipt. Checking resends the exact same command on that
+                    channel; it does not create new authority. This option is
+                    unavailable after losing the channel or restarting.
+                  </p>
+                  <button
+                    type="button"
+                    disabled={pending}
+                    onClick={() => void replay(entry.commandId)}
+                  >
+                    Check original receipt
+                  </button>
+                </>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {review && (
+        <>
+          <p>Bound program: {scope}</p>
+          <p>
+            Observed revision: {review.revision} ({review.status})
+          </p>
+          <p>Proposal SHA-256: {proposalDigest}</p>
+          <p>Approval scope SHA-256: {review.scopeDigest}</p>
+          <p>Requested producer expiry: {review.approvalExpiry}</p>
+          <p>
+            This approval may authorize the producer to create or amend the
+            program under the scope below. A receipt does not prove execution or
+            settlement.
+          </p>
+          <pre>{review.text}</pre>
+          <button
+            type="button"
+            disabled={pending}
+            onClick={() => void approve()}
+          >
+            Confirm approval
+          </button>
         </>
       )}
     </section>

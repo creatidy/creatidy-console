@@ -63,6 +63,7 @@ describe("Kernel local owner v1 contract shapes", () => {
           decision_id,
           expires_at: 1,
           proposal_digest: "a".repeat(64),
+          scope_digest: "b".repeat(64),
         },
         () => commandId,
       );
@@ -107,6 +108,7 @@ describe("Kernel local owner v1 contract shapes", () => {
         decision_id: "synthetic-decision",
         expires_at: 1,
         proposal_digest: "a".repeat(64),
+        scope_digest: "b".repeat(64),
       },
       { action: "start-managed", expected_revision: 0 },
       { action: "stop", expected_revision: 0, reason: "synthetic-reason" },
@@ -135,6 +137,7 @@ describe("Kernel local owner v1 contract shapes", () => {
         decision_id: "synthetic",
         expires_at: 1,
         proposal_digest: "a".repeat(64),
+        scope_digest: "b".repeat(64),
       },
       {
         action: "approve",
@@ -142,6 +145,7 @@ describe("Kernel local owner v1 contract shapes", () => {
         decision_id: "synthetic",
         expires_at: 0,
         proposal_digest: "a".repeat(64),
+        scope_digest: "b".repeat(64),
       },
       {
         action: "approve",
@@ -149,6 +153,7 @@ describe("Kernel local owner v1 contract shapes", () => {
         decision_id: "synthetic",
         expires_at: 1,
         proposal_digest: "A".repeat(64),
+        scope_digest: "b".repeat(64),
       },
       {
         action: "reconcile",
@@ -232,6 +237,7 @@ describe("Kernel local owner v1 contract shapes", () => {
         decision_id: "decision-a",
         expires_at: 500n,
         proposal_digest: "a".repeat(64),
+        scope_digest: "b".repeat(64),
       },
       () => "synthetic-id",
     );
@@ -251,6 +257,7 @@ describe("Kernel local owner v1 contract shapes", () => {
       decision_id: "decision-a",
       expires_at: 500n,
       proposal_digest: "a".repeat(64),
+      scope_digest: "b".repeat(64),
     });
     expect(classifyLocalOwnerResult(approve.request, receipt).kind).toBe(
       "historical-receipt-shape",
@@ -267,6 +274,20 @@ describe("Kernel local owner v1 contract shapes", () => {
     expect(approve.frame().subarray(4).toString()).toContain(
       `"proposal_digest":"${"a".repeat(64)}"`,
     );
+    expect(approve.frame().subarray(4).toString()).toContain(
+      `"scope_digest":"${"b".repeat(64)}"`,
+    );
+    for (const scopeDigest of [undefined, "", "B".repeat(64), "b".repeat(63)])
+      expect(() =>
+        prepareLocalOwnerCommand("program", {
+          action: "approve",
+          expected_revision: -1,
+          decision_id: "decision-a",
+          expires_at: 500,
+          proposal_digest: "a".repeat(64),
+          ...(scopeDigest === undefined ? {} : { scope_digest: scopeDigest }),
+        }),
+      ).toThrow();
     expect(
       classifyLocalOwnerResult(approve.request, { ...receipt, expires_at: 499 })
         .kind,
@@ -317,6 +338,7 @@ describe("Kernel local owner v1 contract shapes", () => {
         decision_id: "decision-a",
         expires_at: 9223372036854775807n,
         proposal_digest: "a".repeat(64),
+        scope_digest: "b".repeat(64),
       },
       () => "synthetic-id",
     );

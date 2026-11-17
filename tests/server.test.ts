@@ -64,6 +64,482 @@ afterEach(() => {
 });
 
 describe("authenticated application", () => {
+  it("replays only an original unknown on the same in-memory capability", async () => {
+    let original:
+      | ReturnType<
+          typeof import("../server/kernel-owner-v1.ts").prepareLocalOwnerCommand
+        >
+      | undefined;
+    const sendCommand = vi.fn(async (command: NonNullable<typeof original>) => {
+      original = command;
+      return { kind: "unknown" as const };
+    });
+    const replayCommand = vi.fn(
+      async (command: NonNullable<typeof original>) => {
+        expect(command).toBe(original);
+        return {
+          kind: "historical-receipt-shape" as const,
+          action: "approve" as const,
+          status: "approved" as const,
+          settlement: null,
+          decision_id: String(command.request.decision_id),
+          spec_digest: "c".repeat(64),
+          expires_at: 2000000000n,
+        };
+      },
+    );
+    const channel = {
+      scope: "program",
+      readProposal: async () => ({ digest: "a".repeat(64), text: "proposal" }),
+      readApprovalScope: async () => ({
+        digest: "b".repeat(64),
+        proposalDigest: "a".repeat(64),
+        text: "scope",
+      }),
+      readRevision: async () => ({ revision: "-1", status: "absent" }),
+      sendCommand,
+      canReplay: (command: NonNullable<typeof original>) =>
+        command === original,
+      replayCommand,
+      close: () => {},
+    };
+    const { app } = await fixture(() => Date.now(), channel);
+    try {
+      await app.inject({
+        method: "POST",
+        url: "/api/bootstrap",
+        headers,
+        payload: { token, password },
+      });
+      const login = await app.inject({
+        method: "POST",
+        url: "/api/login",
+        headers,
+        payload: { password },
+      });
+      const cookie = String(login.headers["set-cookie"]).split(";")[0]!;
+      const auth = { ...headers, cookie };
+      const review = await app.inject({
+        method: "POST",
+        url: "/api/kernel/owner-review",
+        headers: auth,
+        payload: { expires_at: "2000000000" },
+      });
+      const submit = await app.inject({
+        method: "POST",
+        url: "/api/kernel/owner",
+        headers: auth,
+        payload: { action: "approve", review: review.json().review },
+      });
+      expect(submit.json()).toEqual({ kind: "unknown" });
+      const history = await app.inject({
+        method: "GET",
+        url: "/api/kernel/owner-journal",
+        headers: auth,
+      });
+      expect(history.json().commands[0].canReplay).toBe(true);
+      const id = history.json().commands[0].commandId;
+      const result = await app.inject({
+        method: "POST",
+        url: "/api/kernel/owner-replay",
+        headers: auth,
+        payload: { commandId: id },
+      });
+      expect(result.json()).toMatchObject({
+        kind: "historical-receipt-shape",
+        action: "approve",
+      });
+      expect(sendCommand).toHaveBeenCalledTimes(1);
+      expect(replayCommand).toHaveBeenCalledTimes(1);
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/api/kernel/owner-replay",
+            headers: auth,
+            payload: { commandId: id },
+          })
+        ).statusCode,
+      ).toBe(409);
+      const after = await app.inject({
+        method: "GET",
+        url: "/api/kernel/owner-journal",
+        headers: auth,
+      });
+      expect(after.json().commands[0]).toMatchObject({
+        outcome: "historical",
+        canReplay: false,
+      });
+    } finally {
+      await app.close();
+    }
+  });
+  it("does not submit a reviewed command when the session is revoked during revalidation", async () => {
+    let reads = 0;
+    let release!: () => void;
+    let started!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const sendCommand = vi.fn(async () => ({ kind: "unknown" as const }));
+    const { app, dir } = await fixture(() => Date.now(), {
+      scope: "program",
+      readProposal: async () => ({ digest: "a".repeat(64), text: "proposal" }),
+      readApprovalScope: async () => {
+        if (++reads === 2) {
+          started();
+          await held;
+        }
+        return {
+          digest: "b".repeat(64),
+          proposalDigest: "a".repeat(64),
+          text: "scope",
+        };
+      },
+      readRevision: async () => ({ revision: "-1", status: "absent" }),
+      sendCommand,
+      close: () => {},
+    });
+    try {
+      await app.inject({
+        method: "POST",
+        url: "/api/bootstrap",
+        headers,
+        payload: { token, password },
+      });
+      const login = await app.inject({
+        method: "POST",
+        url: "/api/login",
+        headers,
+        payload: { password },
+      });
+      const cookie = String(login.headers["set-cookie"]).split(";")[0]!;
+      const auth = { ...headers, cookie };
+      const review = await app.inject({
+        method: "POST",
+        url: "/api/kernel/owner-review",
+        headers: auth,
+        payload: { expires_at: "2000000000" },
+      });
+      const request = app.inject({
+        method: "POST",
+        url: "/api/kernel/owner",
+        headers: auth,
+        payload: { action: "approve", review: review.json().review },
+      });
+      await ready;
+      await app.inject({
+        method: "POST",
+        url: "/api/logout",
+        headers: auth,
+        payload: {},
+      });
+      release();
+      expect((await request).statusCode).toBe(401);
+      expect(sendCommand).not.toHaveBeenCalled();
+      const state = openState(dir);
+      expect(
+        state.db.prepare("SELECT count(*) AS count FROM owner_commands").get()
+          ?.count,
+      ).toBe(0);
+      state.db.close();
+    } finally {
+      await app.close();
+    }
+  });
+  it("binds synthetic approval to one reviewed session, scope, revision and expiry", async () => {
+    let revision = "-1";
+    let scopeDigest = "b".repeat(64);
+    const sendCommand = vi.fn(
+      async (
+        _command: ReturnType<
+          typeof import("../server/kernel-owner-v1.ts").prepareLocalOwnerCommand
+        >,
+      ) => ({ kind: "unknown" as const }),
+    );
+    const { app, dir } = await fixture(() => Date.now(), {
+      scope: "program",
+      readProposal: async () => ({ digest: "a".repeat(64), text: "proposal" }),
+      readApprovalScope: async () => ({
+        digest: scopeDigest,
+        proposalDigest: "a".repeat(64),
+        text: "synthetic scope",
+      }),
+      readRevision: async () => ({ revision, status: "absent" }),
+      sendCommand,
+      close: () => {},
+    });
+    try {
+      const postReview = (cookie?: string, expires_at = "2000000000") =>
+        app.inject({
+          method: "POST",
+          url: "/api/kernel/owner-review",
+          headers: { ...headers, ...(cookie ? { cookie } : {}) },
+          payload: { expires_at },
+        });
+      expect((await postReview()).statusCode).toBe(401);
+      await app.inject({
+        method: "POST",
+        url: "/api/bootstrap",
+        headers,
+        payload: { token, password },
+      });
+      const login = await app.inject({
+        method: "POST",
+        url: "/api/login",
+        headers,
+        payload: { password },
+      });
+      const cookie = String(login.headers["set-cookie"]).split(";")[0]!;
+      const review = await postReview(cookie);
+      expect(review.statusCode).toBe(200);
+      expect(review.json()).toMatchObject({
+        scope: "program",
+        revision: "-1",
+        approvalExpiry: "2000000000",
+        text: "synthetic scope",
+      });
+      const reviewId = review.json().review as string;
+      const otherLogin = await app.inject({
+        method: "POST",
+        url: "/api/login",
+        headers,
+        payload: { password },
+      });
+      const otherCookie = String(otherLogin.headers["set-cookie"]).split(
+        ";",
+      )[0]!;
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/api/kernel/owner",
+            headers: { ...headers, cookie: otherCookie },
+            payload: { action: "approve", review: reviewId },
+          })
+        ).statusCode,
+      ).toBe(409);
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/api/kernel/owner",
+            headers: { ...headers, cookie, origin: "https://attacker.example" },
+            payload: { action: "approve", review: reviewId },
+          })
+        ).statusCode,
+      ).toBe(403);
+      revision = "0";
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/api/kernel/owner",
+            headers: { ...headers, cookie },
+            payload: { action: "approve", review: reviewId },
+          })
+        ).statusCode,
+      ).toBe(409);
+      expect(sendCommand).not.toHaveBeenCalled();
+      revision = "-1";
+      const stale = await postReview(cookie);
+      scopeDigest = "c".repeat(64);
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/api/kernel/owner",
+            headers: { ...headers, cookie },
+            payload: { action: "approve", review: stale.json().review },
+          })
+        ).statusCode,
+      ).toBe(409);
+      const current = await postReview(cookie);
+      const request = {
+        method: "POST" as const,
+        url: "/api/kernel/owner",
+        headers: { ...headers, cookie },
+        payload: { action: "approve", review: current.json().review },
+      };
+      expect((await app.inject(request)).json()).toEqual({ kind: "unknown" });
+      expect(sendCommand).toHaveBeenCalledTimes(1);
+      expect((await postReview(cookie)).statusCode).toBe(409);
+      const command = sendCommand.mock.calls[0]![0] as ReturnType<
+        typeof import("../server/kernel-owner-v1.ts").prepareLocalOwnerCommand
+      >;
+      expect(command.request).toMatchObject({
+        action: "approve",
+        expected_revision: -1n,
+        expires_at: 2000000000n,
+        proposal_digest: "a".repeat(64),
+        scope_digest: scopeDigest,
+      });
+      expect((await app.inject(request)).statusCode).toBe(409);
+      expect(sendCommand).toHaveBeenCalledTimes(1);
+      const history = await app.inject({
+        method: "GET",
+        url: "/api/kernel/owner-journal",
+        headers: { ...headers, cookie },
+      });
+      expect(history.json()).toMatchObject({
+        status: "available",
+        scope: "program",
+        commands: [{ action: "approve", outcome: "unknown", receipt: null }],
+      });
+      expect(history.body).not.toContain("synthetic scope");
+      const state = openState(dir);
+      expect(
+        state.db.prepare("SELECT outcome FROM owner_commands").get()?.outcome,
+      ).toBe("unknown");
+      state.db.close();
+    } finally {
+      await app.close();
+    }
+  });
+  it("returns approval scope only after authenticated read and never caches it", async () => {
+    const readApprovalScope = vi
+      .fn()
+      .mockResolvedValueOnce({
+        digest: "a".repeat(64),
+        proposalDigest: "b".repeat(64),
+        text: "synthetic-scope",
+      })
+      .mockRejectedValueOnce(new Error("sensitive producer error"));
+    const { app } = await fixture(() => Date.now(), {
+      scope: "program",
+      readProposal: async () => ({ digest: "b".repeat(64), text: "proposal" }),
+      readApprovalScope,
+      close: () => {},
+    });
+    try {
+      await app.inject({
+        method: "POST",
+        url: "/api/bootstrap",
+        headers,
+        payload: { token, password },
+      });
+      const login = await app.inject({
+        method: "POST",
+        url: "/api/login",
+        headers,
+        payload: { password },
+      });
+      const cookie = String(login.headers["set-cookie"]).split(";")[0]!;
+      const auth = { ...headers, cookie };
+      const first = await app.inject({
+        method: "GET",
+        url: "/api/kernel/approval-scope",
+        headers: auth,
+      });
+      expect(first.json()).toEqual({
+        status: "connected",
+        scope: "program",
+        digest: "a".repeat(64),
+        proposalDigest: "b".repeat(64),
+        text: "synthetic-scope",
+      });
+      expect(first.headers["cache-control"]).toBe("no-store");
+      const second = await app.inject({
+        method: "GET",
+        url: "/api/kernel/approval-scope",
+        headers: auth,
+      });
+      expect(second.json()).toEqual({ status: "disconnected" });
+      expect(second.body).not.toContain("sensitive producer error");
+      expect(readApprovalScope).toHaveBeenCalledTimes(2);
+    } finally {
+      await app.close();
+    }
+  });
+  it("protects approval scope reads across session revocation", async () => {
+    let release!: (value: {
+      digest: string;
+      proposalDigest: string;
+      text: string;
+    }) => void;
+    let started!: () => void;
+    const pending = new Promise<{
+      digest: string;
+      proposalDigest: string;
+      text: string;
+    }>((resolve) => {
+      release = resolve;
+    });
+    const readStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const readApprovalScope = vi.fn(() => {
+      started();
+      return pending;
+    });
+    const { app } = await fixture(() => Date.now(), {
+      scope: "program",
+      readProposal: async () => ({ digest: "a".repeat(64), text: "proposal" }),
+      readApprovalScope,
+      close: () => {},
+    });
+    try {
+      expect(
+        (
+          await app.inject({
+            method: "GET",
+            url: "/api/kernel/approval-scope",
+            headers,
+          })
+        ).statusCode,
+      ).toBe(401);
+      expect(readApprovalScope).not.toHaveBeenCalled();
+      await app.inject({
+        method: "POST",
+        url: "/api/bootstrap",
+        headers,
+        payload: { token, password },
+      });
+      const login = await app.inject({
+        method: "POST",
+        url: "/api/login",
+        headers,
+        payload: { password },
+      });
+      const cookie = String(login.headers["set-cookie"]).split(";")[0]!;
+      const auth = { ...headers, cookie };
+      expect(
+        (
+          await app.inject({
+            method: "GET",
+            url: "/api/kernel/approval-scope",
+            headers: { ...auth, origin: "https://attacker.example" },
+          })
+        ).statusCode,
+      ).toBe(403);
+      const read = app.inject({
+        method: "GET",
+        url: "/api/kernel/approval-scope",
+        headers: auth,
+      });
+      await readStarted;
+      await app.inject({
+        method: "POST",
+        url: "/api/logout",
+        headers: auth,
+        payload: {},
+      });
+      release({
+        digest: "a".repeat(64),
+        proposalDigest: "b".repeat(64),
+        text: "synthetic-private-scope",
+      });
+      const result = await read;
+      expect(result.statusCode).toBe(401);
+      expect(result.body).not.toContain("synthetic-private-scope");
+      expect(readApprovalScope).toHaveBeenCalledTimes(1);
+    } finally {
+      await app.close();
+    }
+  });
   it("uses the restored cookie expires deadline without touching the session", async () => {
     const { app, dir } = await fixture();
     try {
