@@ -40,6 +40,7 @@ export interface AppOptions {
       status: string;
       specDigest?: string;
     }>;
+    canSend?: () => boolean;
     sendCommand?: (
       command: ReturnType<typeof prepareLocalOwnerCommand>,
     ) => Promise<OwnerObservation>;
@@ -402,6 +403,7 @@ export async function createApp(options: AppOptions) {
       status: "connected",
       actions:
         ownerChannel.sendCommand &&
+        ownerChannel.canSend &&
         ownerChannel.readApprovalScope &&
         ownerChannel.readRevision
           ? ["approve"]
@@ -524,6 +526,7 @@ export async function createApp(options: AppOptions) {
     if (
       !channel?.readApprovalScope ||
       !channel.readRevision ||
+      !channel.canSend ||
       !channel.sendCommand
     )
       return reply
@@ -597,6 +600,7 @@ export async function createApp(options: AppOptions) {
     if (
       !channel?.readApprovalScope ||
       !channel.readRevision ||
+      !channel.canSend ||
       !channel.sendCommand
     )
       return reply
@@ -636,6 +640,11 @@ export async function createApp(options: AppOptions) {
         revision.revision !== review.revision
       )
         return reply.code(409).send({ error: "Review changed" });
+      // No asynchronous work may intervene between this check and dispatch.
+      if (!channel.canSend?.())
+        return reply
+          .code(503)
+          .send({ error: "Owner channel busy; no command sent" });
       const command = prepareLocalOwnerCommand(channel.scope, {
         action: "approve",
         expected_revision: BigInt(review.revision),
@@ -696,6 +705,10 @@ export async function createApp(options: AppOptions) {
         .code(409)
         .send({ error: "Original owner channel unavailable" });
     }
+    if (!channel.canSend?.())
+      return reply
+        .code(503)
+        .send({ error: "Owner channel busy; receipt check not sent" });
     replayable.delete(input.commandId);
     try {
       const token = beginOwnerReplay(

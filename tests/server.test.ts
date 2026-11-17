@@ -64,7 +64,66 @@ afterEach(() => {
 });
 
 describe("authenticated application", () => {
+  it("does not journal or dispatch when the owner channel is busy before admission", async () => {
+    const sendCommand = vi.fn(async () => ({ kind: "unknown" as const }));
+    const { app, dir } = await fixture(() => Date.now(), {
+      scope: "program",
+      readProposal: async () => ({ digest: "a".repeat(64), text: "proposal" }),
+      readApprovalScope: async () => ({
+        digest: "b".repeat(64),
+        proposalDigest: "a".repeat(64),
+        text: "scope",
+      }),
+      readRevision: async () => ({ revision: "-1", status: "absent" }),
+      canSend: () => false,
+      sendCommand,
+      close: () => {},
+    });
+    try {
+      await app.inject({
+        method: "POST",
+        url: "/api/bootstrap",
+        headers,
+        payload: { token, password },
+      });
+      const login = await app.inject({
+        method: "POST",
+        url: "/api/login",
+        headers,
+        payload: { password },
+      });
+      const cookie = String(login.headers["set-cookie"]).split(";")[0]!;
+      const auth = { ...headers, cookie };
+      const review = await app.inject({
+        method: "POST",
+        url: "/api/kernel/owner-review",
+        headers: auth,
+        payload: { expires_at: "2000000000" },
+      });
+      expect(review.statusCode).toBe(200);
+      const result = await app.inject({
+        method: "POST",
+        url: "/api/kernel/owner",
+        headers: auth,
+        payload: { action: "approve", review: review.json().review },
+      });
+      expect(result.statusCode).toBe(503);
+      expect(result.json()).toEqual({
+        error: "Owner channel busy; no command sent",
+      });
+      expect(sendCommand).not.toHaveBeenCalled();
+      const state = openState(dir);
+      expect(
+        state.db.prepare("SELECT count(*) AS count FROM owner_commands").get()
+          ?.count,
+      ).toBe(0);
+      state.db.close();
+    } finally {
+      await app.close();
+    }
+  });
   it("replays only an original unknown on the same in-memory capability", async () => {
+    let writable = true;
     let original:
       | ReturnType<
           typeof import("../server/kernel-owner-v1.ts").prepareLocalOwnerCommand
@@ -97,6 +156,7 @@ describe("authenticated application", () => {
         text: "scope",
       }),
       readRevision: async () => ({ revision: "-1", status: "absent" }),
+      canSend: () => writable,
       sendCommand,
       canReplay: (command: NonNullable<typeof original>) =>
         command === original,
@@ -139,6 +199,22 @@ describe("authenticated application", () => {
       });
       expect(history.json().commands[0].canReplay).toBe(true);
       const id = history.json().commands[0].commandId;
+      writable = false;
+      const busy = await app.inject({
+        method: "POST",
+        url: "/api/kernel/owner-replay",
+        headers: auth,
+        payload: { commandId: id },
+      });
+      expect(busy.statusCode).toBe(503);
+      expect(replayCommand).not.toHaveBeenCalled();
+      const stillAvailable = await app.inject({
+        method: "GET",
+        url: "/api/kernel/owner-journal",
+        headers: auth,
+      });
+      expect(stillAvailable.json().commands[0].canReplay).toBe(true);
+      writable = true;
       const result = await app.inject({
         method: "POST",
         url: "/api/kernel/owner-replay",
@@ -200,6 +276,7 @@ describe("authenticated application", () => {
         };
       },
       readRevision: async () => ({ revision: "-1", status: "absent" }),
+      canSend: () => true,
       sendCommand,
       close: () => {},
     });
@@ -269,6 +346,7 @@ describe("authenticated application", () => {
         text: "synthetic scope",
       }),
       readRevision: async () => ({ revision, status: "absent" }),
+      canSend: () => true,
       sendCommand,
       close: () => {},
     });

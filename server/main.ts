@@ -41,6 +41,7 @@ try {
       readProposal: transport.readProposal,
       readApprovalScope: transport.readApprovalScope,
       readRevision: transport.readRevision,
+      canSend: transport.canSend,
       sendCommand: transport.sendCommand,
       canReplay: transport.canReplay,
       replayCommand: transport.replayCommand,

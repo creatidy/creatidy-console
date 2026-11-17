@@ -266,6 +266,29 @@ it("closes on changed approval scope chunks without accepting partial evidence",
   expect(client.destroyed).toBe(true);
 });
 
+it("reports channel busy synchronously while a read is in flight", async () => {
+  const raw = proposal(10);
+  const digest = createHash("sha256").update(raw).digest("hex");
+  let release!: () => void;
+  let started!: () => void;
+  const ready = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  const { client } = await pair((socket) => {
+    release = () => socket.write(response(chunk(raw, 0, digest)));
+    started();
+  });
+  const channel = createLocalOwnerTransport(client, "program");
+  const read = channel.readProposal();
+  await ready;
+  expect(channel.canSend()).toBe(false);
+  release();
+  await read;
+  expect(channel.canSend()).toBe(true);
+  channel.close();
+  expect(channel.canSend()).toBe(false);
+});
+
 it("permits exact replay only after a valid unknown on the original channel", async () => {
   let exchanges = 0;
   const { client, requests } = await pair((socket) => {

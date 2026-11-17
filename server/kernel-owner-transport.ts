@@ -212,6 +212,9 @@ export function createLocalOwnerTransport(
 
   return Object.freeze({
     close,
+    canSend() {
+      return !closed && !busy && !socket.destroyed;
+    },
     async readProposal() {
       return operation(async () =>
         assembleLocalOwnerProposal(await readChunks("proposal-chunk"), scope),
