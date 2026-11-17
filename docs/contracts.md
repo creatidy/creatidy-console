@@ -440,6 +440,24 @@ checks can validate this documentation/scaffold, not discharge live acceptance.
 
 ## Conformance and Rights
 
+### Current Offline Evidence
+
+Console #12 develops acceptance alongside the features it covers. The current
+checkout's synthetic tests exercise the Router observer's configured, replay,
+gap, denied, disconnected and unsupported states in `tests/router.test.ts`, and
+local session and browser behavior in `tests/server.test.ts` and
+`tests/browser.test.mjs`. The browser scenario checks keyboard activation of
+Router refresh and restricts observed synthetic upstream requests to the fixed
+observer operations. Its synthetic server and credentials are test-only; this is
+not an installed Router or a producer-derived conformance fixture.
+
+These checks do not establish an assistive-technology or browser matrix,
+producer CLI parity, actual command effects, cross-product peer isolation, or
+installed/live acceptance. The browser test is skipped when its configured
+Chrome executable is unavailable. The separately authorized Router-only receipt
+in Console #3 covers an empty observation, not the remaining nonempty and
+retention-gap acceptance. A local build or CI result does not fill those cells.
+
 Contract-level MI conformance may use offline, version-pinned portable fixtures
 before Console adapter/UI integration, without completed projections or browser
 authentication. It validates the MI-owned contract, not an invented Console

@@ -285,6 +285,7 @@ it.skipIf(!existsSync(chrome))(
       ).toBe(200);
       let upstreamMode = "connected";
       let calls = 0;
+      const upstreamRequests = [];
       const key = "synthetic-browser-observer-key";
       const position = {
         epoch: "a".repeat(32),
@@ -320,6 +321,7 @@ it.skipIf(!existsSync(chrome))(
       };
       upstream = createHttpServer((request, response) => {
         calls++;
+        upstreamRequests.push(`${request.method} ${request.url}`);
         if (
           request.headers.authorization !== `Bearer ${key}` ||
           upstreamMode === "denied"
@@ -385,13 +387,20 @@ it.skipIf(!existsSync(chrome))(
         )
         .waitFor();
       expect(calls).toBe(0);
-      await page.getByRole("button", { name: "Refresh Router" }).click();
+      await page.keyboard.press("Tab");
+      expect(
+        await page
+          .getByRole("button", { name: "Refresh Router" })
+          .evaluate((element) => element === document.activeElement),
+      ).toBe(true);
+      await page.keyboard.press("Enter");
       await page
         .getByText(
           "Last Router refresh succeeded. Connectivity and freshness are not continuously monitored; observations are not admission guarantees.",
         )
         .waitFor();
       await page.getByText("m".repeat(64), { exact: false }).waitFor();
+      expect(upstreamRequests).toEqual(["GET /observer/v1/snapshot"]);
       await page.setViewportSize({ width: 390, height: 844 });
       expect(
         await page.evaluate(
@@ -451,6 +460,13 @@ it.skipIf(!existsSync(chrome))(
           })
           .count(),
       ).toBe(0);
+      expect(
+        upstreamRequests.every((request) =>
+          ["GET /observer/v1/snapshot", "POST /observer/v1/replay"].includes(
+            request,
+          ),
+        ),
+      ).toBe(true);
       await stopServer();
       await startServer();
       await page.reload();
