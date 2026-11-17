@@ -419,7 +419,7 @@ describe.skipIf(process.platform !== "linux")("native owner receiver", () => {
       });
       expect(await result.json()).toEqual({
         status: "connected",
-        actions: [],
+        actions: ["approve"],
         scope: "program-1",
         digest,
         text,
@@ -430,6 +430,32 @@ describe.skipIf(process.platform !== "linux")("native owner receiver", () => {
           action: "proposal-chunk",
           offset: 0,
           proposal_digest: null,
+        },
+      ]);
+      const unsupported = await fetch(`${origin}/api/kernel/owner-review`, {
+        method: "POST",
+        headers: { ...headers, cookie },
+        body: JSON.stringify({ expires_at: "2000000000" }),
+      });
+      expect(unsupported.status).toBe(503);
+      expect(requests).toEqual([
+        {
+          version: 1,
+          action: "proposal-chunk",
+          offset: 0,
+          proposal_digest: null,
+        },
+        {
+          version: 1,
+          action: "proposal-chunk",
+          offset: 0,
+          proposal_digest: null,
+        },
+        {
+          version: 1,
+          action: "approval-scope-chunk",
+          offset: 0,
+          scope_digest: null,
         },
       ]);
     } finally {

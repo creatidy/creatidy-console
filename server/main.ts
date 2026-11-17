@@ -41,6 +41,9 @@ try {
       readProposal: transport.readProposal,
       readApprovalScope: transport.readApprovalScope,
       readRevision: transport.readRevision,
+      sendCommand: transport.sendCommand,
+      canReplay: transport.canReplay,
+      replayCommand: transport.replayCommand,
       close: transport.close,
     };
   } else if (process.env.CONSOLE_KERNEL_OWNER !== undefined) {

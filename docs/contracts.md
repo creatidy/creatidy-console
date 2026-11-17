@@ -277,11 +277,11 @@ depends on the supervisor and protected descriptor inheritance. Channel closure
 does not itself cancel work or prove settlement. See the
 [merged producer contract](https://forgejo.creatidy.com/Creatidy/creatidy-kernel/src/commit/407f1be3195d3c698ac1f5e7c57e65e215d0c88a/docs/architecture/contracts.md).
 This delivery is not installed Console conformance or live integration evidence.
-The optional Linux supervisor-launched Console backend validates and retains the
-descriptor and greeting for authenticated proposal inspection. The default has
-no capability; submissions remain refused. Labels do not verify producer
-identity. A valid-looking receipt shape is not evidence of an authenticated
-producer or an observed effect.
+The earlier Linux supervisor-launched Console delivery validated and retained
+the descriptor and greeting for authenticated proposal inspection but did not
+enable submissions. The default still has no capability. Labels do not verify
+producer identity. A valid-looking receipt shape is not evidence of an
+authenticated producer or an observed effect.
 
 Kernel
 [PR #130](https://forgejo.creatidy.com/Creatidy/creatidy-kernel/pulls/130) was
@@ -294,11 +294,12 @@ not truncated or approvable. The original text is untrusted data; a matching
 digest alone grants no authority. Approval receipts are historical and may have
 an effective expiry earlier than requested. These fixture-level checks neither
 prove the identity or version of a running producer nor enable live commands.
-The local transport has synthetic Unix-socket tests. The application exposes
-only the complete verified original text, scope and digest through its
-authenticated, no-store endpoint; concurrent reads share an in-flight request.
-Disconnect, refusal, malformed data and oversize responses fail closed. No
-actual producer connection or installed provenance has been established.
+The local transport has synthetic Unix-socket tests. The initial application
+delivery exposed the complete verified original text, scope and digest through
+its authenticated, no-store endpoint; concurrent reads shared an in-flight
+request. Disconnect, refusal, malformed data and oversize responses fail closed.
+That earlier delivery did not establish an actual producer connection or
+installed provenance.
 
 The reviewed proposal does not itself contain the full host-bound owner policy,
 authority envelope, budgets or execution and verification context that Kernel
@@ -329,10 +330,11 @@ across restart and bounds storage by aging out historical records first. A
 manual exact receipt check is available only on the same retained channel after
 it reported the original intent without a receipt; a lost channel or restart
 does not establish continuity. No snapshot label clears an unknown outcome.
-Historical receipts do not prove a present grant or effect. The production
-launcher does not yet enable this command path: synthetic tests and an isolated
-producer probe are not installed Console conformance or authority to operate a
-real producer.
+Historical receipts do not prove a present grant or effect. The optional
+supervisor-launched backend exposes this scoped approval path only with the
+inherited owner capability; ordinary launches have no command capability.
+Synthetic tests and isolated producer probes do not establish live deployment or
+authority to operate a real producer.
 
 Each real command additionally requires idempotency/input/reconciliation, audit
 receipt and negative tests for denial, expiration, stale subject, multiple
