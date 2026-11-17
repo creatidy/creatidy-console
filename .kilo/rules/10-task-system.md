@@ -64,16 +64,18 @@
 - `/finish-pr` selects an existing PR and authorizes only its linked issue's
   accepted-scope remediation. Use a fresh foreground `pr-reviewer` native `task`
   for each frozen whole-PR review; consume its result without owner relaying. At
-  most 10 whole-PR review invocations per issue delivery, including initial,
-  COMMENT and retries. Persist ordinals before dispatch in excluded progress;
-  finish reentry, internal phase, new task/model/session cannot reset the
-  counter. Current APPROVE yields READY_TO_MERGE, never a standalone merge; only
-  `/loop` may continue through its separate merge/completion gates. At the bound
-  return STOP_REVISE with new defects versus incomplete fixes and recurring
-  architectural/semantic patterns. Material scope/architecture decisions yield
-  OWNER_DECISION_NEEDED; unavailable tools require bounded technical
-  self-remediation before a precise finite BLOCKED. Classify A/B and fulfill the
-  shared decision/blocker ledger contracts before owner escalation. In `/loop`
-  map OWNER_DECISION_NEEDED to STOP_AND_ASK; stop, never skip selected work.
+  most 10 whole-PR review invocations by default per issue delivery, including
+  initial, COMMENT and retries. An effective, owner-authorized exception must
+  meet `30-implementation-discipline.md` and controlling instructions. Persist
+  ordinals before dispatch in excluded progress; finish reentry, internal phase,
+  new task/model/session cannot reset the counter. Current APPROVE yields
+  READY_TO_MERGE, never a standalone merge; only `/loop` may continue through
+  its separate merge/completion gates. At the bound return STOP_REVISE with new
+  defects versus incomplete fixes and recurring architectural/semantic patterns.
+  Material scope/architecture decisions yield OWNER_DECISION_NEEDED; unavailable
+  tools require bounded technical self-remediation before a precise finite
+  BLOCKED. Classify A/B and fulfill the shared decision/blocker ledger contracts
+  before owner escalation. In `/loop` map OWNER_DECISION_NEEDED to STOP_AND_ASK;
+  stop, never skip selected work.
 
 <!-- Adapted from Model Intelligence 013cbb43e11d7f698d359db5a456d26d8075e34e: Console repository identity; see NOTICE. -->

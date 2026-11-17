@@ -227,15 +227,19 @@ Policy origin: current owner workflow-migration mandate and the actual Model
 Intelligence reference at `013cbb43e11d7f698d359db5a456d26d8075e34e`. Earlier
 bootstrap-only budgets are historical, not another active command policy.
 
-`/finish-pr` permits **at most 10 whole-PR review invocations per issue
-delivery**, including initial, COMMENT, invalidated reviews and corrected
-retries. Persist the next ordinal before every dispatch in the excluded
-`.task_progress.md` ledger, keyed by issue/PR and loop invocation when
-applicable. Recover the same counter across finish/phase/task/model/session
-changes. Missing/ambiguous recovery after bounded recovery is BLOCKED; no reset
-and no review 11. At the bound exact valid APPROVE can proceed; owner decisions
-stop, finite infrastructure paths or review budget yield BLOCKED and remaining
-actionable findings STOP_REVISE. Do not patch when no fresh-review slot remains.
+`/finish-pr` permits **at most 10 whole-PR review invocations per issue delivery
+by default**, including initial, COMMENT, invalidated reviews and corrected
+retries. An exception is effective only under
+[implementation discipline](.kilo/rules/30-implementation-discipline.md) and
+controlling higher-priority instructions. Persist the next ordinal before every
+dispatch in the excluded `.task_progress.md` ledger, keyed by issue/PR and loop
+invocation when applicable. Recover the same counter across
+finish/phase/task/model/session changes. Missing/ambiguous recovery after
+bounded recovery is BLOCKED; no reset and, without an effective exception, no
+review 11. At the effective ceiling exact valid APPROVE can proceed; owner
+decisions stop, finite infrastructure paths or review budget yield BLOCKED and
+remaining actionable findings STOP_REVISE. Do not patch when no fresh-review
+slot remains.
 
 Follow the authoritative conversational-independence policy in
 [AGENTS.md](AGENTS.md). Freeze exact HEAD/base/merge-base and clean source.
@@ -289,13 +293,14 @@ workaround; report the exact capability, not an artificial owner question.
 
 Default technical remediation is capped at three attempts per distinct obstacle
 across reentry with a recorded finite time limit. Each retry changes a diagnosed
-condition. Failed/COMMENT whole-PR dispatches still consume the next of 10
-review ordinals. Prefer explicit sanitized synthetic environments, approved
-locked tool repair, temporary exact-object checkouts, or ephemeral containers as
-needed, not Docker automatically. Containers do not authorize persistent
-services, broader network/secret access or product dependency adoption. Do not
-expose credential directories or real inherited secrets; environment-inheritance
-tests inherit synthetic values. Reviewer permissions remain deny-by-default.
+condition. Failed/COMMENT whole-PR dispatches still consume the next ordinal
+within the effective ceiling. Prefer explicit sanitized synthetic environments,
+approved locked tool repair, temporary exact-object checkouts, or ephemeral
+containers as needed, not Docker automatically. Containers do not authorize
+persistent services, broader network/secret access or product dependency
+adoption. Do not expose credential directories or real inherited secrets;
+environment-inheritance tests inherit synthetic values. Reviewer permissions
+remain deny-by-default.
 
 Distinguish defects from infrastructure failure and judgment uncertainty. Use
 another available authorized fresh independent reviewer/tool path automatically
