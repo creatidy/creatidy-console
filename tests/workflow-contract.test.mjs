@@ -715,7 +715,52 @@ describe("ported Model Intelligence workflow contract", () => {
       expect(shared).toContain(requirement);
   });
 
-  test("secret-safe inheritance and independent public evidence are mandatory", () => {
+  test("practical review separates material inspection from routine CI validation", () => {
+    const reviewer = text(".kilo/agents/pr-reviewer.md");
+    for (const requirement of [
+      "relevant acceptance criteria",
+      "complete merge-base-to-HEAD diff and relevant surrounding code",
+      "significant correctness defects, regressions and missing edge cases",
+      "architectural drift, duplicated responsibilities",
+      "violations of producer contracts or accepted decisions",
+      "authorization, credentials, trust boundaries and data integrity",
+      "tests cover important behavior",
+      "Prioritize evidence-based P0/P1/P2 findings",
+      "Cosmetic issues and speculative improvements must not block integration",
+      "Verify authoritative Forgejo CI status for the exact reviewed HEAD",
+      "applicable required checks",
+      "Report missing, stale, pending or failed CI exactly, never as passed",
+      "distinguish verified status from unavailable job-level detail",
+      "The implementation agent and CI own routine validation",
+      "Reviewers must not be required to rerun the full CI suite",
+      "Targeted local tests are optional",
+      "An unavailable optional check does not automatically mean COMMENT",
+      "No full security audit, exhaustive unchanged-code inspection, complete producer environment",
+      "mandatory security, producer acceptance and final release gates remain binding",
+      "do not require separate repositories, installations or infrastructure",
+    ]) {
+      expect(reviewer).toContain(requirement);
+    }
+    const validation = text(".kilo/rules/validation.md");
+    expect(validation).toContain(
+      "the implementation agent still runs required local `make check`",
+    );
+    expect(validation).toContain("Reviewer full-suite reruns are not required");
+    for (const path of [
+      ".kilo/command/finish-pr.md",
+      ".kilo/command/review-pr.md",
+    ]) {
+      expect(text(path)).toContain("optional");
+      expect(text(path)).toContain(
+        "unavailable optional checks alone do not require COMMENT",
+      );
+    }
+    expect(reviewer).not.toContain(
+      "cannot execute safely, return the exact capability/environment gap as COMMENT",
+    );
+  });
+
+  test("secret-safe inheritance and material independent public evidence are mandatory", () => {
     const shared = text(".kilo/rules/30-implementation-discipline.md");
     for (const requirement of [
       "inherit synthetic test values, not the owner's ambient credentials",
