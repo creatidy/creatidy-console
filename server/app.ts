@@ -473,20 +473,93 @@ export async function createApp(options: AppOptions) {
           )
         )
           throw new Error("Invalid journal record");
-        const receipt =
+        const integerText = (value: unknown, pattern: RegExp) => {
+          if (
+            !(
+              typeof value === "bigint" ||
+              (typeof value === "number" && Number.isSafeInteger(value))
+            ) ||
+            !pattern.test(String(value))
+          )
+            throw new Error("Invalid journal integer");
+          return String(value);
+        };
+        let approval = null;
+        if (parsed.action === "approve") {
+          const fields = parsed as Record<string, unknown>;
+          if (
+            typeof fields.decision_id !== "string" ||
+            !fields.decision_id.trim() ||
+            Array.from(fields.decision_id).length > 256 ||
+            typeof fields.proposal_digest !== "string" ||
+            !/^[0-9a-f]{64}$/.test(fields.proposal_digest) ||
+            typeof fields.scope_digest !== "string" ||
+            !/^[0-9a-f]{64}$/.test(fields.scope_digest)
+          )
+            throw new Error("Invalid journal approval");
+          approval = {
+            revision: integerText(
+              fields.expected_revision,
+              /^(?:-1|0|[1-9][0-9]*)$/,
+            ),
+            proposalDigest: fields.proposal_digest,
+            scopeDigest: fields.scope_digest,
+            decisionId: fields.decision_id,
+            requestedExpiry: integerText(fields.expires_at, /^[1-9][0-9]*$/),
+          };
+        }
+        const storedReceipt =
           row.receipt === null ? null : JSON.parse(String(row.receipt));
         if (
           (row.outcome !== "unknown" && row.outcome !== "historical") ||
-          (row.outcome === "unknown" && receipt !== null) ||
+          (row.outcome === "unknown" && storedReceipt !== null) ||
           (row.outcome === "historical" &&
-            (!receipt || receipt.kind !== "historical-receipt-shape"))
+            (!storedReceipt ||
+              storedReceipt.kind !== "historical-receipt-shape"))
         )
           throw new Error("Invalid journal outcome");
+        if (storedReceipt) {
+          if (
+            storedReceipt.action !== parsed.action ||
+            typeof storedReceipt.status !== "string" ||
+            !["approved", "accepted", "recorded"].includes(
+              storedReceipt.status,
+            ) ||
+            ![null, "unknown", "bound-managed-target-settled"].includes(
+              storedReceipt.settlement,
+            ) ||
+            (parsed.action === "approve" &&
+              (typeof storedReceipt.decision_id !== "string" ||
+                typeof storedReceipt.spec_digest !== "string" ||
+                !/^[0-9a-f]{64}$/.test(storedReceipt.spec_digest) ||
+                !(
+                  typeof storedReceipt.expires_at === "string" ||
+                  (typeof storedReceipt.expires_at === "number" &&
+                    Number.isSafeInteger(storedReceipt.expires_at))
+                ) ||
+                !/^[1-9][0-9]*$/.test(String(storedReceipt.expires_at))))
+          )
+            throw new Error("Invalid journal receipt");
+        }
+        const receipt = storedReceipt && {
+          kind: storedReceipt.kind,
+          action: storedReceipt.action,
+          status: storedReceipt.status,
+          settlement: storedReceipt.settlement,
+          ...(storedReceipt.action === "approve"
+            ? {
+                decisionId: storedReceipt.decision_id,
+                specDigest: storedReceipt.spec_digest,
+                effectiveExpiry: String(storedReceipt.expires_at),
+              }
+            : {}),
+        };
         const command = replayable.get(String(row.command_id));
         return {
           commandId: row.command_id,
           scope: row.scope,
           action: parsed.action,
+          approval,
           outcome: row.outcome,
           receipt,
           created: row.created,

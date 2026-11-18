@@ -299,6 +299,20 @@ function KernelApprovalPanel({
       action: string;
       outcome: "unknown" | "historical";
       canReplay: boolean;
+      approval: {
+        revision: string;
+        proposalDigest: string;
+        scopeDigest: string;
+        decisionId: string;
+        requestedExpiry: string;
+      } | null;
+      receipt: {
+        status: string;
+        settlement: string | null;
+        decisionId?: string;
+        specDigest?: string;
+        effectiveExpiry?: string;
+      } | null;
     }>
   >();
   const [historyVisible, setHistoryVisible] = useState(false);
@@ -534,6 +548,20 @@ function KernelApprovalPanel({
           action: string;
           outcome: "unknown" | "historical";
           canReplay: boolean;
+          approval: {
+            revision: string;
+            proposalDigest: string;
+            scopeDigest: string;
+            decisionId: string;
+            requestedExpiry: string;
+          } | null;
+          receipt: {
+            status: string;
+            settlement: string | null;
+            decisionId?: string;
+            specDigest?: string;
+            effectiveExpiry?: string;
+          } | null;
         } => {
           if (
             !item ||
@@ -543,6 +571,8 @@ function KernelApprovalPanel({
             !("action" in item) ||
             !("outcome" in item) ||
             !("canReplay" in item) ||
+            !("approval" in item) ||
+            !("receipt" in item) ||
             typeof item.commandId !== "string" ||
             typeof item.scope !== "string" ||
             typeof item.action !== "string" ||
@@ -550,12 +580,73 @@ function KernelApprovalPanel({
             (item.outcome !== "unknown" && item.outcome !== "historical")
           )
             throw new Error();
+          const approval = item.approval;
+          if (item.action === "approve") {
+            if (
+              !approval ||
+              typeof approval !== "object" ||
+              !("revision" in approval) ||
+              typeof approval.revision !== "string" ||
+              !/^(?:-1|0|[1-9][0-9]*)$/.test(approval.revision) ||
+              !("proposalDigest" in approval) ||
+              typeof approval.proposalDigest !== "string" ||
+              !/^[0-9a-f]{64}$/.test(approval.proposalDigest) ||
+              !("scopeDigest" in approval) ||
+              typeof approval.scopeDigest !== "string" ||
+              !/^[0-9a-f]{64}$/.test(approval.scopeDigest) ||
+              !("decisionId" in approval) ||
+              typeof approval.decisionId !== "string" ||
+              !approval.decisionId.trim() ||
+              !("requestedExpiry" in approval) ||
+              typeof approval.requestedExpiry !== "string" ||
+              !/^[1-9][0-9]*$/.test(approval.requestedExpiry)
+            )
+              throw new Error();
+          } else if (approval !== null) throw new Error();
+          const receipt = item.receipt;
+          if (item.outcome === "historical") {
+            if (
+              !receipt ||
+              typeof receipt !== "object" ||
+              !("action" in receipt) ||
+              receipt.action !== item.action ||
+              !("status" in receipt) ||
+              typeof receipt.status !== "string" ||
+              !("settlement" in receipt) ||
+              (receipt.settlement !== null &&
+                typeof receipt.settlement !== "string") ||
+              (item.action === "approve" &&
+                (!("decisionId" in receipt) ||
+                  typeof receipt.decisionId !== "string" ||
+                  !("specDigest" in receipt) ||
+                  typeof receipt.specDigest !== "string" ||
+                  !/^[0-9a-f]{64}$/.test(receipt.specDigest) ||
+                  !("effectiveExpiry" in receipt) ||
+                  typeof receipt.effectiveExpiry !== "string" ||
+                  !/^[1-9][0-9]*$/.test(receipt.effectiveExpiry)))
+            )
+              throw new Error();
+          } else if (receipt !== null) throw new Error();
           return {
             commandId: item.commandId,
             scope: item.scope,
             action: item.action,
             outcome: item.outcome,
             canReplay: item.canReplay,
+            approval: approval as {
+              revision: string;
+              proposalDigest: string;
+              scopeDigest: string;
+              decisionId: string;
+              requestedExpiry: string;
+            } | null,
+            receipt: receipt as {
+              status: string;
+              settlement: string | null;
+              decisionId?: string;
+              specDigest?: string;
+              effectiveExpiry?: string;
+            } | null,
           };
         },
       );
@@ -706,6 +797,38 @@ function KernelApprovalPanel({
                   ? "outcome unknown; do not retry blindly"
                   : "historical receipt only"}{" "}
                 (command {entry.commandId}){" "}
+                {entry.approval && (
+                  <div>
+                    <p>Reviewed revision: {entry.approval.revision}</p>
+                    <p>Proposal SHA-256: {entry.approval.proposalDigest}</p>
+                    <p>Approval scope SHA-256: {entry.approval.scopeDigest}</p>
+                    <p>Decision ID: {entry.approval.decisionId}</p>
+                    <p>
+                      Requested producer expiry:{" "}
+                      {entry.approval.requestedExpiry}
+                    </p>
+                  </div>
+                )}
+                {entry.receipt && (
+                  <div>
+                    <p>Receipt status: {entry.receipt.status}</p>
+                    {entry.receipt.settlement && (
+                      <p>Receipt settlement: {entry.receipt.settlement}</p>
+                    )}
+                    {entry.receipt.decisionId && (
+                      <p>Receipt decision ID: {entry.receipt.decisionId}</p>
+                    )}
+                    {entry.receipt.specDigest && (
+                      <p>Receipt spec SHA-256: {entry.receipt.specDigest}</p>
+                    )}
+                    {entry.receipt.effectiveExpiry && (
+                      <p>
+                        Receipt effective expiry:{" "}
+                        {entry.receipt.effectiveExpiry}
+                      </p>
+                    )}
+                  </div>
+                )}
                 {entry.canReplay && entry.outcome === "unknown" && (
                   <>
                     <p>

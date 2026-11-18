@@ -76,22 +76,22 @@ dependencies; it is not a packaged installation or producer-integration receipt.
 | `make bootstrap` | Issue short-lived local first-owner authority                        |
 | `make start`     | Serve the built UI and authenticated API from one origin             |
 
-### Experimental Owner Proposal Read
+### Experimental Supervised Owner Channel
 
-The optional Linux-only descriptor check is not command delivery or installed
-producer conformance. Build it explicitly with `npm run build:native-owner`;
-there is no install hook or downloaded native package. It requires Node
-`24.19.0`, its matching headers at `../include/node` relative to the Node
-executable, and a trusted system C compiler available as `cc`. The build checks
-the Node and header version, compiles the Apache-2.0 Console source with the
-specified flags, and atomically writes `.cache/native/owner-receiver.node`.
-Different compilers, libc versions and target architectures may produce
-different binary bytes; this is not a cross-platform or bit-reproducible release
-artifact. The normal static `dist` build does not include this addon or a Node
-runtime. The build uses Node's MIT-licensed N-API headers without vendoring
-them. The local Linux build dynamically links the system C library. Any future
-distribution of Node, libc, or a native binary must independently include
-applicable licenses and validate its actual artifact and target platform.
+The optional Linux-only descriptor check does not establish installed producer
+conformance. Build it explicitly with `npm run build:native-owner`; there is no
+install hook or downloaded native package. It requires Node `24.19.0`, its
+matching headers at `../include/node` relative to the Node executable, and a
+trusted system C compiler available as `cc`. The build checks the Node and
+header version, compiles the Apache-2.0 Console source with the specified flags,
+and atomically writes `.cache/native/owner-receiver.node`. Different compilers,
+libc versions and target architectures may produce different binary bytes; this
+is not a cross-platform or bit-reproducible release artifact. The normal static
+`dist` build does not include this addon or a Node runtime. The build uses
+Node's MIT-licensed N-API headers without vendoring them. The local Linux build
+dynamically links the system C library. Any future distribution of Node, libc,
+or a native binary must independently include applicable licenses and validate
+its actual artifact and target platform.
 
 Only a trusted supervisor may opt in: set `CONSOLE_KERNEL_OWNER=1`, supply
 `CONSOLE_KERNEL_OWNER_SCOPE`, `CONSOLE_KERNEL_OWNER_PRODUCER`, and
@@ -111,13 +111,17 @@ The check accepts only a connected Unix stream descriptor at least 3, sets and
 verifies `FD_CLOEXEC`, reads one framed greeting of at most 65536 bytes with a
 five-second deadline, and validates the exact Kernel #124 greeting. It retains
 the channel for authenticated fixed proposal-chunk reads, with a 4 MiB aggregate
-limit and digest validation; it never sends owner commands. Startup fails closed
+limit and digest validation, and can deliver reviewed, revision-bound approve
+commands using independently provisioned Kernel authority. Startup fails closed
 on a missing addon, invalid descriptor, mismatch, malformed frame or timeout.
 The default startup does not load the addon or use a descriptor. This is a
 synthetic verification path, not a supported deployment recipe or live
 integration receipt. Proposal text is untrusted; declarations do not establish
-effective host policy. Approval and every other owner action remain unavailable
-and live mutation requires separate owner authorization.
+effective host policy. A historical receipt is not proof of current authority or
+effect; a lost reply remains unknown, and replay is restricted to the original
+channel. Other owner actions are unsupported. No real live mutation is
+authorized without separate owner authorization. Synthetic evidence does not
+satisfy #11 installation or #12 producer/browser conformance.
 
 `make bootstrap` creates `bootstrap-token` in the private state directory with
 mode 0600, expires in 15 minutes, and refuses once an owner exists. Read it only

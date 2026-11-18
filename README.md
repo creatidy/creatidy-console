@@ -14,15 +14,19 @@ The authenticated local application foundation delivered in
 [#31](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/31) provides
 owner setup, login and durable sessions. The in-progress Router-only observer
 view accepts a locally configured, separately scoped observer key and uses only
-the producer's read contract. There are no live task views, product commands,
-notifications or production installation guarantees. Synthetic tests are not
-evidence of an installed Router connection, and the UI does not simulate healthy
-resources.
+the producer's read contract. There are no live task views, general product
+commands, notifications or production installation guarantees. Synthetic tests
+are not evidence of an installed Router connection, and the UI does not simulate
+healthy resources.
 
-An optional Linux supervisor-launched Kernel channel supports authenticated,
-read-only inspection of a digest-verified proposal. Default startup has no
-Kernel capability; no Kernel commands are enabled. Synthetic tests do not prove
-an installed or live producer connection.
+An optional Linux supervisor-launched Kernel channel supports authenticated
+inspection of a digest-verified proposal and a reviewed, revision-bound approve
+command when independently provisioned Kernel authority is present. Default
+startup has no Kernel capability; other owner actions are unsupported. A
+historical receipt is not a current grant or proof of effect, and a lost reply
+leaves the outcome unknown. Real live mutation requires separate owner
+authorization. Synthetic tests do not prove an installed or live producer
+connection; #11 installation and #12 conformance gates remain open.
 
 Console presents producer-owned facts and delivers authorized commands to their
 owners. It is not a scheduler, harness, inference gateway, model catalog, shared

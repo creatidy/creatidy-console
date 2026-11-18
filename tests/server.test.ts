@@ -102,9 +102,9 @@ describe("authenticated application", () => {
           scope,
           {
             action: "approve",
-            expected_revision: -1,
-            decision_id: "d".repeat(64),
-            expires_at: 2000000000,
+            expected_revision: index ? 9007199254740993n : -1,
+            decision_id: index ? "<img src=x>" : "d".repeat(64),
+            expires_at: 9223372036854775807n,
             proposal_digest: "a".repeat(64),
             scope_digest: "b".repeat(64),
           },
@@ -119,7 +119,18 @@ describe("authenticated application", () => {
             scope,
             command.frame(),
             index ? "historical" : "unknown",
-            index ? JSON.stringify({ kind: "historical-receipt-shape" }) : null,
+            index
+              ? JSON.stringify({
+                  kind: "historical-receipt-shape",
+                  action: "approve",
+                  status: "approved",
+                  settlement: null,
+                  decision_id: "<img src=x>",
+                  spec_digest: "c".repeat(64),
+                  expires_at: "9007199254740993",
+                  secret: "must-not-leak",
+                })
+              : null,
             index,
           );
       }
@@ -143,14 +154,39 @@ describe("authenticated application", () => {
         expect.objectContaining({
           scope: "scope-b",
           outcome: "historical",
+          approval: {
+            revision: "9007199254740993",
+            proposalDigest: "a".repeat(64),
+            scopeDigest: "b".repeat(64),
+            decisionId: "<img src=x>",
+            requestedExpiry: "9223372036854775807",
+          },
+          receipt: {
+            kind: "historical-receipt-shape",
+            action: "approve",
+            status: "approved",
+            settlement: null,
+            decisionId: "<img src=x>",
+            specDigest: "c".repeat(64),
+            effectiveExpiry: "9007199254740993",
+          },
           canReplay: false,
         }),
         expect.objectContaining({
           scope: "scope-a",
           outcome: "unknown",
+          approval: {
+            revision: "-1",
+            proposalDigest: "a".repeat(64),
+            scopeDigest: "b".repeat(64),
+            decisionId: "d".repeat(64),
+            requestedExpiry: "9223372036854775807",
+          },
+          receipt: null,
           canReplay: false,
         }),
       ]);
+      expect(disconnected.body).not.toContain("must-not-leak");
       await app.close();
       restarted = await createApp({
         stateDirectory: dir,
@@ -322,6 +358,13 @@ describe("authenticated application", () => {
         headers: auth,
       });
       expect(history.json().commands[0].canReplay).toBe(true);
+      expect(history.json().commands[0].approval).toEqual({
+        revision: "-1",
+        proposalDigest: "a".repeat(64),
+        scopeDigest: "b".repeat(64),
+        decisionId: String(original!.request.decision_id),
+        requestedExpiry: "2000000000",
+      });
       const id = history.json().commands[0].commandId;
       writable = false;
       const busy = await app.inject({
@@ -369,6 +412,11 @@ describe("authenticated application", () => {
       expect(after.json().commands[0]).toMatchObject({
         outcome: "historical",
         canReplay: false,
+        receipt: {
+          decisionId: String(original!.request.decision_id),
+          specDigest: "c".repeat(64),
+          effectiveExpiry: "2000000000",
+        },
       });
     } finally {
       await app.close();

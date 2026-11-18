@@ -164,6 +164,14 @@ it.skipIf(!existsSync(chrome))(
                 scope: "scope-a",
                 action: "approve",
                 outcome: "unknown",
+                approval: {
+                  revision: "-1",
+                  proposalDigest: "a".repeat(64),
+                  scopeDigest: "b".repeat(64),
+                  decisionId: '<img src=x onerror="window.journalInjected=1">',
+                  requestedExpiry: "9223372036854775807",
+                },
+                receipt: null,
                 canReplay: false,
               },
               {
@@ -171,6 +179,22 @@ it.skipIf(!existsSync(chrome))(
                 scope: "scope-b",
                 action: "approve",
                 outcome: "historical",
+                approval: {
+                  revision: "9007199254740993",
+                  proposalDigest: "a".repeat(64),
+                  scopeDigest: "b".repeat(64),
+                  decisionId: "decision-2",
+                  requestedExpiry: "9223372036854775807",
+                },
+                receipt: {
+                  kind: "historical-receipt-shape",
+                  action: "approve",
+                  status: "approved",
+                  settlement: null,
+                  decisionId: "decision-2",
+                  specDigest: "c".repeat(64),
+                  effectiveExpiry: "9007199254740993",
+                },
                 canReplay: false,
               },
             ],
@@ -182,6 +206,21 @@ it.skipIf(!existsSync(chrome))(
         .click();
       await page.getByText(/Scope: scope-a/).waitFor();
       expect(await page.getByText(/Scope: scope-b/).count()).toBe(1);
+      expect(
+        await page.getByText("Reviewed revision: 9007199254740993").count(),
+      ).toBe(1);
+      expect(
+        await page
+          .getByText("Receipt effective expiry: 9007199254740993")
+          .count(),
+      ).toBe(1);
+      expect(
+        await page.getByText(`Receipt spec SHA-256: ${"c".repeat(64)}`).count(),
+      ).toBe(1);
+      expect(
+        await page.locator('[aria-label="Command history"] img').count(),
+      ).toBe(0);
+      expect(await page.evaluate(() => window.journalInjected)).toBeUndefined();
       expect(
         await page
           .getByRole("button", { name: "Check original receipt" })
@@ -317,6 +356,14 @@ it.skipIf(!existsSync(chrome))(
                 scope: hostile,
                 action: "approve",
                 outcome: "unknown",
+                approval: {
+                  revision: "-1",
+                  proposalDigest: "a".repeat(64),
+                  scopeDigest: "b".repeat(64),
+                  decisionId: "decision",
+                  requestedExpiry: "2000000000",
+                },
+                receipt: null,
                 canReplay: true,
               },
             ],
