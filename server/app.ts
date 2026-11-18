@@ -784,16 +784,17 @@ export async function createApp(options: AppOptions) {
       return reply
         .code(503)
         .send({ error: "Owner channel busy; receipt check not sent" });
-    replayable.delete(input.commandId);
     try {
       const token = beginOwnerReplay(
         request.session.sessionStoreId,
         request.session.sessionId,
         command,
       );
-      const pending = dispatchOwnerCommand(token, (prepared) =>
-        channel.replayCommand!(prepared),
-      );
+      const pending = dispatchOwnerCommand(token, (prepared) => {
+        // Once initiation begins, a thrown error may still mean a send occurred.
+        replayable.delete(command.commandId);
+        return channel.replayCommand!(prepared);
+      });
       const result = await pending;
       recordOwnerReceipt(command, result);
       if (result.kind === "unknown" && channel.canReplay(command))

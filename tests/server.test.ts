@@ -284,6 +284,16 @@ describe("authenticated application", () => {
   });
   it("replays only an original unknown on the same in-memory capability", async () => {
     let writable = true;
+    let failOnClock = 0;
+    let armFailure = 0;
+    let releaseReplay!: () => void;
+    let replayStarted!: () => void;
+    const replayHeld = new Promise<void>((resolve) => {
+      releaseReplay = resolve;
+    });
+    const replayReady = new Promise<void>((resolve) => {
+      replayStarted = resolve;
+    });
     let original:
       | ReturnType<
           typeof import("../server/kernel-owner-v1.ts").prepareLocalOwnerCommand
@@ -296,6 +306,8 @@ describe("authenticated application", () => {
     const replayCommand = vi.fn(
       async (command: NonNullable<typeof original>) => {
         expect(command).toBe(original);
+        replayStarted();
+        await replayHeld;
         return {
           kind: "historical-receipt-shape" as const,
           action: "approve" as const,
@@ -316,14 +328,24 @@ describe("authenticated application", () => {
         text: "scope",
       }),
       readRevision: async () => ({ revision: "-1", status: "absent" }),
-      canSend: () => writable,
+      canSend: () => {
+        if (armFailure) {
+          failOnClock = armFailure;
+          armFailure = 0;
+        }
+        return writable;
+      },
       sendCommand,
       canReplay: (command: NonNullable<typeof original>) =>
         command === original,
       replayCommand,
       close: () => {},
     };
-    const { app } = await fixture(() => Date.now(), channel);
+    const { app } = await fixture(() => {
+      if (failOnClock && --failOnClock === 0)
+        throw new Error("synthetic admission failure");
+      return Date.now();
+    }, channel);
     try {
       await app.inject({
         method: "POST",
@@ -382,12 +404,43 @@ describe("authenticated application", () => {
       });
       expect(stillAvailable.json().commands[0].canReplay).toBe(true);
       writable = true;
-      const result = await app.inject({
+      for (const clockCall of [1, 2]) {
+        armFailure = clockCall;
+        const refused = await app.inject({
+          method: "POST",
+          url: "/api/kernel/owner-replay",
+          headers: auth,
+          payload: { commandId: id },
+        });
+        expect(refused.statusCode).toBe(503);
+        expect(replayCommand).not.toHaveBeenCalled();
+        const retained = await app.inject({
+          method: "GET",
+          url: "/api/kernel/owner-journal",
+          headers: auth,
+        });
+        expect(retained.json().commands[0]).toMatchObject({
+          outcome: "unknown",
+          canReplay: true,
+        });
+      }
+      const pending = app.inject({
         method: "POST",
         url: "/api/kernel/owner-replay",
         headers: auth,
         payload: { commandId: id },
       });
+      await replayReady;
+      const concurrent = await app.inject({
+        method: "POST",
+        url: "/api/kernel/owner-replay",
+        headers: auth,
+        payload: { commandId: id },
+      });
+      expect(concurrent.statusCode).toBe(409);
+      expect(replayCommand).toHaveBeenCalledTimes(1);
+      releaseReplay();
+      const result = await pending;
       expect(result.json()).toMatchObject({
         kind: "historical-receipt-shape",
         action: "approve",
