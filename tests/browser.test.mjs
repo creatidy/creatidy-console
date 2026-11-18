@@ -154,6 +154,55 @@ it.skipIf(!existsSync(chrome))(
           .getByRole("button", { name: /approve|stop|reconcile|start/i })
           .count(),
       ).toBe(0);
+      await page.route("**/api/kernel/owner-journal", (route) =>
+        route.fulfill({
+          json: {
+            status: "available",
+            commands: [
+              {
+                commandId: "retained-1",
+                scope: "scope-a",
+                action: "approve",
+                outcome: "unknown",
+                canReplay: false,
+              },
+              {
+                commandId: "retained-2",
+                scope: "scope-b",
+                action: "approve",
+                outcome: "historical",
+                canReplay: false,
+              },
+            ],
+          },
+        }),
+      );
+      await page
+        .getByRole("button", { name: "Inspect command history" })
+        .click();
+      await page.getByText(/Scope: scope-a/).waitFor();
+      expect(await page.getByText(/Scope: scope-b/).count()).toBe(1);
+      expect(
+        await page
+          .getByRole("button", { name: "Check original receipt" })
+          .count(),
+      ).toBe(0);
+      await page.evaluate(() => {
+        Object.defineProperty(document, "visibilityState", {
+          configurable: true,
+          value: "hidden",
+        });
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      expect(await page.getByText(/Scope: scope-a/).count()).toBe(0);
+      await page.evaluate(() => {
+        Object.defineProperty(document, "visibilityState", {
+          configurable: true,
+          value: "visible",
+        });
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await page.unroute("**/api/kernel/owner-journal");
       const hostile =
         '<img src=x onerror="window.ownerInjected=1">' + "x".repeat(2048);
       let proposalReads = 0;
@@ -262,10 +311,10 @@ it.skipIf(!existsSync(chrome))(
         route.fulfill({
           json: {
             status: "available",
-            scope: hostile,
             commands: [
               {
                 commandId: "synthetic-command",
+                scope: hostile,
                 action: "approve",
                 outcome: "unknown",
                 canReplay: true,

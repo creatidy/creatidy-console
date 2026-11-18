@@ -218,6 +218,7 @@ export function openState(directory: string, now: () => number = Date.now) {
       id: string;
       generation: string;
       command: ReturnType<typeof prepareLocalOwnerCommand>;
+      fresh: boolean;
     }
   >();
   function currentOwnerSession(id: string, generation: string, at: number) {
@@ -285,7 +286,7 @@ export function openState(directory: string, now: () => number = Date.now) {
       ).run(command.commandId, command.scope, frame, at);
       db.exec("COMMIT");
       const token = {};
-      dispatchTokens.set(token, { id, generation, command });
+      dispatchTokens.set(token, { id, generation, command, fresh: true });
       return token;
     } catch (error) {
       db.exec("ROLLBACK");
@@ -301,15 +302,27 @@ export function openState(directory: string, now: () => number = Date.now) {
     dispatchTokens.delete(token);
     const at = clock();
     db.exec("BEGIN IMMEDIATE");
+    let committed = false;
     try {
-      if (!currentOwnerSession(attempt.id, attempt.generation, at))
+      if (!currentOwnerSession(attempt.id, attempt.generation, at)) {
+        if (attempt.fresh)
+          db.prepare(
+            "DELETE FROM owner_commands WHERE command_id = ? AND scope = ? AND input = ? AND outcome = 'unknown'",
+          ).run(
+            attempt.command.commandId,
+            attempt.command.scope,
+            attempt.command.frame(),
+          );
+        db.exec("COMMIT");
+        committed = true;
         throw new Error("Session unavailable");
+      }
       // Invoke the synchronous dispatch initiation while revocation cannot overtake it.
       const result = dispatch(attempt.command);
       db.exec("COMMIT");
       return result;
     } catch (error) {
-      db.exec("ROLLBACK");
+      if (!committed) db.exec("ROLLBACK");
       throw error;
     }
   }
@@ -333,7 +346,7 @@ export function openState(directory: string, now: () => number = Date.now) {
       if (!row) throw new Error("Original unknown command unavailable");
       db.exec("COMMIT");
       const token = {};
-      dispatchTokens.set(token, { id, generation, command });
+      dispatchTokens.set(token, { id, generation, command, fresh: false });
       return token;
     } catch (error) {
       db.exec("ROLLBACK");

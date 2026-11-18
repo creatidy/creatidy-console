@@ -101,7 +101,7 @@ describe("owner command admission journal", () => {
       expect(calls).toBe(0);
       expect(
         state.db.prepare("SELECT outcome FROM owner_commands").get()?.outcome,
-      ).toBe("unknown");
+      ).toBeUndefined();
       state.db
         .prepare(
           "INSERT INTO sessions (id, generation, data, idle_expires, absolute_expires) VALUES (?, ?, ?, ?, ?)",
@@ -127,6 +127,10 @@ describe("owner command admission journal", () => {
         "Session unavailable",
       );
       expect(calls).toBe(0);
+      expect(
+        state.db.prepare("SELECT count(*) AS count FROM owner_commands").get()
+          ?.count,
+      ).toBe(0);
       state.db.close();
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -167,6 +171,49 @@ describe("owner command admission journal", () => {
       expect(second.revoke("session", "generation")).toBe(true);
       first.db.close();
       second.db.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("retains the original unknown if a replay is refused before dispatch", () => {
+    const dir = mkdtempSync(join(tmpdir(), "owner-journal-replay-"));
+    try {
+      const state = openState(dir, () => 1000);
+      state.db
+        .prepare(
+          "INSERT INTO sessions (id, generation, data, idle_expires, absolute_expires) VALUES (?, ?, ?, ?, ?)",
+        )
+        .run(
+          digest("s"),
+          digest("g"),
+          JSON.stringify({
+            owner: true,
+            cookie: { expires: new Date(3000).toISOString() },
+          }),
+          2000,
+          3000,
+        );
+      const command = prepareLocalOwnerCommand(
+        "program",
+        { action: "start-managed", expected_revision: 1 },
+        () => "original",
+      );
+      const initial = state.beginOwnerCommand("s", "g", command);
+      state.dispatchOwnerCommand(initial, () => {});
+      const replay = state.beginOwnerReplay("s", "g", command);
+      state.revoke("s", "g");
+      let calls = 0;
+      expect(() => state.dispatchOwnerCommand(replay, () => ++calls)).toThrow(
+        "Session unavailable",
+      );
+      expect(calls).toBe(0);
+      expect(
+        state.db
+          .prepare("SELECT outcome FROM owner_commands WHERE command_id = ?")
+          .get("original")?.outcome,
+      ).toBe("unknown");
+      state.db.close();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

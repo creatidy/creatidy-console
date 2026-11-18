@@ -260,14 +260,12 @@ export default function KernelOwnerPanel({ expired }: { expired: () => void }) {
           )}
         </>
       )}
-      {proposal && canApprove && (
-        <KernelApprovalPanel
-          visible={visible && status === "connected"}
-          scope={proposal.scope}
-          proposalDigest={proposal.digest}
-          expired={expired}
-        />
-      )}
+      <KernelApprovalPanel
+        visible={!!proposal && canApprove && visible && status === "connected"}
+        scope={proposal?.scope ?? ""}
+        proposalDigest={proposal?.digest ?? ""}
+        expired={expired}
+      />
     </section>
   );
 }
@@ -297,11 +295,13 @@ function KernelApprovalPanel({
   const [history, setHistory] = useState<
     Array<{
       commandId: string;
+      scope: string;
       action: string;
       outcome: "unknown" | "historical";
       canReplay: boolean;
     }>
   >();
+  const [historyVisible, setHistoryVisible] = useState(false);
   const generation = useRef(0);
   const active = useRef<AbortController | undefined>(undefined);
   useEffect(() => {
@@ -311,6 +311,7 @@ function KernelApprovalPanel({
       setReview(undefined);
       setPending(false);
       setHistory(undefined);
+      setHistoryVisible(false);
     };
     const visibility = () => {
       if (document.visibilityState !== "visible") clear();
@@ -321,6 +322,41 @@ function KernelApprovalPanel({
       clear();
     };
   }, []);
+
+  useEffect(() => {
+    if (!history) return;
+    const controller = new AbortController();
+    const timer = setTimeout(async () => {
+      setHistoryVisible(false);
+      try {
+        const response = await fetch("/api/kernel/session-check", {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (controller.signal.aborted) return;
+        if (response.status === 401) {
+          setHistory(undefined);
+          expired();
+          return;
+        }
+        if (!response.ok || (await response.json()).authenticated !== true)
+          throw new Error();
+        if (
+          !controller.signal.aborted &&
+          document.visibilityState === "visible"
+        ) {
+          setHistoryVisible(true);
+          setHistory([...history]);
+        }
+      } catch {
+        if (!controller.signal.aborted) setHistory(undefined);
+      }
+    }, 10000);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [history, expired]);
 
   async function prepare() {
     const current = ++generation.current;
@@ -481,12 +517,10 @@ function KernelApprovalPanel({
       if (!response.ok) throw new Error();
       const result = (await response.json()) as {
         status?: unknown;
-        scope?: unknown;
         commands?: unknown;
       };
       if (
         result.status !== "available" ||
-        result.scope !== scope ||
         !Array.isArray(result.commands) ||
         result.commands.length > 128
       )
@@ -496,6 +530,7 @@ function KernelApprovalPanel({
           item: unknown,
         ): {
           commandId: string;
+          scope: string;
           action: string;
           outcome: "unknown" | "historical";
           canReplay: boolean;
@@ -504,10 +539,12 @@ function KernelApprovalPanel({
             !item ||
             typeof item !== "object" ||
             !("commandId" in item) ||
+            !("scope" in item) ||
             !("action" in item) ||
             !("outcome" in item) ||
             !("canReplay" in item) ||
             typeof item.commandId !== "string" ||
+            typeof item.scope !== "string" ||
             typeof item.action !== "string" ||
             typeof item.canReplay !== "boolean" ||
             (item.outcome !== "unknown" && item.outcome !== "historical")
@@ -515,6 +552,7 @@ function KernelApprovalPanel({
             throw new Error();
           return {
             commandId: item.commandId,
+            scope: item.scope,
             action: item.action,
             outcome: item.outcome,
             canReplay: item.canReplay,
@@ -538,6 +576,7 @@ function KernelApprovalPanel({
       )
         return;
       setHistory(commands);
+      setHistoryVisible(true);
       setMessage(
         "Command history is local evidence, not proof of current authority or effects.",
       );
@@ -551,7 +590,7 @@ function KernelApprovalPanel({
   }
 
   async function replay(commandId: string) {
-    if (pending || !visible) return;
+    if (pending || document.visibilityState !== "visible") return;
     setHistory(undefined);
     setPending(true);
     setMessage("Checking the exact original command on its original channel.");
@@ -594,95 +633,101 @@ function KernelApprovalPanel({
   }
 
   return (
-    <section aria-label="Review approval" hidden={!visible}>
-      <h3>Review approval</h3>
-      <p>
-        Enter the approval expiry as a positive integer in the producer's clock
-        units. The producer may cap it to earlier evidence expiry.
-      </p>
-      <label htmlFor="kernel-approval-expiry">Requested producer expiry</label>
-      <input
-        id="kernel-approval-expiry"
-        inputMode="numeric"
-        disabled={pending}
-        value={expiry}
-        onChange={(event) => {
-          generation.current++;
-          active.current?.abort();
-          setPending(false);
-          setExpiry(event.target.value);
-          setReview(undefined);
-        }}
-      />
-      <button
-        type="button"
-        disabled={pending || !/^[1-9][0-9]{0,18}$/.test(expiry)}
-        onClick={() => void prepare()}
-      >
-        Review exact approval
-      </button>
-      <button
-        type="button"
-        disabled={pending}
-        onClick={() => void readHistory()}
-      >
-        Inspect command history
-      </button>
-      <p role="status">{message}</p>
-      {history && (
-        <ul>
-          {history.map((entry) => (
-            <li key={entry.commandId}>
-              {entry.action}:{" "}
-              {entry.outcome === "unknown"
-                ? "outcome unknown; do not retry blindly"
-                : "historical receipt only"}{" "}
-              (command {entry.commandId}){" "}
-              {entry.canReplay && entry.outcome === "unknown" && (
-                <>
-                  <p>
-                    The original channel reported an existing intent without a
-                    receipt. Checking resends the exact same command on that
-                    channel; it does not create new authority. This option is
-                    unavailable after losing the channel or restarting.
-                  </p>
-                  <button
-                    type="button"
-                    disabled={pending}
-                    onClick={() => void replay(entry.commandId)}
-                  >
-                    Check original receipt
-                  </button>
-                </>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
-      {review && (
-        <>
-          <p>Bound program: {scope}</p>
-          <p>
-            Observed revision: {review.revision} ({review.status})
-          </p>
-          <p>Proposal SHA-256: {proposalDigest}</p>
-          <p>Approval scope SHA-256: {review.scopeDigest}</p>
-          <p>Requested producer expiry: {review.approvalExpiry}</p>
-          <p>
-            This approval may authorize the producer to create or amend the
-            program under the scope below. A receipt does not prove execution or
-            settlement.
-          </p>
-          <pre>{review.text}</pre>
-          <button
-            type="button"
-            disabled={pending}
-            onClick={() => void approve()}
-          >
-            Confirm approval
-          </button>
-        </>
-      )}
-    </section>
+    <>
+      <section aria-label="Review approval" hidden={!visible}>
+        <h3>Review approval</h3>
+        <p>
+          Enter the approval expiry as a positive integer in the producer's
+          clock units. The producer may cap it to earlier evidence expiry.
+        </p>
+        <label htmlFor="kernel-approval-expiry">
+          Requested producer expiry
+        </label>
+        <input
+          id="kernel-approval-expiry"
+          inputMode="numeric"
+          disabled={pending}
+          value={expiry}
+          onChange={(event) => {
+            generation.current++;
+            active.current?.abort();
+            setPending(false);
+            setExpiry(event.target.value);
+            setReview(undefined);
+          }}
+        />
+        <button
+          type="button"
+          disabled={pending || !/^[1-9][0-9]{0,18}$/.test(expiry)}
+          onClick={() => void prepare()}
+        >
+          Review exact approval
+        </button>
+        {review && (
+          <>
+            <p>Bound program: {scope}</p>
+            <p>
+              Observed revision: {review.revision} ({review.status})
+            </p>
+            <p>Proposal SHA-256: {proposalDigest}</p>
+            <p>Approval scope SHA-256: {review.scopeDigest}</p>
+            <p>Requested producer expiry: {review.approvalExpiry}</p>
+            <p>
+              This approval may authorize the producer to create or amend the
+              program under the scope below. A receipt does not prove execution
+              or settlement.
+            </p>
+            <pre>{review.text}</pre>
+            <button
+              type="button"
+              disabled={pending}
+              onClick={() => void approve()}
+            >
+              Confirm approval
+            </button>
+          </>
+        )}
+      </section>
+      <section aria-label="Command history">
+        <button
+          type="button"
+          disabled={pending}
+          onClick={() => void readHistory()}
+        >
+          Inspect command history
+        </button>
+        <p role="status">{message}</p>
+        {history && historyVisible && (
+          <ul>
+            {history.map((entry) => (
+              <li key={entry.commandId}>
+                Scope: {entry.scope}; {entry.action}:{" "}
+                {entry.outcome === "unknown"
+                  ? "outcome unknown; do not retry blindly"
+                  : "historical receipt only"}{" "}
+                (command {entry.commandId}){" "}
+                {entry.canReplay && entry.outcome === "unknown" && (
+                  <>
+                    <p>
+                      The original channel reported an existing intent without a
+                      receipt. Checking resends the exact same command on that
+                      channel; it does not create new authority. This option is
+                      unavailable after losing the channel or restarting.
+                    </p>
+                    <button
+                      type="button"
+                      disabled={pending}
+                      onClick={() => void replay(entry.commandId)}
+                    >
+                      Check original receipt
+                    </button>
+                  </>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+    </>
   );
 }

@@ -448,13 +448,12 @@ export async function createApp(options: AppOptions) {
     if (!(await authenticated(request)))
       return reply.code(401).send({ error: "Login required" });
     const channel = options.kernelOwner;
-    if (!channel) return { status: "unavailable" };
     try {
       const rows = db
         .prepare(
-          "SELECT command_id, input, outcome, receipt, created FROM owner_commands WHERE scope = ? ORDER BY created DESC, command_id LIMIT 128",
+          "SELECT command_id, scope, input, outcome, receipt, created FROM owner_commands ORDER BY created DESC, command_id LIMIT 128",
         )
-        .all(channel.scope);
+        .all();
       const commands = rows.map((row) => {
         const input = Buffer.from(row.input as Uint8Array);
         if (input.length < 5 || input.readUInt32BE(0) !== input.length - 4)
@@ -486,6 +485,7 @@ export async function createApp(options: AppOptions) {
         const command = replayable.get(String(row.command_id));
         return {
           commandId: row.command_id,
+          scope: row.scope,
           action: parsed.action,
           outcome: row.outcome,
           receipt,
@@ -493,13 +493,15 @@ export async function createApp(options: AppOptions) {
           canReplay:
             row.outcome === "unknown" &&
             !!command &&
+            command.scope === row.scope &&
+            channel?.scope === row.scope &&
             !!channel.canReplay?.(command) &&
             !!channel.replayCommand,
         };
       });
       if (!(await authenticated(request)))
         return reply.code(401).send({ error: "Login required" });
-      return { status: "available", scope: channel.scope, commands };
+      return { status: "available", commands };
     } catch {
       return reply.code(503).send({ error: "Command history unavailable" });
     }

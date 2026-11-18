@@ -14,6 +14,7 @@ import { spawnSync } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../server/app.ts";
 import { openState } from "../server/state.ts";
+import { prepareLocalOwnerCommand } from "../server/kernel-owner-v1.ts";
 import type { Session } from "fastify";
 
 const directories: string[] = [];
@@ -64,6 +65,129 @@ afterEach(() => {
 });
 
 describe("authenticated application", () => {
+  it("exposes retained scopes without a channel or proposal and never restores replay on restart", async () => {
+    const channel = {
+      scope: "scope-a",
+      readProposal: async () => {
+        throw new Error("disconnected");
+      },
+      close: () => {},
+    };
+    const { app, dir, assets } = await fixture(() => Date.now(), channel);
+    let restarted: Awaited<ReturnType<typeof createApp>> | undefined;
+    try {
+      await app.inject({
+        method: "POST",
+        url: "/api/bootstrap",
+        headers,
+        payload: { token, password },
+      });
+      const login = await app.inject({
+        method: "POST",
+        url: "/api/login",
+        headers,
+        payload: { password },
+      });
+      const auth = {
+        ...headers,
+        cookie: String(login.headers["set-cookie"]).split(";")[0]!,
+      };
+      const state = openState(dir);
+      const ids = [
+        "11111111-1111-4111-8111-111111111111",
+        "22222222-2222-4222-8222-222222222222",
+      ];
+      for (const [index, scope] of ["scope-a", "scope-b"].entries()) {
+        const command = prepareLocalOwnerCommand(
+          scope,
+          {
+            action: "approve",
+            expected_revision: -1,
+            decision_id: "d".repeat(64),
+            expires_at: 2000000000,
+            proposal_digest: "a".repeat(64),
+            scope_digest: "b".repeat(64),
+          },
+          () => ids[index]!,
+        );
+        state.db
+          .prepare(
+            "INSERT INTO owner_commands (command_id, scope, input, outcome, receipt, created) VALUES (?, ?, ?, ?, ?, ?)",
+          )
+          .run(
+            command.commandId,
+            scope,
+            command.frame(),
+            index ? "historical" : "unknown",
+            index ? JSON.stringify({ kind: "historical-receipt-shape" }) : null,
+            index,
+          );
+      }
+      state.db.close();
+      expect(
+        (
+          await app.inject({
+            method: "GET",
+            url: "/api/kernel/owner",
+            headers: auth,
+          })
+        ).json().status,
+      ).toBe("disconnected");
+      const disconnected = await app.inject({
+        method: "GET",
+        url: "/api/kernel/owner-journal",
+        headers: auth,
+      });
+      expect(disconnected.headers["cache-control"]).toBe("no-store");
+      expect(disconnected.json().commands).toEqual([
+        expect.objectContaining({
+          scope: "scope-b",
+          outcome: "historical",
+          canReplay: false,
+        }),
+        expect.objectContaining({
+          scope: "scope-a",
+          outcome: "unknown",
+          canReplay: false,
+        }),
+      ]);
+      await app.close();
+      restarted = await createApp({
+        stateDirectory: dir,
+        staticDirectory: assets,
+        origin,
+      });
+      expect(
+        (
+          await restarted.inject({
+            method: "GET",
+            url: "/api/kernel/owner-journal",
+            headers,
+          })
+        ).statusCode,
+      ).toBe(401);
+      const history = await restarted.inject({
+        method: "GET",
+        url: "/api/kernel/owner-journal",
+        headers: auth,
+      });
+      expect(history.headers["cache-control"]).toBe("no-store");
+      expect(history.json().commands).toEqual(disconnected.json().commands);
+      expect(
+        (
+          await restarted.inject({
+            method: "POST",
+            url: "/api/kernel/owner-replay",
+            headers: auth,
+            payload: { commandId: ids[0] },
+          })
+        ).statusCode,
+      ).toBe(409);
+    } finally {
+      if (restarted) await restarted.close();
+      else await app.close();
+    }
+  });
   it("does not journal or dispatch when the owner channel is busy before admission", async () => {
     const sendCommand = vi.fn(async () => ({ kind: "unknown" as const }));
     const { app, dir } = await fixture(() => Date.now(), {
@@ -464,8 +588,14 @@ describe("authenticated application", () => {
       });
       expect(history.json()).toMatchObject({
         status: "available",
-        scope: "program",
-        commands: [{ action: "approve", outcome: "unknown", receipt: null }],
+        commands: [
+          {
+            scope: "program",
+            action: "approve",
+            outcome: "unknown",
+            receipt: null,
+          },
+        ],
       });
       expect(history.body).not.toContain("synthetic scope");
       const state = openState(dir);
