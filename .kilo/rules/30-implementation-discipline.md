@@ -180,11 +180,13 @@ If a test cannot run without unauthorized real credentials, record the specific
 evidence gap. Ask for access only if those credentials are actually required for
 the selected acceptance and that access is an owner-controlled decision.
 
-A reviewer must independently inspect cited public material: first try an
-alternative available read path, then isolated fetch/clone of the exact public
-revision, verify specific material claims and preserve pin/provenance in review
-evidence. An implementer's report is not independent verification. One process
-being unable to browse is neither an implementation finding nor an owner choice.
+A reviewer must independently inspect cited public material when its claims
+materially affect the PR, not audit unrelated dependencies or provenance. For a
+material unresolved claim, first try an alternative available read path, then
+isolated fetch/clone of the exact public revision, verify specific material
+claims and preserve pin/provenance in review evidence. An implementer's report
+is not independent verification. One process being unable to browse is neither
+an implementation finding nor an owner choice.
 
 ### Review Outcomes and Escalation
 
