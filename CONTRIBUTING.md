@@ -181,8 +181,11 @@ validator; use topic-file links instead.
 Follow the [test design and evidence rules](.kilo/rules/validation.md): use
 focused development checks, preserve distinct artifact and security evidence,
 isolate mutable test state and report skipped evidence explicitly. The current
-full local and independent-review gates remain required; CI configuration alone
-does not prove a successful run against the current integration subject.
+implementation-side full local and independent code-review gates remain
+required; reviewers verify authoritative exact-HEAD CI rather than duplicating
+its suite. Targeted reviewer tests are optional investigations; an unavailable
+optional check alone does not require COMMENT. CI configuration alone does not
+prove a successful run against the current integration subject.
 
 Run `git diff --check` before commit. Stage only intended files. Do not track
 `node_modules`, `dist`, `.env`, process logs or Agent Manager recovery/worktree
@@ -249,9 +252,9 @@ reasoning or a desired verdict. Parent makes no edits/branch switches while it
 runs. The unchanged structured JSON result is the native handoff, not owner
 copy/paste or a platform review comment. The reviewer definition owns its
 inherited model binding, deny-by-default permissions and exact-subject contract,
-with Console URL, offline Node validation and technical self-remediation
-guidance. Its permissions and stable JSON result schema remain unchanged. A
-changed HEAD/base invalidates approval.
+with Console URL, optional targeted Node validation and technical
+self-remediation guidance. Its permissions and stable JSON result schema remain
+unchanged. A changed HEAD/base invalidates approval.
 
 Only explicit `/loop` may integrate an open/unmerged develop PR after fresh
 issue/gate/label/authority and exact approval/currentness/check revalidation.
@@ -305,8 +308,8 @@ remain deny-by-default.
 Distinguish defects from infrastructure failure and judgment uncertainty. Use
 another available authorized fresh independent reviewer/tool path automatically
 within budget, with unchanged whole-PR/JSON/exact-SHA requirements.
-Independently inspect public pinned source claims via alternative reads or
-isolated fetch/clone; an implementer's report cannot replace this proof. No
-owner relay, self-approval, silent model fallback, skipped validation or
-broadened scope. Text tests guard these instructions, not actual runtime
-isolation or automatic failover.
+Independently inspect public pinned source claims when material to the PR, using
+alternative reads or isolated fetch/clone if needed; an implementer's report
+cannot replace that proof. No owner relay, self-approval, silent model fallback,
+skipped validation or broadened scope. Text tests guard these instructions, not
+actual runtime isolation or automatic failover.

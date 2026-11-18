@@ -49,8 +49,9 @@ decision contract; equivalent review execution choices are autonomous.
    divergence or conflicting work require diagnosis and safe isolation before a
    precise exhausted blocker or genuine owner decision.
 2. Require the current PR branch to be clean and match MCP HEAD. Freeze exact
-   HEAD, base and merge base; run required `make check`, prepare its offline
-   locked environment and inspect reviewer permissions. Review frozen
+   HEAD, base and merge base; the implementation agent runs required
+   `make check`. Prepare an offline locked environment only for chosen targeted
+   reviewer tests and inspect reviewer permissions. Review frozen
    objects/current clean branch in this prepared checkout. The parent must not
    edit/switch branches while the reviewer is active. Missing native task/agent
    requires bounded diagnosis and an available authorized independent path,
@@ -61,10 +62,13 @@ decision contract; equivalent review execution choices are autonomous.
    HEAD/base and whole-PR review instructions with this checkout path and
    neutral execution/evidence locations if isolation is needed. Do not supply
    past findings, implementation reasoning or a requested outcome. The agent
-   owns the result contract/model. Parse its JSON and require the exact frozen
-   SHAs and valid field types/verdict. Consume returned findings directly.
-   Recheck local HEAD/clean status; a changed or dirty checkout invalidates
-   review.
+   owns the result contract/model. It verifies authoritative exact-HEAD CI
+   status and test adequacy; it is not required to rerun the full CI suite.
+   Targeted tests are optional for material investigations; unavailable optional
+   checks alone do not require COMMENT. Parse its JSON and require the exact
+   frozen SHAs and valid field types/verdict. Consume returned findings
+   directly. Recheck local HEAD/clean status; a changed or dirty checkout
+   invalidates review.
 4. Re-fetch PR metadata and canonical develop. APPROVE with empty findings,
    matching current HEAD/base SHAs, clean checkout, successful required
    validation and still open/unmerged develop target yields READY_TO_MERGE /
