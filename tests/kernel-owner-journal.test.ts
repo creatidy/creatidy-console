@@ -247,6 +247,7 @@ describe("owner command admission journal", () => {
       const insert = state.db.prepare(
         "INSERT INTO owner_commands (command_id, scope, input, outcome, receipt, created) VALUES (?, ?, ?, ?, ?, ?)",
       );
+      state.db.exec("BEGIN");
       for (let i = 0; i < 127; i++)
         insert.run(
           `historic-${i}`,
@@ -264,6 +265,7 @@ describe("owner command admission journal", () => {
         null,
         1,
       );
+      state.db.exec("COMMIT");
       const command = prepareLocalOwnerCommand(
         "program",
         { action: "start-managed", expected_revision: 1 },
