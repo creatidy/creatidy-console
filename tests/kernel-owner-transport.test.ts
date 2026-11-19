@@ -7,10 +7,28 @@ import { mkdirSync } from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
 import { createApp } from "../server/app.ts";
 import { openState } from "../server/state.ts";
-import { createLocalOwnerTransport } from "../server/kernel-owner-transport.ts";
+import { createLocalOwnerTransport as createTransport } from "../server/kernel-owner-transport.ts";
 import { prepareLocalOwnerCommand } from "../server/kernel-owner-v1.ts";
 
 const cleanups: (() => Promise<void>)[] = [];
+const operations = [
+  "snapshot",
+  "record",
+  "events",
+  "proposal",
+  "proposal-chunk",
+  "approval-scope",
+  "approval-scope-chunk",
+  "approve",
+  "stop",
+  "start-managed",
+  "reconcile",
+];
+const createLocalOwnerTransport = (
+  socket: Socket,
+  scope: string,
+  timeout?: number,
+) => createTransport(socket, scope, timeout, operations);
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0)) await cleanup();
 });
@@ -137,6 +155,62 @@ function chunk(raw: Buffer, offset: number, digest: string) {
     complete: offset + bytes.length === raw.length,
   };
 }
+
+it("never probes unsupported legacy or v2 operations and keeps the channel open", async () => {
+  for (const declared of [
+    null,
+    ["snapshot", "record", "events"],
+    ["snapshot", "record", "events", "proposal", "proposal-chunk"],
+  ]) {
+    const { client, requests } = await pair(() => {});
+    const channel = createTransport(client, "program", 100, declared);
+    expect(channel.approvalSupported).toBe(false);
+    await expect(channel.readApprovalScope()).rejects.toThrow("Unsupported");
+    const command = prepareLocalOwnerCommand("program", {
+      action: "approve",
+      expected_revision: -1,
+      decision_id: "d",
+      expires_at: 200,
+      proposal_digest: "a".repeat(64),
+      scope_digest: "b".repeat(64),
+    });
+    await expect(channel.sendCommand(command)).rejects.toThrow("Unsupported");
+    await expect(channel.replayCommand(command)).rejects.toThrow();
+    if (declared?.length === 3)
+      await expect(channel.readProposal()).rejects.toThrow("Unsupported");
+    expect(requests).toHaveLength(0);
+    expect(client.destroyed).toBe(false);
+    channel.close();
+  }
+});
+
+it("keeps proposal reads available after a complete unsupported scope version", async () => {
+  const scope = Buffer.from(
+    JSON.stringify({ kind: "ordinary-approval-scope", version: 2 }),
+  );
+  const raw = proposal(10);
+  const { client, requests } = await pair((socket, request) => {
+    const bytes = request.action === "approval-scope-chunk" ? scope : raw;
+    socket.write(
+      response(
+        chunk(bytes, 0, createHash("sha256").update(bytes).digest("hex")),
+      ),
+    );
+  });
+  const channel = createLocalOwnerTransport(client, "program");
+  expect(channel.approvalSupported).toBe(true);
+  await expect(channel.readApprovalScope()).rejects.toThrow(
+    "Unsupported approval scope",
+  );
+  expect(channel.approvalSupported).toBe(false);
+  expect((await channel.readProposal()).text).toBe(raw.toString());
+  expect(requests.map((request) => request.action)).toEqual([
+    "approval-scope-chunk",
+    "proposal-chunk",
+  ]);
+  expect(client.destroyed).toBe(false);
+  channel.close();
+});
 
 it("reads fragmented chunks over 1 MiB sequentially without sending before a call", async () => {
   const raw = proposal(1024 * 1024 + 1);

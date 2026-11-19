@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { openState } from "../server/state.ts";
 import { prepareLocalOwnerCommand } from "../server/kernel-owner-v1.ts";
 
@@ -11,6 +11,245 @@ const digest = (value: string) =>
   createHash("sha256").update(value).digest("hex");
 
 describe("owner command admission journal", () => {
+  it("checks session expiry at the final dispatch clock sample", () => {
+    const dir = mkdtempSync(join(tmpdir(), "owner-journal-final-session-"));
+    try {
+      let time = 1000;
+      let finalSample = false;
+      const state = openState(dir, () => (finalSample ? 2000 : time));
+      state.db
+        .prepare(
+          "INSERT INTO sessions (id, generation, data, idle_expires, absolute_expires) VALUES (?, ?, ?, ?, ?)",
+        )
+        .run(
+          digest("s"),
+          digest("g"),
+          JSON.stringify({
+            owner: true,
+            cookie: { expires: new Date(3000).toISOString() },
+          }),
+          2000,
+          3000,
+        );
+      const command = prepareLocalOwnerCommand(
+        "program",
+        { action: "start-managed", expected_revision: 1 },
+        () => "one",
+      );
+      const token = state.beginOwnerCommand("s", "g", command);
+      let calls = 0;
+      const original = state.db.prepare.bind(state.db);
+      const spy = vi.spyOn(state.db, "prepare").mockImplementation((sql) => {
+        if (sql.startsWith("SELECT data FROM sessions")) finalSample = true;
+        return original(sql);
+      });
+      expect(() => state.dispatchOwnerCommand(token, () => ++calls)).toThrow(
+        "Session unavailable",
+      );
+      expect(calls).toBe(0);
+      spy.mockRestore();
+      time = 2000;
+      expect(state.db.prepare("SELECT * FROM owner_commands").all()).toEqual(
+        [],
+      );
+      state.db.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+  it("preserves an unknown intent across restart if SQLite refuses unsent cleanup", () => {
+    const dir = mkdtempSync(join(tmpdir(), "owner-journal-cleanup-failure-"));
+    try {
+      let failClock = false;
+      const state = openState(dir, () => {
+        if (failClock) throw new Error("synthetic clock failure");
+        return 1000;
+      });
+      state.db
+        .prepare(
+          "INSERT INTO sessions (id, generation, data, idle_expires, absolute_expires) VALUES (?, ?, ?, ?, ?)",
+        )
+        .run(
+          digest("s"),
+          digest("g"),
+          JSON.stringify({
+            owner: true,
+            cookie: { expires: new Date(3000).toISOString() },
+          }),
+          2000,
+          3000,
+        );
+      const command = prepareLocalOwnerCommand(
+        "program",
+        { action: "start-managed", expected_revision: 1 },
+        () => "unsent",
+      );
+      const token = state.beginOwnerCommand("s", "g", command);
+      state.db.exec(
+        "CREATE TRIGGER fail_cleanup BEFORE DELETE ON owner_commands BEGIN SELECT RAISE(FAIL, 'synthetic'); END",
+      );
+      failClock = true;
+      let sends = 0;
+      expect(() => state.dispatchOwnerCommand(token, () => ++sends)).toThrow();
+      expect(sends).toBe(0);
+      state.db.close();
+      const restarted = openState(dir, () => 1001);
+      expect(
+        restarted.db.prepare("SELECT outcome FROM owner_commands").get()
+          ?.outcome,
+      ).toBe("unknown");
+      restarted.db.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+  it("reconciles only an exactly matching persisted receipt", () => {
+    const dir = mkdtempSync(join(tmpdir(), "owner-journal-receipt-"));
+    try {
+      const state = openState(dir, () => 1000);
+      const command = prepareLocalOwnerCommand(
+        "program",
+        {
+          action: "approve",
+          expected_revision: -1,
+          decision_id: "d",
+          expires_at: 2,
+          proposal_digest: "a".repeat(64),
+          scope_digest: "b".repeat(64),
+        },
+        () => "one",
+      );
+      state.db
+        .prepare(
+          "INSERT INTO owner_commands (command_id, scope, input, outcome, created) VALUES (?, ?, ?, 'unknown', ?)",
+        )
+        .run(command.commandId, command.scope, command.frame(), 1000);
+      const receipt = {
+        kind: "historical-receipt-shape" as const,
+        action: "approve" as const,
+        status: "approved" as const,
+        settlement: null,
+        decision_id: "d",
+        spec_digest: "c".repeat(64),
+        expires_at: 2n,
+      };
+      state.recordOwnerReceipt(command, receipt);
+      expect(() => state.recordOwnerReceipt(command, receipt)).not.toThrow();
+      expect(() =>
+        state.recordOwnerReceipt(command, {
+          ...receipt,
+          spec_digest: "d".repeat(64),
+        }),
+      ).toThrow("mismatch");
+      state.db.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+  it("checks fresh approval deadlines at the exact second but not historical replay", () => {
+    const dir = mkdtempSync(join(tmpdir(), "owner-journal-deadline-"));
+    try {
+      let time = 1999;
+      const state = openState(dir, () => time);
+      state.db
+        .prepare(
+          "INSERT INTO sessions (id, generation, data, idle_expires, absolute_expires) VALUES (?, ?, ?, ?, ?)",
+        )
+        .run(
+          digest("s"),
+          digest("g"),
+          JSON.stringify({
+            owner: true,
+            cookie: { expires: new Date(10000).toISOString() },
+          }),
+          10000,
+          10000,
+        );
+      const command = (id: string) =>
+        prepareLocalOwnerCommand(
+          "program",
+          {
+            action: "approve",
+            expected_revision: -1,
+            decision_id: "d",
+            expires_at: 2,
+            proposal_digest: "a".repeat(64),
+            scope_digest: "b".repeat(64),
+          },
+          () => id,
+        );
+      const first = command("first");
+      const token = state.beginOwnerCommand("s", "g", first);
+      time = 2000;
+      let calls = 0;
+      expect(() => state.dispatchOwnerCommand(token, () => ++calls)).toThrow(
+        "deadline expired",
+      );
+      expect(calls).toBe(0);
+      expect(state.db.prepare("SELECT * FROM owner_commands").all()).toEqual(
+        [],
+      );
+      expect(() =>
+        state.beginOwnerCommand("s", "g", command("second")),
+      ).toThrow("deadline expired");
+      state.db
+        .prepare(
+          "INSERT INTO owner_commands (command_id, scope, input, outcome, created) VALUES (?, ?, ?, 'unknown', ?)",
+        )
+        .run(first.commandId, first.scope, first.frame(), 1999);
+      const replay = state.beginOwnerReplay("s", "g", first);
+      expect(state.dispatchOwnerCommand(replay, () => ++calls)).toBe(1);
+      state.db.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+  it("retires only a fresh definitely-unsent intent after admission fails", () => {
+    const dir = mkdtempSync(join(tmpdir(), "owner-journal-unsent-"));
+    try {
+      let fail = false;
+      const state = openState(dir, () => {
+        if (fail) throw new Error("synthetic clock failure");
+        return 1000;
+      });
+      state.db
+        .prepare(
+          "INSERT INTO sessions (id, generation, data, idle_expires, absolute_expires) VALUES (?, ?, ?, ?, ?)",
+        )
+        .run(
+          digest("s"),
+          digest("g"),
+          JSON.stringify({
+            owner: true,
+            cookie: { expires: new Date(3000).toISOString() },
+          }),
+          2000,
+          3000,
+        );
+      const command = prepareLocalOwnerCommand(
+        "program",
+        {
+          action: "start-managed",
+          expected_revision: 1,
+        },
+        () => "unsent",
+      );
+      const token = state.beginOwnerCommand("s", "g", command);
+      fail = true;
+      let sends = 0;
+      expect(() => state.dispatchOwnerCommand(token, () => ++sends)).toThrow();
+      expect(sends).toBe(0);
+      state.db.close();
+      const restarted = openState(dir, () => 1001);
+      expect(
+        restarted.db.prepare("SELECT * FROM owner_commands").all(),
+      ).toEqual([]);
+      restarted.db.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("persists the exact input before dispatch and never revives a token after restart", () => {
     const dir = mkdtempSync(join(tmpdir(), "owner-journal-"));
     try {

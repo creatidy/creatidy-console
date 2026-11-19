@@ -67,10 +67,10 @@ export async function receiveInheritedOwnerChannel(
       socket.once("close", fail);
       read();
     });
-    validateOwnerGreeting(frame, expected);
+    const operations = validateOwnerGreeting(frame, expected);
     if (socket.destroyed || socket.readableLength !== 0)
       throw new Error("Invalid owner greeting channel");
-    return socket;
+    return { socket, operations };
   } catch (error) {
     socket.destroy();
     throw error;
@@ -82,7 +82,11 @@ export async function validateInheritedOwnerChannel(
   expected: { scope: string; producer: string; recipient: string },
   timeoutMs = 5000,
 ) {
-  const socket = await receiveInheritedOwnerChannel(fd, expected, timeoutMs);
+  const { socket } = await receiveInheritedOwnerChannel(
+    fd,
+    expected,
+    timeoutMs,
+  );
   await new Promise<void>((resolve) => {
     socket.once("close", resolve);
     socket.destroy();

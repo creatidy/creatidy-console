@@ -62,6 +62,9 @@ export function validateOwnerGreeting(
     const keys = Object.keys(record).sort();
     const required = [
       "contract",
+      ...(record.contract === "creatidy-kernel-owner-descriptor-v2"
+        ? ["operations"]
+        : []),
       "producer",
       "recipient",
       "role",
@@ -71,7 +74,10 @@ export function validateOwnerGreeting(
     if (
       keys.length !== required.length ||
       !required.every((key, index) => key === keys[index]) ||
-      record.contract !== "creatidy-kernel-owner-descriptor-v1" ||
+      (record.contract !== "creatidy-kernel-owner-descriptor-v1" &&
+        record.contract !== "creatidy-kernel-owner-descriptor-v2") ||
+      (record.contract === "creatidy-kernel-owner-descriptor-v2" &&
+        bytes.subarray(4, 7).equals(Buffer.from([0xef, 0xbb, 0xbf]))) ||
       record.wire_version !== 1 ||
       record.role !== "owner" ||
       record.scope !== expected.scope ||
@@ -79,6 +85,30 @@ export function validateOwnerGreeting(
       record.recipient !== expected.recipient
     )
       throw new Error("Incompatible greeting");
+    if (record.contract === "creatidy-kernel-owner-descriptor-v1") return null;
+    const base = ["snapshot", "record", "events"];
+    const proposal = ["proposal", "proposal-chunk"];
+    const approval = ["approval-scope", "approval-scope-chunk", "approve"];
+    const operations = record.operations;
+    if (
+      !Array.isArray(operations) ||
+      operations.some((item) => typeof item !== "string")
+    )
+      throw new Error("Invalid operations");
+    const set = new Set(operations as string[]);
+    if (
+      set.size !== operations.length ||
+      [...set].some(
+        (name) => ![...base, ...proposal, ...approval].includes(name),
+      ) ||
+      !base.every((name) => set.has(name)) ||
+      (proposal.some((name) => set.has(name)) &&
+        !proposal.every((name) => set.has(name))) ||
+      (approval.some((name) => set.has(name)) &&
+        ![...proposal, ...approval].every((name) => set.has(name)))
+    )
+      throw new Error("Inconsistent operations");
+    return Object.freeze([...set]);
   } catch {
     throw new Error("Invalid owner greeting");
   }

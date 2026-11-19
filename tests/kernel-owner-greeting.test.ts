@@ -22,6 +22,75 @@ function frame(text: string) {
 }
 
 describe("synthetic Kernel owner greeting", () => {
+  it("preserves legacy BOM handling but refuses BOM in v2 and non-string contracts", () => {
+    const v2 = {
+      ...greeting,
+      contract: "creatidy-kernel-owner-descriptor-v2",
+      operations: ["snapshot", "record", "events"],
+    };
+    expect(
+      validateOwnerGreeting(
+        frame(`\ufeff${JSON.stringify(greeting)}`),
+        expected,
+      ),
+    ).toBeNull();
+    expect(() =>
+      validateOwnerGreeting(frame(`\ufeff${JSON.stringify(v2)}`), expected),
+    ).toThrow();
+    expect(() =>
+      validateOwnerGreeting(
+        frame(JSON.stringify({ ...greeting, contract: [greeting.contract] })),
+        expected,
+      ),
+    ).toThrow();
+  });
+  it("accepts only complete v2 operation sets and retains exact v1 as legacy", () => {
+    const base = ["snapshot", "record", "events"];
+    const proposal = ["proposal", "proposal-chunk"];
+    const approval = ["approval-scope", "approval-scope-chunk", "approve"];
+    const v2 = { ...greeting, contract: "creatidy-kernel-owner-descriptor-v2" };
+    expect(
+      validateOwnerGreeting(frame(JSON.stringify(greeting)), expected),
+    ).toBeNull();
+    for (const operations of [
+      base,
+      [...base, ...proposal],
+      [...approval, ...proposal, ...base],
+    ])
+      expect(
+        validateOwnerGreeting(
+          frame(JSON.stringify({ ...v2, operations })),
+          expected,
+        ),
+      ).toEqual(operations);
+    for (const operations of [
+      [],
+      [...base, "proposal"],
+      [...base, ...proposal, "approve"],
+      [...base, ...approval],
+      [...base, "snapshot"],
+      [...base, "stop"],
+      [...base, 1],
+    ])
+      expect(() =>
+        validateOwnerGreeting(
+          frame(JSON.stringify({ ...v2, operations })),
+          expected,
+        ),
+      ).toThrow();
+    expect(() =>
+      validateOwnerGreeting(
+        frame(JSON.stringify({ ...v2, operations: base, wire_version: 2 })),
+        expected,
+      ),
+    ).toThrow();
+    expect(() =>
+      validateOwnerGreeting(
+        frame(JSON.stringify({ ...greeting, operations: base })),
+        expected,
+      ),
+    ).toThrow();
+  });
   it("accepts the exact producer contract and binding", () => {
     expect(() =>
       validateOwnerGreeting(frame(JSON.stringify(greeting)), expected),

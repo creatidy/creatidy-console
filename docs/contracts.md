@@ -332,7 +332,12 @@ it reported the original intent without a receipt; a lost channel or restart
 does not establish continuity. No snapshot label clears an unknown outcome.
 Historical receipts do not prove a present grant or effect. The optional
 supervisor-launched backend exposes this scoped approval path only with the
-inherited owner capability; ordinary launches have no command capability.
+inherited owner capability and a validated v2 operation declaration containing
+approval support; a validated v1 greeting remains proposal-only. A v2 descriptor
+without a proposal or approval binding is not probed for unsupported operations.
+Ordinary launches have no command capability. An observed receipt that cannot be
+persisted is retained for local persistence retry only while this process
+remains alive; a crash before persistence leaves the durable outcome unknown.
 Synthetic tests and isolated producer probes do not establish live deployment or
 authority to operate a real producer.
 

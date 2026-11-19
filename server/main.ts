@@ -30,14 +30,22 @@ try {
     const { createLocalOwnerTransport } =
       await import("./kernel-owner-transport.ts");
     const scope = process.env.CONSOLE_KERNEL_OWNER_SCOPE ?? "";
-    const socket = await receiveInheritedOwnerChannel(fd, {
+    const { socket, operations } = await receiveInheritedOwnerChannel(fd, {
       scope,
       producer: process.env.CONSOLE_KERNEL_OWNER_PRODUCER ?? "",
       recipient: process.env.CONSOLE_KERNEL_OWNER_RECIPIENT ?? "",
     });
-    const transport = createLocalOwnerTransport(socket, scope);
+    const transport = createLocalOwnerTransport(
+      socket,
+      scope,
+      5000,
+      operations,
+    );
     kernelOwner = {
       scope,
+      get approvalSupported() {
+        return transport.approvalSupported;
+      },
       readProposal: transport.readProposal,
       readApprovalScope: transport.readApprovalScope,
       readRevision: transport.readRevision,

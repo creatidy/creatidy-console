@@ -29,6 +29,7 @@ export interface AppOptions {
   tls?: { key: Buffer; cert: Buffer };
   kernelOwner?: {
     scope: string;
+    approvalSupported?: boolean;
     readProposal: () => Promise<{ digest: string; text: string }>;
     readApprovalScope?: () => Promise<{
       digest: string;
@@ -402,6 +403,7 @@ export async function createApp(options: AppOptions) {
     return {
       status: "connected",
       actions:
+        ownerChannel.approvalSupported === true &&
         ownerChannel.sendCommand &&
         ownerChannel.canSend &&
         ownerChannel.readApprovalScope &&
@@ -420,7 +422,8 @@ export async function createApp(options: AppOptions) {
     if (!(await authenticated(request)))
       return reply.code(401).send({ error: "Login required" });
     const channel = options.kernelOwner;
-    if (!channel?.readApprovalScope) return { status: "unavailable" };
+    if (!channel?.approvalSupported || !channel.readApprovalScope)
+      return { status: "unavailable" };
     let observation:
       { digest: string; proposalDigest: string; text: string } | undefined;
     try {
@@ -444,11 +447,58 @@ export async function createApp(options: AppOptions) {
     string,
     ReturnType<typeof prepareLocalOwnerCommand>
   >();
+  const pendingReceipts = new Map<
+    string,
+    {
+      command: ReturnType<typeof prepareLocalOwnerCommand>;
+      receipt: OwnerObservation;
+    }
+  >();
+  function persistReceipt(
+    command: ReturnType<typeof prepareLocalOwnerCommand>,
+    receipt: OwnerObservation,
+  ) {
+    if (receipt.kind !== "historical-receipt-shape") return;
+    pendingReceipts.set(command.commandId, { command, receipt });
+    try {
+      recordOwnerReceipt(command, receipt);
+    } catch {
+      recordOwnerReceipt(command, receipt);
+    }
+    pendingReceipts.delete(command.commandId);
+  }
+  function observeDispatch(
+    command: ReturnType<typeof prepareLocalOwnerCommand>,
+    promise: Promise<OwnerObservation>,
+    channel: NonNullable<AppOptions["kernelOwner"]>,
+  ) {
+    const observed = promise.then((result) => {
+      if (
+        result.kind === "unknown" &&
+        channel.approvalSupported &&
+        channel.canReplay?.(command) &&
+        channel.replayCommand
+      )
+        replayable.set(command.commandId, command);
+      persistReceipt(command, result);
+      return result;
+    });
+    // The transaction can fail after callback entry, leaving no caller awaiting it.
+    void observed.catch(() => {});
+    return observed;
+  }
   app.get("/api/kernel/owner-journal", async (request, reply) => {
     if (!(await authenticated(request)))
       return reply.code(401).send({ error: "Login required" });
     const channel = options.kernelOwner;
     try {
+      for (const { command, receipt } of pendingReceipts.values()) {
+        try {
+          persistReceipt(command, receipt);
+        } catch {
+          // Keep the receipt for another local retry and expose other records.
+        }
+      }
       const rows = db
         .prepare(
           "SELECT command_id, scope, input, outcome, receipt, created FROM owner_commands ORDER BY created DESC, command_id LIMIT 128",
@@ -562,12 +612,17 @@ export async function createApp(options: AppOptions) {
           approval,
           outcome: row.outcome,
           receipt,
+          ...(pendingReceipts.has(String(row.command_id))
+            ? { receiptPending: true }
+            : {}),
           created: row.created,
           canReplay:
             row.outcome === "unknown" &&
+            !pendingReceipts.has(String(row.command_id)) &&
             !!command &&
             command.scope === row.scope &&
             channel?.scope === row.scope &&
+            channel.approvalSupported === true &&
             !!channel.canReplay?.(command) &&
             !!channel.replayCommand,
         };
@@ -599,7 +654,8 @@ export async function createApp(options: AppOptions) {
       return reply.code(401).send({ error: "Login required" });
     const channel = options.kernelOwner;
     if (
-      !channel?.readApprovalScope ||
+      !channel?.approvalSupported ||
+      !channel.readApprovalScope ||
       !channel.readRevision ||
       !channel.canSend ||
       !channel.sendCommand
@@ -628,6 +684,8 @@ export async function createApp(options: AppOptions) {
       BigInt(input.expires_at) > 9223372036854775807n
     )
       return reply.code(400).send({ error: "Invalid request" });
+    if (BigInt(input.expires_at) <= BigInt(Math.floor(now() / 1000)))
+      return reply.code(409).send({ error: "Approval deadline expired" });
     const originalBinding = binding(request);
     try {
       const proposal = await channel.readProposal();
@@ -641,6 +699,8 @@ export async function createApp(options: AppOptions) {
       if (scope.proposalDigest !== proposal.digest)
         return reply.code(409).send({ error: "Review changed" });
       const time = now();
+      if (BigInt(input.expires_at) <= BigInt(Math.floor(time / 1000)))
+        return reply.code(409).send({ error: "Approval deadline expired" });
       for (const [key, value] of reviews)
         if (value.expires <= time) reviews.delete(key);
       if (reviews.size >= 32)
@@ -673,7 +733,8 @@ export async function createApp(options: AppOptions) {
       return reply.code(401).send({ error: "Login required" });
     const channel = options.kernelOwner;
     if (
-      !channel?.readApprovalScope ||
+      !channel?.approvalSupported ||
+      !channel.readApprovalScope ||
       !channel.readRevision ||
       !channel.canSend ||
       !channel.sendCommand
@@ -710,6 +771,7 @@ export async function createApp(options: AppOptions) {
         return reply.code(401).send({ error: "Login required" });
       if (
         review.expires <= now() ||
+        BigInt(review.approvalExpiry) <= BigInt(Math.floor(now() / 1000)) ||
         scope.digest !== review.scopeDigest ||
         scope.proposalDigest !== review.proposalDigest ||
         revision.revision !== review.revision
@@ -734,16 +796,9 @@ export async function createApp(options: AppOptions) {
         command,
       );
       const pending = dispatchOwnerCommand(token, (prepared) =>
-        channel.sendCommand!(prepared),
+        observeDispatch(command, channel.sendCommand!(prepared), channel),
       );
       const result = await pending;
-      recordOwnerReceipt(command, result);
-      if (
-        result.kind === "unknown" &&
-        channel.canReplay?.(command) &&
-        channel.replayCommand
-      )
-        replayable.set(command.commandId, command);
       if (!(await authenticated(request)))
         return reply.code(401).send({ error: "Login required" });
       return JSON.parse(
@@ -774,7 +829,12 @@ export async function createApp(options: AppOptions) {
     )
       return reply.code(400).send({ error: "Invalid request" });
     const command = replayable.get(input.commandId);
-    if (!command || !channel?.canReplay?.(command) || !channel.replayCommand) {
+    if (
+      !command ||
+      !channel?.approvalSupported ||
+      !channel.canReplay?.(command) ||
+      !channel.replayCommand
+    ) {
       replayable.delete(input.commandId);
       return reply
         .code(409)
@@ -793,12 +853,13 @@ export async function createApp(options: AppOptions) {
       const pending = dispatchOwnerCommand(token, (prepared) => {
         // Once initiation begins, a thrown error may still mean a send occurred.
         replayable.delete(command.commandId);
-        return channel.replayCommand!(prepared);
+        return observeDispatch(
+          command,
+          channel.replayCommand!(prepared),
+          channel,
+        );
       });
       const result = await pending;
-      recordOwnerReceipt(command, result);
-      if (result.kind === "unknown" && channel.canReplay(command))
-        replayable.set(command.commandId, command);
       if (!(await authenticated(request)))
         return reply.code(401).send({ error: "Login required" });
       return JSON.parse(

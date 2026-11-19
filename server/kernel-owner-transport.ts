@@ -3,6 +3,7 @@ import {
   assembleLocalOwnerApprovalScope,
   assembleLocalOwnerProposal,
   MAX_PROPOSAL_BYTES,
+  UnsupportedApprovalScope,
 } from "./kernel-owner-proposal.ts";
 import {
   classifyLocalOwnerResult,
@@ -49,6 +50,7 @@ export function createLocalOwnerTransport(
   socket: Socket,
   scope: string,
   timeoutMs = 5000,
+  operations: readonly string[] | null = null,
 ) {
   if (
     !(socket instanceof Socket) ||
@@ -67,6 +69,10 @@ export function createLocalOwnerTransport(
   }
   let busy = false;
   let closed = false;
+  const supported = (name: string) =>
+    operations === null ? name === "proposal-chunk" : operations.includes(name);
+  let approvalSupported =
+    supported("approval-scope-chunk") && supported("approve");
   const observedUnknown = new WeakSet<object>();
   let waiting: (() => void) | undefined;
   const close = () => {
@@ -212,23 +218,37 @@ export function createLocalOwnerTransport(
 
   return Object.freeze({
     close,
+    get approvalSupported() {
+      return approvalSupported && !closed && !socket.destroyed;
+    },
     canSend() {
       return !closed && !busy && !socket.destroyed;
     },
     async readProposal() {
+      if (!supported("proposal-chunk"))
+        throw new Error("Unsupported owner operation");
       return operation(async () =>
         assembleLocalOwnerProposal(await readChunks("proposal-chunk"), scope),
       );
     },
     async readApprovalScope() {
-      return operation(async () =>
-        assembleLocalOwnerApprovalScope(
-          await readChunks("approval-scope-chunk"),
-          scope,
-        ),
-      );
+      if (!approvalSupported) throw new Error("Unsupported owner operation");
+      const result = await operation(async () => {
+        const frames = await readChunks("approval-scope-chunk");
+        try {
+          return assembleLocalOwnerApprovalScope(frames, scope);
+        } catch (error) {
+          if (!(error instanceof UnsupportedApprovalScope)) throw error;
+          approvalSupported = false;
+          return null;
+        }
+      });
+      if (!result) throw new Error("Unsupported approval scope");
+      return result;
     },
     async readRevision() {
+      if (!supported("snapshot"))
+        throw new Error("Unsupported owner operation");
       return operation(async () => {
         const frame = await exchange(
           requestFrame({ version: 1, action: "snapshot" }),
@@ -300,6 +320,12 @@ export function createLocalOwnerTransport(
     ): Promise<OwnerObservation> {
       if (!isPreparedLocalOwnerCommand(command))
         throw new Error("Invalid owner command");
+      if (
+        typeof command.request.action !== "string" ||
+        !supported(command.request.action) ||
+        (command.request.action === "approve" && !approvalSupported)
+      )
+        throw new Error("Unsupported owner operation");
       if (command.scope !== scope) return { kind: "unknown" };
       try {
         return await operation(async () => {
@@ -331,10 +357,10 @@ export function createLocalOwnerTransport(
       }
     },
     canReplay(command: ReturnType<typeof prepareLocalOwnerCommand>) {
-      return !closed && observedUnknown.has(command);
+      return approvalSupported && !closed && observedUnknown.has(command);
     },
     async replayCommand(command: ReturnType<typeof prepareLocalOwnerCommand>) {
-      if (closed || !observedUnknown.has(command))
+      if (!approvalSupported || closed || !observedUnknown.has(command))
         throw new Error("Original owner channel unavailable");
       observedUnknown.delete(command);
       try {

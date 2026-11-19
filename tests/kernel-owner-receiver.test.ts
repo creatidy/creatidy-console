@@ -24,15 +24,19 @@ const appRoot = join(temporary, "app");
 const startupAddon = join(appRoot, ".cache/native/owner-receiver.node");
 const env = { PATH: process.env.PATH, HOME: temporary, TMPDIR: temporary };
 
-function frame(scope = "program-1") {
+function frame(scope = "program-1", operations?: unknown) {
   const payload = Buffer.from(
     JSON.stringify({
-      contract: "creatidy-kernel-owner-descriptor-v1",
+      contract:
+        operations === undefined
+          ? "creatidy-kernel-owner-descriptor-v1"
+          : "creatidy-kernel-owner-descriptor-v2",
       wire_version: 1,
       role: "owner",
       scope,
       producer: "kernel-1",
       recipient: "console-1",
+      ...(operations === undefined ? {} : { operations }),
     }),
   );
   const header = Buffer.alloc(4);
@@ -123,6 +127,41 @@ describe.skipIf(process.platform !== "linux")("native owner receiver", () => {
       '{"before":false,"cloexec":true,"child":0}',
     );
     expect(output.stdout).toContain("validated");
+  });
+
+  it("accepts declared v2 operation sets and closes invalid declarations without sending", async () => {
+    for (const [operations, expectedCode] of [
+      [["snapshot", "record", "events"], 0],
+      [["snapshot", "record", "events", "proposal", "proposal-chunk"], 0],
+      [
+        [
+          "snapshot",
+          "record",
+          "events",
+          "proposal",
+          "proposal-chunk",
+          "approval-scope",
+          "approval-scope-chunk",
+          "approve",
+        ],
+        0,
+      ],
+      [["snapshot", "record", "events", "approve"], 1],
+    ] as const) {
+      const process = child();
+      const result = collect(process);
+      const channel = process.stdio[3];
+      if (!channel || !("write" in channel)) throw new Error("Missing channel");
+      let received = 0;
+      channel.on("data", (data: Buffer) => {
+        received += data.length;
+      });
+      channel.write(frame("program-1", operations));
+      const output = await result;
+      expect(output.code, output.stderr).toBe(expectedCode);
+      expect(received).toBe(0);
+      if (expectedCode) expect(output.stdout).toContain('"closed":true');
+    }
   });
 
   it("closes a non-socket descriptor on refusal", async () => {
@@ -419,7 +458,7 @@ describe.skipIf(process.platform !== "linux")("native owner receiver", () => {
       });
       expect(await result.json()).toEqual({
         status: "connected",
-        actions: ["approve"],
+        actions: [],
         scope: "program-1",
         digest,
         text,
@@ -444,18 +483,6 @@ describe.skipIf(process.platform !== "linux")("native owner receiver", () => {
           action: "proposal-chunk",
           offset: 0,
           proposal_digest: null,
-        },
-        {
-          version: 1,
-          action: "proposal-chunk",
-          offset: 0,
-          proposal_digest: null,
-        },
-        {
-          version: 1,
-          action: "approval-scope-chunk",
-          offset: 0,
-          scope_digest: null,
         },
       ]);
     } finally {

@@ -221,6 +221,7 @@ export function openState(directory: string, now: () => number = Date.now) {
       fresh: boolean;
     }
   >();
+  let ownerJournalUsable = true;
   function currentOwnerSession(id: string, generation: string, at: number) {
     const row = db
       .prepare(
@@ -260,6 +261,12 @@ export function openState(directory: string, now: () => number = Date.now) {
     try {
       if (!currentOwnerSession(id, generation, at))
         throw new Error("Session unavailable");
+      if (
+        command.request.action === "approve" &&
+        (command.request.expires_at === undefined ||
+          BigInt(command.request.expires_at) <= BigInt(Math.floor(at / 1000)))
+      )
+        throw new Error("Approval deadline expired");
       // Keep unresolved intents indefinitely; only historical receipts may age out.
       db.prepare(
         "DELETE FROM owner_commands WHERE command_id = (SELECT command_id FROM owner_commands WHERE outcome = 'historical' ORDER BY created, command_id LIMIT 1) AND (SELECT count(*) FROM owner_commands) >= 128",
@@ -281,6 +288,17 @@ export function openState(directory: string, now: () => number = Date.now) {
         throw new Error("Owner command outcome unresolved");
       const frame = command.frame();
       if (frame.length > 4096) throw new Error("Owner command too large");
+      const admissionTime = now();
+      if (!Number.isSafeInteger(admissionTime) || admissionTime < at)
+        throw new Error("Invalid system clock");
+      if (!currentOwnerSession(id, generation, admissionTime))
+        throw new Error("Session unavailable");
+      if (
+        command.request.action === "approve" &&
+        BigInt(command.request.expires_at!) <=
+          BigInt(Math.floor(admissionTime / 1000))
+      )
+        throw new Error("Approval deadline expired");
       db.prepare(
         "INSERT INTO owner_commands (command_id, scope, input, outcome, created) VALUES (?, ?, ?, 'unknown', ?)",
       ).run(command.commandId, command.scope, frame, at);
@@ -300,29 +318,51 @@ export function openState(directory: string, now: () => number = Date.now) {
     const attempt = dispatchTokens.get(token);
     if (!attempt) throw new Error("Invalid owner command attempt");
     dispatchTokens.delete(token);
-    const at = clock();
-    db.exec("BEGIN IMMEDIATE");
-    let committed = false;
+    let inTransaction = false;
+    let initiated = false;
     try {
-      if (!currentOwnerSession(attempt.id, attempt.generation, at)) {
-        if (attempt.fresh)
-          db.prepare(
-            "DELETE FROM owner_commands WHERE command_id = ? AND scope = ? AND input = ? AND outcome = 'unknown'",
-          ).run(
-            attempt.command.commandId,
-            attempt.command.scope,
-            attempt.command.frame(),
-          );
-        db.exec("COMMIT");
-        committed = true;
+      const at = clock();
+      db.exec("BEGIN IMMEDIATE");
+      inTransaction = true;
+      if (!currentOwnerSession(attempt.id, attempt.generation, at))
         throw new Error("Session unavailable");
-      }
+      const dispatchTime = now();
+      if (!Number.isSafeInteger(dispatchTime) || dispatchTime < at)
+        throw new Error("Invalid system clock");
+      if (!currentOwnerSession(attempt.id, attempt.generation, dispatchTime))
+        throw new Error("Session unavailable");
+      if (
+        attempt.fresh &&
+        attempt.command.request.action === "approve" &&
+        (attempt.command.request.expires_at === undefined ||
+          BigInt(attempt.command.request.expires_at) <=
+            BigInt(Math.floor(dispatchTime / 1000)))
+      )
+        throw new Error("Approval deadline expired");
       // Invoke the synchronous dispatch initiation while revocation cannot overtake it.
+      initiated = true;
       const result = dispatch(attempt.command);
       db.exec("COMMIT");
       return result;
     } catch (error) {
-      if (!committed) db.exec("ROLLBACK");
+      if (inTransaction) {
+        try {
+          db.exec("ROLLBACK");
+        } catch {
+          // An unconfirmed rollback must not be followed by a deletion in the
+          // same transaction: preserve the intent as uncertain.
+          ownerJournalUsable = false;
+          throw error;
+        }
+      }
+      if (attempt.fresh && !initiated)
+        db.prepare(
+          "DELETE FROM owner_commands WHERE command_id = ? AND scope = ? AND input = ? AND outcome = 'unknown'",
+        ).run(
+          attempt.command.commandId,
+          attempt.command.scope,
+          attempt.command.frame(),
+        );
       throw error;
     }
   }
@@ -359,19 +399,27 @@ export function openState(directory: string, now: () => number = Date.now) {
   ) {
     if (!isPreparedLocalOwnerCommand(command))
       throw new Error("Invalid owner command");
+    if (!ownerJournalUsable) throw new Error("Owner journal unavailable");
     if (observation.kind !== "historical-receipt-shape") return;
     if (observation.action !== command.request.action)
       throw new Error("Mismatched owner receipt");
-    db.prepare(
-      "UPDATE owner_commands SET outcome = 'historical', receipt = ? WHERE command_id = ? AND scope = ? AND input = ? AND outcome = 'unknown'",
-    ).run(
-      JSON.stringify(observation, (_key, value: unknown) =>
-        typeof value === "bigint" ? value.toString() : value,
-      ),
-      command.commandId,
-      command.scope,
-      command.frame(),
+    const receipt = JSON.stringify(observation, (_key, value: unknown) =>
+      typeof value === "bigint" ? value.toString() : value,
     );
+    const updated = db
+      .prepare(
+        "UPDATE owner_commands SET outcome = 'historical', receipt = ? WHERE command_id = ? AND scope = ? AND input = ? AND outcome = 'unknown'",
+      )
+      .run(receipt, command.commandId, command.scope, command.frame());
+    if (
+      updated.changes !== 1 &&
+      !db
+        .prepare(
+          "SELECT 1 FROM owner_commands WHERE command_id = ? AND scope = ? AND input = ? AND outcome = 'historical' AND receipt = ?",
+        )
+        .get(command.commandId, command.scope, command.frame(), receipt)
+    )
+      throw new Error("Owner receipt journal mismatch");
   }
   return {
     db,

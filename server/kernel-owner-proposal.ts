@@ -354,6 +354,8 @@ export function assembleLocalOwnerProposal(
   return { digest, proposal: validateProposal(value, scope), text };
 }
 
+export class UnsupportedApprovalScope extends Error {}
+
 // The complete producer-supplied text is evidence, not an authorization.
 export function assembleLocalOwnerApprovalScope(
   frames: readonly Uint8Array[],
@@ -364,6 +366,13 @@ export function assembleLocalOwnerApprovalScope(
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw new Error("Invalid approval scope");
   const item = value as Record<string, unknown>;
+  if (
+    item.kind === "ordinary-approval-scope" &&
+    typeof item.version === "number" &&
+    Number.isSafeInteger(item.version) &&
+    item.version !== 1
+  )
+    throw new UnsupportedApprovalScope("Unsupported approval scope version");
   const fields = [
     "kind",
     "version",

@@ -11,6 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { DatabaseSync, StatementSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../server/app.ts";
 import { openState } from "../server/state.ts";
@@ -54,7 +55,14 @@ async function fixture(
     staticDirectory: assets,
     origin,
     now: clock,
-    ...(kernelOwner ? { kernelOwner } : {}),
+    ...(kernelOwner
+      ? {
+          kernelOwner: {
+            approvalSupported: !!kernelOwner.readApprovalScope,
+            ...kernelOwner,
+          },
+        }
+      : {}),
   });
   return { app, dir, assets };
 }
@@ -65,6 +73,525 @@ afterEach(() => {
 });
 
 describe("authenticated application", () => {
+  it("retries a transient receipt persistence failure immediately without another command", async () => {
+    const statements = new WeakSet<StatementSync>();
+    let failures = 0;
+    let attempts = 0;
+    const prepare = DatabaseSync.prototype.prepare;
+    const run = StatementSync.prototype.run;
+    const prepareSpy = vi
+      .spyOn(DatabaseSync.prototype, "prepare")
+      .mockImplementation(function (this: DatabaseSync, sql: string) {
+        const statement = prepare.call(this, sql);
+        if (sql.startsWith("UPDATE owner_commands SET outcome = 'historical'"))
+          statements.add(statement);
+        return statement;
+      });
+    const runSpy = vi
+      .spyOn(StatementSync.prototype, "run")
+      .mockImplementation(function (this: StatementSync, ...args) {
+        if (statements.has(this)) {
+          attempts++;
+          if (failures++ === 0)
+            throw new Error("synthetic transient write failure");
+        }
+        return run.apply(this, args);
+      });
+    const sendCommand = vi.fn(
+      async (command: ReturnType<typeof prepareLocalOwnerCommand>) => ({
+        kind: "historical-receipt-shape" as const,
+        action: "approve" as const,
+        status: "approved" as const,
+        settlement: null,
+        decision_id: String(command.request.decision_id),
+        spec_digest: "c".repeat(64),
+        expires_at: 2000000000n,
+      }),
+    );
+    const { app, dir } = await fixture(() => Date.now(), {
+      scope: "program",
+      readProposal: async () => ({ digest: "a".repeat(64), text: "proposal" }),
+      readApprovalScope: async () => ({
+        digest: "b".repeat(64),
+        proposalDigest: "a".repeat(64),
+        text: "scope",
+      }),
+      readRevision: async () => ({ revision: "-1", status: "absent" }),
+      canSend: () => true,
+      sendCommand,
+      close: () => {},
+    });
+    try {
+      await app.inject({
+        method: "POST",
+        url: "/api/bootstrap",
+        headers,
+        payload: { token, password },
+      });
+      const login = await app.inject({
+        method: "POST",
+        url: "/api/login",
+        headers,
+        payload: { password },
+      });
+      const auth = {
+        ...headers,
+        cookie: String(login.headers["set-cookie"]).split(";")[0]!,
+      };
+      const review = await app.inject({
+        method: "POST",
+        url: "/api/kernel/owner-review",
+        headers: auth,
+        payload: { expires_at: "2000000000" },
+      });
+      const submitted = await app.inject({
+        method: "POST",
+        url: "/api/kernel/owner",
+        headers: auth,
+        payload: { action: "approve", review: review.json().review },
+      });
+      expect(submitted.json().kind).toBe("historical-receipt-shape");
+      expect(attempts).toBe(2);
+      expect(sendCommand).toHaveBeenCalledTimes(1);
+      const state = openState(dir);
+      expect(
+        state.db.prepare("SELECT outcome FROM owner_commands").get()?.outcome,
+      ).toBe("historical");
+      state.db.close();
+    } finally {
+      runSpy.mockRestore();
+      prepareSpy.mockRestore();
+      await app.close();
+    }
+  });
+  it.each([
+    "submission-receipt",
+    "submission-unknown",
+    "replay-receipt",
+    "replay-unknown",
+  ] as const)(
+    "handles %s after dispatch transaction COMMIT fails",
+    async (scenario) => {
+      const replay = scenario.startsWith("replay");
+      const unknown = scenario.endsWith("unknown");
+      let original: ReturnType<typeof prepareLocalOwnerCommand> | undefined;
+      let armed = false;
+      let resolveResult!: (
+        result: import("../server/kernel-owner-v1.ts").OwnerObservation,
+      ) => void;
+      const delayed = new Promise<
+        import("../server/kernel-owner-v1.ts").OwnerObservation
+      >((resolve) => {
+        resolveResult = resolve;
+      });
+      const exec = DatabaseSync.prototype.exec;
+      const spy = vi
+        .spyOn(DatabaseSync.prototype, "exec")
+        .mockImplementation(function (this: DatabaseSync, sql: string) {
+          if (armed && sql === "COMMIT") {
+            armed = false;
+            throw new Error("synthetic commit failure");
+          }
+          return exec.call(this, sql);
+        });
+      const sendCommand = vi.fn(
+        (command: ReturnType<typeof prepareLocalOwnerCommand>) => {
+          original = command;
+          if (replay) return Promise.resolve({ kind: "unknown" as const });
+          armed = true;
+          return delayed;
+        },
+      );
+      const replayCommand = vi.fn(() => {
+        armed = true;
+        return delayed;
+      });
+      const { app } = await fixture(() => Date.now(), {
+        scope: "program",
+        readProposal: async () => ({
+          digest: "a".repeat(64),
+          text: "proposal",
+        }),
+        readApprovalScope: async () => ({
+          digest: "b".repeat(64),
+          proposalDigest: "a".repeat(64),
+          text: "scope",
+        }),
+        readRevision: async () => ({ revision: "-1", status: "absent" }),
+        canSend: () => true,
+        sendCommand,
+        canReplay: (command) => command === original,
+        replayCommand,
+        close: () => {},
+      });
+      try {
+        await app.inject({
+          method: "POST",
+          url: "/api/bootstrap",
+          headers,
+          payload: { token, password },
+        });
+        const login = await app.inject({
+          method: "POST",
+          url: "/api/login",
+          headers,
+          payload: { password },
+        });
+        const auth = {
+          ...headers,
+          cookie: String(login.headers["set-cookie"]).split(";")[0]!,
+        };
+        const review = await app.inject({
+          method: "POST",
+          url: "/api/kernel/owner-review",
+          headers: auth,
+          payload: { expires_at: "2000000000" },
+        });
+        const submit = await app.inject({
+          method: "POST",
+          url: "/api/kernel/owner",
+          headers: auth,
+          payload: { action: "approve", review: review.json().review },
+        });
+        if (replay) {
+          expect(submit.json()).toEqual({ kind: "unknown" });
+          expect(
+            (
+              await app.inject({
+                method: "POST",
+                url: "/api/kernel/owner-replay",
+                headers: auth,
+                payload: { commandId: original!.commandId },
+              })
+            ).statusCode,
+          ).toBe(503);
+        } else expect(submit.statusCode).toBe(503);
+        resolveResult(
+          unknown
+            ? { kind: "unknown" }
+            : {
+                kind: "historical-receipt-shape",
+                action: "approve",
+                status: "approved",
+                settlement: null,
+                decision_id: String(original!.request.decision_id),
+                spec_digest: "c".repeat(64),
+                expires_at: 2000000000n,
+              },
+        );
+        await delayed;
+        const history = await app.inject({
+          method: "GET",
+          url: "/api/kernel/owner-journal",
+          headers: auth,
+        });
+        expect(history.json().commands[0]).toMatchObject({
+          outcome: unknown ? "unknown" : "historical",
+          canReplay: unknown,
+        });
+        expect(sendCommand).toHaveBeenCalledTimes(1);
+        expect(replayCommand).toHaveBeenCalledTimes(replay ? 1 : 0);
+      } finally {
+        spy.mockRestore();
+        await app.close();
+      }
+    },
+  );
+  it("does not infer approval capability from available methods", async () => {
+    const readApprovalScope = vi.fn(async () => ({
+      digest: "b".repeat(64),
+      proposalDigest: "a".repeat(64),
+      text: "scope",
+    }));
+    const sendCommand = vi.fn(async () => ({ kind: "unknown" as const }));
+    const { app } = await fixture(() => Date.now(), {
+      scope: "program",
+      approvalSupported: false,
+      readProposal: async () => ({ digest: "a".repeat(64), text: "proposal" }),
+      readApprovalScope,
+      readRevision: async () => ({ revision: "-1", status: "absent" }),
+      canSend: () => true,
+      sendCommand,
+      close: () => {},
+    });
+    try {
+      await app.inject({
+        method: "POST",
+        url: "/api/bootstrap",
+        headers,
+        payload: { token, password },
+      });
+      const login = await app.inject({
+        method: "POST",
+        url: "/api/login",
+        headers,
+        payload: { password },
+      });
+      const auth = {
+        ...headers,
+        cookie: String(login.headers["set-cookie"]).split(";")[0]!,
+      };
+      const owner = await app.inject({
+        method: "GET",
+        url: "/api/kernel/owner",
+        headers: auth,
+      });
+      expect(owner.json().actions).toEqual([]);
+      expect(
+        (
+          await app.inject({
+            method: "GET",
+            url: "/api/kernel/approval-scope",
+            headers: auth,
+          })
+        ).json(),
+      ).toEqual({ status: "unavailable" });
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/api/kernel/owner-review",
+            headers: auth,
+            payload: { expires_at: "2000000000" },
+          })
+        ).statusCode,
+      ).toBe(503);
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/api/kernel/owner",
+            headers: auth,
+            payload: { action: "approve", review: "a".repeat(64) },
+          })
+        ).statusCode,
+      ).toBe(503);
+      expect(readApprovalScope).not.toHaveBeenCalled();
+      expect(sendCommand).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+  it("rejects expired approval deadlines before review and before fresh submission", async () => {
+    let time = 1_900_000_000_999;
+    const sendCommand = vi.fn(async () => ({ kind: "unknown" as const }));
+    const { app, dir } = await fixture(() => time, {
+      scope: "program",
+      readProposal: async () => ({ digest: "a".repeat(64), text: "proposal" }),
+      readApprovalScope: async () => ({
+        digest: "b".repeat(64),
+        proposalDigest: "a".repeat(64),
+        text: "scope",
+      }),
+      readRevision: async () => ({ revision: "-1", status: "absent" }),
+      canSend: () => true,
+      sendCommand,
+      close: () => {},
+    });
+    try {
+      await app.inject({
+        method: "POST",
+        url: "/api/bootstrap",
+        headers,
+        payload: { token, password },
+      });
+      const login = await app.inject({
+        method: "POST",
+        url: "/api/login",
+        headers,
+        payload: { password },
+      });
+      const auth = {
+        ...headers,
+        cookie: String(login.headers["set-cookie"]).split(";")[0]!,
+      };
+      const review = (expires_at: string) =>
+        app.inject({
+          method: "POST",
+          url: "/api/kernel/owner-review",
+          headers: auth,
+          payload: { expires_at },
+        });
+      expect((await review("1900000000")).statusCode).toBe(409);
+      const valid = await review("1900000001");
+      expect(valid.statusCode).toBe(200);
+      time = 1_900_000_001_000;
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/api/kernel/owner",
+            headers: auth,
+            payload: { action: "approve", review: valid.json().review },
+          })
+        ).statusCode,
+      ).toBe(409);
+      expect(sendCommand).not.toHaveBeenCalled();
+      const state = openState(dir, () => time);
+      expect(state.db.prepare("SELECT * FROM owner_commands").all()).toEqual(
+        [],
+      );
+      state.db.close();
+    } finally {
+      await app.close();
+    }
+  });
+  it.each(["submission", "replay"] as const)(
+    "retains a validated %s receipt across repeated local SQLite failures without resending",
+    async (path) => {
+      let original: ReturnType<typeof prepareLocalOwnerCommand> | undefined;
+      const receipt = (
+        command: ReturnType<typeof prepareLocalOwnerCommand>,
+      ) => ({
+        kind: "historical-receipt-shape" as const,
+        action: "approve" as const,
+        status: "approved" as const,
+        settlement: null,
+        decision_id: String(command.request.decision_id),
+        spec_digest: "c".repeat(64),
+        expires_at: 2000000000n,
+      });
+      const sendCommand = vi.fn(
+        async (command: ReturnType<typeof prepareLocalOwnerCommand>) => {
+          original = command;
+          return path === "replay"
+            ? { kind: "unknown" as const }
+            : receipt(command);
+        },
+      );
+      const replayCommand = vi.fn(
+        async (command: ReturnType<typeof prepareLocalOwnerCommand>) =>
+          receipt(command),
+      );
+      const { app, dir } = await fixture(() => Date.now(), {
+        scope: "program",
+        readProposal: async () => ({
+          digest: "a".repeat(64),
+          text: "proposal",
+        }),
+        readApprovalScope: async () => ({
+          digest: "b".repeat(64),
+          proposalDigest: "a".repeat(64),
+          text: "scope",
+        }),
+        readRevision: async () => ({ revision: "-1", status: "absent" }),
+        canSend: () => true,
+        sendCommand,
+        canReplay: (command) => command === original,
+        replayCommand,
+        close: () => {},
+      });
+      try {
+        await app.inject({
+          method: "POST",
+          url: "/api/bootstrap",
+          headers,
+          payload: { token, password },
+        });
+        const login = await app.inject({
+          method: "POST",
+          url: "/api/login",
+          headers,
+          payload: { password },
+        });
+        const auth = {
+          ...headers,
+          cookie: String(login.headers["set-cookie"]).split(";")[0]!,
+        };
+        const review = await app.inject({
+          method: "POST",
+          url: "/api/kernel/owner-review",
+          headers: auth,
+          payload: { expires_at: "2000000000" },
+        });
+        const state = openState(dir);
+        const unrelated = prepareLocalOwnerCommand(
+          "other",
+          {
+            action: "stop",
+            expected_revision: 1,
+            reason: "synthetic",
+          },
+          () => "11111111-1111-4111-8111-111111111111",
+        );
+        state.db
+          .prepare(
+            "INSERT INTO owner_commands (command_id, scope, input, outcome, created) VALUES (?, ?, ?, 'unknown', ?)",
+          )
+          .run(unrelated.commandId, unrelated.scope, unrelated.frame(), 1);
+        const failWrites = () =>
+          state.db.exec(
+            "CREATE TRIGGER fail_receipt BEFORE UPDATE ON owner_commands BEGIN SELECT RAISE(FAIL, 'synthetic'); END",
+          );
+        if (path === "submission") failWrites();
+        const submit = await app.inject({
+          method: "POST",
+          url: "/api/kernel/owner",
+          headers: auth,
+          payload: { action: "approve", review: review.json().review },
+        });
+        if (path === "replay") {
+          expect(submit.json()).toEqual({ kind: "unknown" });
+          failWrites();
+          const replay = await app.inject({
+            method: "POST",
+            url: "/api/kernel/owner-replay",
+            headers: auth,
+            payload: { commandId: original!.commandId },
+          });
+          expect(replay.statusCode).toBe(503);
+        } else expect(submit.statusCode).toBe(503);
+        for (let i = 0; i < 2; i++) {
+          const pending = await app.inject({
+            method: "GET",
+            url: "/api/kernel/owner-journal",
+            headers: auth,
+          });
+          expect(pending.statusCode).toBe(200);
+          expect(pending.json().commands[0]).toMatchObject({
+            outcome: "unknown",
+            receiptPending: true,
+            canReplay: false,
+          });
+          expect(pending.json().commands[1]).toMatchObject({
+            commandId: unrelated.commandId,
+            scope: "other",
+            outcome: "unknown",
+          });
+        }
+        expect(
+          state.db
+            .prepare(
+              "SELECT outcome FROM owner_commands WHERE scope = 'program'",
+            )
+            .get()?.outcome,
+        ).toBe("unknown");
+        state.db.exec("DROP TRIGGER fail_receipt");
+        const history = await app.inject({
+          method: "GET",
+          url: "/api/kernel/owner-journal",
+          headers: auth,
+        });
+        expect(history.json().commands[0]).toMatchObject({
+          outcome: "historical",
+          canReplay: false,
+          receipt: { decisionId: String(original!.request.decision_id) },
+        });
+        expect(sendCommand).toHaveBeenCalledTimes(1);
+        expect(replayCommand).toHaveBeenCalledTimes(path === "replay" ? 1 : 0);
+        expect(
+          state.db
+            .prepare(
+              "SELECT outcome FROM owner_commands WHERE scope = 'program'",
+            )
+            .get()?.outcome,
+        ).toBe("historical");
+        state.db.close();
+      } finally {
+        await app.close();
+      }
+    },
+  );
   it("exposes retained scopes without a channel or proposal and never restores replay on restart", async () => {
     const channel = {
       scope: "scope-a",
