@@ -8,7 +8,10 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createApp } from "../server/app.ts";
 import { openState } from "../server/state.ts";
 import { createLocalOwnerTransport as createTransport } from "../server/kernel-owner-transport.ts";
-import { UnsupportedApprovalScope } from "../server/kernel-owner-proposal.ts";
+import {
+  MAX_PROPOSAL_BYTES,
+  UnsupportedApprovalScope,
+} from "../server/kernel-owner-proposal.ts";
 import {
   ownerIdentityDigest,
   prepareLocalOwnerCommand,
@@ -335,7 +338,7 @@ it("reads fragmented chunks over 1 MiB sequentially without sending before a cal
 const canonicalProfile =
   '{"effort":null,"harness":"codex","model":null,"provider":null,"trust":"trusted_development"}';
 
-function approvalScope(profileBytes: string) {
+function approvalScope(profileBytes: string, objectiveSize = 9000) {
   const reference = { policy_id: "p", version: "v", digest: "d" };
   const budget = {
     version: 1,
@@ -360,7 +363,7 @@ function approvalScope(profileBytes: string) {
     kind: "ordinary-approval-scope",
     version: 1,
     owner: "owner",
-    proposal: JSON.parse(proposal(9000).toString()),
+    proposal: JSON.parse(proposal(objectiveSize).toString()),
     policy: {
       reference,
       budget: { max_attempts: 1, max_active_attempts: 1 },
@@ -431,17 +434,29 @@ it("reads digest-bound approval scope chunks using only fixed read actions", asy
 });
 
 it.each([
-  ["whitespace", `\n ${canonicalProfile.replaceAll(",", ", ")}\n`],
   [
-    "key order",
-    '{"trust":"trusted_development","effort":null,"harness":"codex","model":null,"provider":null}',
+    "profile whitespace",
+    `\n ${canonicalProfile.replaceAll(",", ", ")}\n`,
+    9000,
+    2,
   ],
-])(
-  "keeps authenticated producer reads usable after a valid profile with different %s",
-  async (_name, profileBytes) => {
+  [
+    "profile key order",
+    '{"trust":"trusted_development","effort":null,"harness":"codex","model":null,"provider":null}',
+    9000,
+    2,
+  ],
+  ["oversized approval scope", canonicalProfile, MAX_PROPOSAL_BYTES - 1800, 1],
+] as const)(
+  "keeps producer reads usable after unsupported %s",
+  async (_name, profileBytes, objectiveSize, scopeReads) => {
     expect(JSON.parse(profileBytes)).toEqual(JSON.parse(canonicalProfile));
-    const scope = approvalScope(profileBytes);
+    const scope = approvalScope(profileBytes, objectiveSize);
     const raw = proposal(10);
+    expect(scope.length > MAX_PROPOSAL_BYTES).toBe(scopeReads === 1);
+    expect(proposal(objectiveSize).length).toBeLessThan(MAX_PROPOSAL_BYTES);
+    const scopeDigest = createHash("sha256").update(scope).digest("hex");
+    const proposalDigest = createHash("sha256").update(raw).digest("hex");
     const pairing = { producer: "p", recipient: "r" };
     const command = prepareLocalOwnerCommand(
       "program",
@@ -483,7 +498,7 @@ it.each([
             chunk(
               bytes,
               request.offset as number,
-              createHash("sha256").update(bytes).digest("hex"),
+              bytes === scope ? scopeDigest : proposalDigest,
             ),
           ),
         );
@@ -505,13 +520,14 @@ it.each([
       "Unsupported owner operation",
     );
     expect((await channel.readProposal()).text).toBe(raw.toString());
+    expect((await channel.readProposal()).text).toBe(raw.toString());
     await expect(channel.readDisposition(command)).resolves.toMatchObject({
       kind: "historical-receipt-shape",
       decision_id: "d",
     });
     expect(requests.map(({ action }) => action)).toEqual([
-      "approval-scope-chunk",
-      "approval-scope-chunk",
+      ...Array(scopeReads).fill("approval-scope-chunk"),
+      "proposal-chunk",
       "proposal-chunk",
       "approval-disposition-v2",
     ]);
@@ -543,6 +559,28 @@ it.each(["scope digest", "program binding", "execution reference"])(
     await expect(channel.readApprovalScope()).rejects.toThrow(
       "Owner channel unavailable: invalid",
     );
+    expect(client.destroyed).toBe(true);
+  },
+);
+
+it.each([{ complete: true }, { data_base64: "eA==" }, { offset: 1 }])(
+  "closes on oversized scope metadata with an invalid first chunk (%j)",
+  async (invalid) => {
+    const { client, requests } = await pair((socket) => {
+      socket.write(
+        response({
+          ...chunk(Buffer.alloc(8192, 120), 0, "a".repeat(64)),
+          bytes: MAX_PROPOSAL_BYTES + 1,
+          complete: false,
+          ...invalid,
+        }),
+      );
+    });
+    const channel = createLocalOwnerTransport(client, "program");
+    await expect(channel.readApprovalScope()).rejects.toThrow(
+      "Owner channel unavailable: invalid",
+    );
+    expect(requests).toHaveLength(1);
     expect(client.destroyed).toBe(true);
   },
 );

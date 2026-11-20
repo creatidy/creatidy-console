@@ -74,18 +74,20 @@ afterEach(() => {
 
 describe("authenticated application", () => {
   it.each([
-    ["admission", 2],
-    ["dispatch", 4],
+    ["admission", "backward", 2, -1000],
+    ["dispatch", "backward", 4, -1000],
+    ["admission", "expiry then recovery", 2, 31 * 60_000],
+    ["dispatch", "expiry then recovery", 4, 31 * 60_000],
   ] as const)(
-    "durably revokes owner authority on a backward final %s sample",
-    async (_phase, finalSample) => {
+    "durably revokes owner authority at final %s with %s",
+    async (_phase, _scenario, finalSample, jump) => {
       let time = Date.now();
-      let samplesUntilRegression = 0;
-      let regressions = 0;
+      let samplesUntilJump = 0;
+      let jumps = 0;
       const clock = () => {
-        if (samplesUntilRegression > 0 && --samplesUntilRegression === 0) {
-          regressions++;
-          return time - 1000;
+        if (samplesUntilJump > 0 && --samplesUntilJump === 0) {
+          jumps++;
+          return time + jump;
         }
         return time;
       };
@@ -103,7 +105,7 @@ describe("authenticated application", () => {
         }),
         readRevision: async () => ({ revision: "-1", status: "absent" }),
         canSend: () => {
-          samplesUntilRegression = finalSample;
+          samplesUntilJump = finalSample;
           return true;
         },
         sendCommand,
@@ -157,7 +159,7 @@ describe("authenticated application", () => {
             payload: { action: "approve", review: review.json().review },
           });
           expect(result.statusCode).toBe(503);
-          expect(regressions).toBe(1);
+          expect(jumps).toBe(1);
           expect(sendCommand).not.toHaveBeenCalled();
           expect(
             db.prepare("SELECT command_id FROM owner_commands").all(),

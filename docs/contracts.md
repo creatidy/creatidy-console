@@ -316,15 +316,15 @@ Kernel
 a separately digest-bound approval scope containing the producer's policy,
 verification and execution inputs as well as the proposal. Console can inspect a
 supported version-1 scope as complete untrusted text after checking the scope
-and embedded proposal digests; unsupported or oversized data remains
-unavailable. The execution profile reference is accepted only when the profile
-has a canonically reproducible encoding, because the producer may hash other
-original encodings that its scope does not expose. An otherwise valid scope
-whose reference does not match the canonical candidate cannot authorize
-approval; ordinary proposal and supported disposition reads remain available.
-Invalid bindings or verified integrity failures still close the channel. The
-host's label does not prove producer identity, and the displayed scope is not
-itself a grant.
+and embedded proposal digests; unsupported or oversized approval scope data does
+not disable the other supported reads. The execution profile reference is
+accepted only when the profile has a canonically reproducible encoding, because
+the producer may hash other original encodings that its scope does not expose.
+An otherwise valid scope whose reference does not match the canonical candidate
+cannot authorize approval; ordinary proposal and supported disposition reads
+remain available. Invalid bindings or verified integrity failures still close
+the channel. The host's label does not prove producer identity, and the
+displayed scope is not itself a grant.
 
 The development admission path accepts only a reviewed approval with exact
 scope, proposal, revision and requested expiry. It records the original input,

@@ -130,13 +130,16 @@ export function openState(directory: string, now: () => number = Date.now) {
       "INSERT OR REPLACE INTO settings (name, value) VALUES ('clock', ?)",
     ).run(String(current));
   }
-  function clock() {
+  function commitClock() {
+    db.exec("COMMIT");
+    clockRevocationPending = false;
+  }
+  function clock(minimum?: number) {
     const current = sampleClock();
     db.exec("BEGIN IMMEDIATE");
     try {
-      recordClock(current);
-      db.exec("COMMIT");
-      clockRevocationPending = false;
+      recordClock(current, minimum);
+      commitClock();
       return current;
     } catch (error) {
       if (db.isTransaction) db.exec("ROLLBACK");
@@ -144,19 +147,6 @@ export function openState(directory: string, now: () => number = Date.now) {
     }
   }
   clock();
-
-  function finalOwnerCommandClock(at: number) {
-    // The caller holds the write fence but has made no journal changes in
-    // this transaction. On regression, commit revocation alone before refusing.
-    const current = sampleClock();
-    recordClock(current, at);
-    if (clockRevocationPending) {
-      db.exec("COMMIT");
-      clockRevocationPending = false;
-      throw new Error("Invalid system clock");
-    }
-    return current;
-  }
 
   const store: SessionStore = {
     get(id, callback) {
@@ -291,6 +281,47 @@ export function openState(directory: string, now: () => number = Date.now) {
     return Number.isFinite(expires) && expires > at;
   }
   type Command = ReturnType<typeof prepareLocalOwnerCommand>;
+  function approvalExpired(command: Command, at: number) {
+    return (
+      command.request.action === "approve" &&
+      (command.request.expires_at === undefined ||
+        BigInt(command.request.expires_at) <= BigInt(Math.floor(at / 1000)))
+    );
+  }
+  function finalOwnerRefusal(
+    current: number,
+    at: number,
+    id: string,
+    generation: string,
+    command: Command,
+    fresh: boolean,
+  ) {
+    recordClock(current, at);
+    if (clockRevocationPending) return "Invalid system clock";
+    if (!currentOwnerSession(id, generation, current))
+      return "Session unavailable";
+    if (fresh && approvalExpired(command, current))
+      return "Approval deadline expired";
+    return null;
+  }
+  function rollbackOwnerTransaction(observed: number | undefined) {
+    try {
+      if (db.isTransaction) db.exec("ROLLBACK");
+    } catch (error) {
+      if (observed !== undefined) clockRevocationPending = true;
+      throw error;
+    }
+    if (observed === undefined || clockRevocationPending) return;
+    // Preserve the floor of the lost observation without overwriting a later
+    // durable observation. A fresh sample below either floor revokes authority.
+    try {
+      clock(observed);
+    } catch {
+      clockRevocationPending = true;
+      // The command already failed; subsequent authority checks must either
+      // commit revocation or fail closed, even if the wall clock has recovered.
+    }
+  }
   const exactCommand = `command_id = ? AND scope = ? AND input = ?
     AND producer IS ? AND recipient IS ? AND actor_digest IS ? AND history_version IS ?`;
   const commandKey = (command: Command) =>
@@ -322,14 +353,11 @@ export function openState(directory: string, now: () => number = Date.now) {
       throw new Error("Invalid owner command");
     const at = clock();
     db.exec("BEGIN IMMEDIATE");
+    let observed: number | undefined;
     try {
       if (!currentOwnerSession(id, generation, at))
         throw new Error("Session unavailable");
-      if (
-        command.request.action === "approve" &&
-        (command.request.expires_at === undefined ||
-          BigInt(command.request.expires_at) <= BigInt(Math.floor(at / 1000)))
-      )
+      if (approvalExpired(command, at))
         throw new Error("Approval deadline expired");
       // Plan retention under the write fence, but do not prune before the
       // final clock check can commit a regression without journal changes.
@@ -350,15 +378,22 @@ export function openState(directory: string, now: () => number = Date.now) {
         throw new Error("Owner command outcome unresolved");
       const frame = command.frame();
       if (frame.length > 4096) throw new Error("Owner command too large");
-      const admissionTime = finalOwnerCommandClock(at);
-      if (!currentOwnerSession(id, generation, admissionTime))
-        throw new Error("Session unavailable");
-      if (
-        command.request.action === "approve" &&
-        BigInt(command.request.expires_at!) <=
-          BigInt(Math.floor(admissionTime / 1000))
-      )
-        throw new Error("Approval deadline expired");
+      observed = sampleClock();
+      const refusal = finalOwnerRefusal(
+        observed,
+        at,
+        id,
+        generation,
+        command,
+        true,
+      );
+      if (refusal) {
+        // No journal changes yet. Keep this observation and any revocation
+        // under the existing write fence even though the command was refused.
+        commitClock();
+        observed = undefined;
+        throw new Error(refusal);
+      }
       if (
         oldest &&
         db
@@ -374,7 +409,7 @@ export function openState(directory: string, now: () => number = Date.now) {
       dispatchTokens.set(token, { id, generation, command, fresh: true });
       return token;
     } catch (error) {
-      if (db.isTransaction) db.exec("ROLLBACK");
+      rollbackOwnerTransaction(observed);
       throw error;
     }
   }
@@ -386,37 +421,39 @@ export function openState(directory: string, now: () => number = Date.now) {
     if (!attempt) throw new Error("Invalid owner command attempt");
     dispatchTokens.delete(token);
     let initiated = false;
+    let observed: number | undefined;
     try {
       const at = clock();
       db.exec("BEGIN IMMEDIATE");
       if (!currentOwnerSession(attempt.id, attempt.generation, at))
         throw new Error("Session unavailable");
-      const dispatchTime = finalOwnerCommandClock(at);
-      if (!currentOwnerSession(attempt.id, attempt.generation, dispatchTime))
-        throw new Error("Session unavailable");
-      if (
-        attempt.fresh &&
-        attempt.command.request.action === "approve" &&
-        (attempt.command.request.expires_at === undefined ||
-          BigInt(attempt.command.request.expires_at) <=
-            BigInt(Math.floor(dispatchTime / 1000)))
-      )
-        throw new Error("Approval deadline expired");
+      observed = sampleClock();
+      const refusal = finalOwnerRefusal(
+        observed,
+        at,
+        attempt.id,
+        attempt.generation,
+        attempt.command,
+        attempt.fresh,
+      );
+      if (refusal) {
+        commitClock();
+        observed = undefined;
+        throw new Error(refusal);
+      }
       // Invoke the synchronous dispatch initiation while revocation cannot overtake it.
       initiated = true;
       const result = dispatch(attempt.command);
       db.exec("COMMIT");
       return result;
     } catch (error) {
-      if (db.isTransaction) {
-        try {
-          db.exec("ROLLBACK");
-        } catch {
-          // An unconfirmed rollback must not be followed by a deletion in the
-          // same transaction: preserve the intent as uncertain.
-          ownerJournalUsable = false;
-          throw error;
-        }
+      try {
+        rollbackOwnerTransaction(observed);
+      } catch {
+        // An unconfirmed rollback must not be followed by a deletion in the
+        // same transaction: preserve the intent as uncertain.
+        ownerJournalUsable = false;
+        throw error;
       }
       if (attempt.fresh && !initiated)
         db.prepare(
