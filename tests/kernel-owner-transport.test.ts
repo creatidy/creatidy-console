@@ -8,6 +8,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createApp } from "../server/app.ts";
 import { openState } from "../server/state.ts";
 import { createLocalOwnerTransport as createTransport } from "../server/kernel-owner-transport.ts";
+import { UnsupportedApprovalScope } from "../server/kernel-owner-proposal.ts";
 import {
   ownerIdentityDigest,
   prepareLocalOwnerCommand,
@@ -331,7 +332,10 @@ it("reads fragmented chunks over 1 MiB sequentially without sending before a cal
   transport.close();
 });
 
-it("reads digest-bound approval scope chunks using only fixed read actions", async () => {
+const canonicalProfile =
+  '{"effort":null,"harness":"codex","model":null,"provider":null,"trust":"trusted_development"}';
+
+function approvalScope(profileBytes: string) {
   const reference = { policy_id: "p", version: "v", digest: "d" };
   const budget = {
     version: 1,
@@ -352,48 +356,57 @@ it("reads digest-bound approval scope chunks using only fixed read actions", asy
     resources: [],
     strict_inference: false,
   };
-  const raw = Buffer.from(
-    JSON.stringify({
-      kind: "ordinary-approval-scope",
-      version: 1,
-      owner: "owner",
-      proposal: JSON.parse(proposal(9000).toString()),
-      policy: {
-        reference,
-        budget: { max_attempts: 1, max_active_attempts: 1 },
-        authority: {
-          owner_id: "owner",
-          allowed_actions: [],
-          max_attempts: 1,
-          trusted_satisfaction_issuers: [],
-          delegated_actor_ids: [],
-        },
-        paths: [],
-        network: [],
-        effects: [],
-        recipes: ["recipe"],
-        evidence_producers: ["producer"],
-        freshness_seconds: 1,
-        repair_baseline_reference: null,
-        work_budget: budget,
-        project_budget: budget,
-        project_id: "project",
+  const value = {
+    kind: "ordinary-approval-scope",
+    version: 1,
+    owner: "owner",
+    proposal: JSON.parse(proposal(9000).toString()),
+    policy: {
+      reference,
+      budget: { max_attempts: 1, max_active_attempts: 1 },
+      authority: {
+        owner_id: "owner",
+        allowed_actions: [],
+        max_attempts: 1,
+        trusted_satisfaction_issuers: [],
+        delegated_actor_ids: [],
       },
-      verification: {
-        reference,
-        checks: ["paths", "structural", "commands"],
-        reviewer_required: true,
-      },
-      execution_profile: {
-        harness: "codex",
-        provider: null,
-        model: null,
-        effort: null,
-        trust: "trusted_development",
-      },
-      execution_reference: `basic-harness-policy:${createHash("sha256").update('{"effort":null,"harness":"codex","model":null,"provider":null,"trust":"trusted_development"}').digest("hex")}`,
-    }),
+      paths: [],
+      network: [],
+      effects: [],
+      recipes: ["recipe"],
+      evidence_producers: ["producer"],
+      freshness_seconds: 1,
+      repair_baseline_reference: null,
+      work_budget: budget,
+      project_budget: budget,
+      project_id: "project",
+    },
+    verification: {
+      reference,
+      checks: ["paths", "structural", "commands"],
+      reviewer_required: true,
+    },
+    execution_profile: JSON.parse(profileBytes),
+    execution_reference: `basic-harness-policy:${createHash("sha256").update(profileBytes).digest("hex")}`,
+  };
+  // Kernel hashes the supplied profile bytes, but serializes its parsed value
+  // in the sorted, compact scope. All strings in this scope fixture are ASCII.
+  return Buffer.from(
+    JSON.stringify(value, (_key, item: unknown) =>
+      item && typeof item === "object" && !Array.isArray(item)
+        ? Object.fromEntries(
+            Object.keys(item)
+              .sort()
+              .map((key) => [key, (item as Record<string, unknown>)[key]]),
+          )
+        : item,
+    ),
   );
+}
+
+it("reads digest-bound approval scope chunks using only fixed read actions", async () => {
+  const raw = approvalScope(canonicalProfile);
   const digest = createHash("sha256").update(raw).digest("hex");
   const { client, requests } = await pair((socket, request) => {
     const offset = request.offset as number;
@@ -416,6 +429,123 @@ it("reads digest-bound approval scope chunks using only fixed read actions", asy
   expect(requests.length).toBeGreaterThan(1);
   channel.close();
 });
+
+it.each([
+  ["whitespace", `\n ${canonicalProfile.replaceAll(",", ", ")}\n`],
+  [
+    "key order",
+    '{"trust":"trusted_development","effort":null,"harness":"codex","model":null,"provider":null}',
+  ],
+])(
+  "keeps authenticated producer reads usable after a valid profile with different %s",
+  async (_name, profileBytes) => {
+    expect(JSON.parse(profileBytes)).toEqual(JSON.parse(canonicalProfile));
+    const scope = approvalScope(profileBytes);
+    const raw = proposal(10);
+    const pairing = { producer: "p", recipient: "r" };
+    const command = prepareLocalOwnerCommand(
+      "program",
+      {
+        action: "approve",
+        expected_revision: -1,
+        decision_id: "d",
+        expires_at: 200,
+        proposal_digest: "a".repeat(64),
+        scope_digest: "b".repeat(64),
+      },
+      () => "historical-command",
+      {
+        ...pairing,
+        historyVersion: 2,
+        actorDigest: ownerIdentityDigest("owner"),
+      },
+    );
+    const { client, requests } = await pair((socket, request) => {
+      if (request.action === "approval-disposition-v2") {
+        socket.write(
+          response({
+            version: 2,
+            status: "historical-receipt",
+            receipt: {
+              version: 1,
+              authority: "historical-only",
+              status: "approved",
+              decision_id: "d",
+              spec_digest: "c".repeat(64),
+              expires_at: 199,
+            },
+          }),
+        );
+      } else {
+        const bytes = request.action === "approval-scope-chunk" ? scope : raw;
+        socket.write(
+          response(
+            chunk(
+              bytes,
+              request.offset as number,
+              createHash("sha256").update(bytes).digest("hex"),
+            ),
+          ),
+        );
+      }
+    });
+    const channel = createTransport(
+      client,
+      "program",
+      1000,
+      [...operations, "approval-disposition", "approval-disposition-v2"],
+      pairing,
+    );
+    expect(channel.approvalSupported).toBe(true);
+    await expect(channel.readApprovalScope()).rejects.toBeInstanceOf(
+      UnsupportedApprovalScope,
+    );
+    expect(channel.approvalSupported).toBe(false);
+    await expect(channel.sendCommand(command)).rejects.toThrow(
+      "Unsupported owner operation",
+    );
+    expect((await channel.readProposal()).text).toBe(raw.toString());
+    await expect(channel.readDisposition(command)).resolves.toMatchObject({
+      kind: "historical-receipt-shape",
+      decision_id: "d",
+    });
+    expect(requests.map(({ action }) => action)).toEqual([
+      "approval-scope-chunk",
+      "approval-scope-chunk",
+      "proposal-chunk",
+      "approval-disposition-v2",
+    ]);
+    expect(client.destroyed).toBe(false);
+    channel.close();
+  },
+);
+
+it.each(["scope digest", "program binding", "execution reference"])(
+  "still closes on invalid %s with a noncanonical profile",
+  async (failure) => {
+    let raw = approvalScope(` ${canonicalProfile}`);
+    if (failure === "program binding")
+      raw = Buffer.from(
+        raw.toString().replace('"program":"program"', '"program":"other"'),
+      );
+    if (failure === "execution reference")
+      raw = Buffer.from(
+        raw.toString().replace("basic-harness-policy:", "invalid:"),
+      );
+    const digest =
+      failure === "scope digest"
+        ? "0".repeat(64)
+        : createHash("sha256").update(raw).digest("hex");
+    const { client } = await pair((socket, request) =>
+      socket.write(response(chunk(raw, request.offset as number, digest))),
+    );
+    const channel = createLocalOwnerTransport(client, "program");
+    await expect(channel.readApprovalScope()).rejects.toThrow(
+      "Owner channel unavailable: invalid",
+    );
+    expect(client.destroyed).toBe(true);
+  },
+);
 
 it("closes on changed approval scope chunks without accepting partial evidence", async () => {
   const raw = Buffer.from("x".repeat(9000));

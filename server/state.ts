@@ -104,33 +104,59 @@ export function openState(directory: string, now: () => number = Date.now) {
     throw error;
   }
 
-  function clock() {
+  // Keep authority closed if SQLite cannot commit a detected revocation.
+  // A later clock observation must retry it even after wall time recovers.
+  let clockRevocationPending = false;
+  function sampleClock() {
     const current = now();
     if (!Number.isSafeInteger(current) || current < 0)
       throw new Error("Invalid system clock");
+    return current;
+  }
+  function recordClock(current: number, minimum = current) {
+    if (current < minimum) clockRevocationPending = true;
+    const row = db
+      .prepare("SELECT value FROM settings WHERE name = 'clock'")
+      .get();
+    const previous = row ? Number(row.value) : current;
+    if (!Number.isSafeInteger(previous) || previous < 0)
+      throw new Error("Invalid persisted clock");
+    if (current < previous) clockRevocationPending = true;
+    if (clockRevocationPending) {
+      db.prepare("DELETE FROM sessions").run();
+      db.prepare("DELETE FROM settings WHERE name = 'bootstrap'").run();
+    }
+    db.prepare(
+      "INSERT OR REPLACE INTO settings (name, value) VALUES ('clock', ?)",
+    ).run(String(current));
+  }
+  function clock() {
+    const current = sampleClock();
     db.exec("BEGIN IMMEDIATE");
     try {
-      const row = db
-        .prepare("SELECT value FROM settings WHERE name = 'clock'")
-        .get();
-      const previous = row ? Number(row.value) : current;
-      if (!Number.isSafeInteger(previous) || previous < 0)
-        throw new Error("Invalid persisted clock");
-      if (current < previous) {
-        db.prepare("DELETE FROM sessions").run();
-        db.prepare("DELETE FROM settings WHERE name = 'bootstrap'").run();
-      }
-      db.prepare(
-        "INSERT OR REPLACE INTO settings (name, value) VALUES ('clock', ?)",
-      ).run(String(current));
+      recordClock(current);
       db.exec("COMMIT");
+      clockRevocationPending = false;
       return current;
     } catch (error) {
-      db.exec("ROLLBACK");
+      if (db.isTransaction) db.exec("ROLLBACK");
       throw error;
     }
   }
   clock();
+
+  function finalOwnerCommandClock(at: number) {
+    // The caller holds the write fence but has made no journal changes in
+    // this transaction. On regression, commit revocation alone before refusing.
+    const current = sampleClock();
+    recordClock(current, at);
+    if (clockRevocationPending) {
+      db.exec("COMMIT");
+      clockRevocationPending = false;
+      throw new Error("Invalid system clock");
+    }
+    return current;
+  }
 
   const store: SessionStore = {
     get(id, callback) {
@@ -305,24 +331,26 @@ export function openState(directory: string, now: () => number = Date.now) {
           BigInt(command.request.expires_at) <= BigInt(Math.floor(at / 1000)))
       )
         throw new Error("Approval deadline expired");
-      // Keep unresolved intents indefinitely; only proven outcomes may age out.
-      db.prepare(
-        "DELETE FROM owner_commands WHERE command_id = (SELECT command_id FROM owner_commands WHERE outcome != 'unknown' ORDER BY created, command_id LIMIT 1) AND (SELECT count(*) FROM owner_commands) >= 128",
-      ).run();
-      if (
-        Number(
-          db.prepare("SELECT count(*) AS count FROM owner_commands").get()
-            ?.count,
-        ) >= 128
-      )
+      // Plan retention under the write fence, but do not prune before the
+      // final clock check can commit a regression without journal changes.
+      const count = Number(
+        db.prepare("SELECT count(*) AS count FROM owner_commands").get()?.count,
+      );
+      const oldest =
+        count === 128
+          ? db
+              .prepare(
+                "SELECT command_id FROM owner_commands WHERE outcome != 'unknown' ORDER BY created, command_id LIMIT 1",
+              )
+              .get()
+          : undefined;
+      if (count >= 128 && !oldest)
         throw new Error("Owner command journal full");
       if (ownerCommandBlocked(command.scope, command.binding?.producer))
         throw new Error("Owner command outcome unresolved");
       const frame = command.frame();
       if (frame.length > 4096) throw new Error("Owner command too large");
-      const admissionTime = now();
-      if (!Number.isSafeInteger(admissionTime) || admissionTime < at)
-        throw new Error("Invalid system clock");
+      const admissionTime = finalOwnerCommandClock(at);
       if (!currentOwnerSession(id, generation, admissionTime))
         throw new Error("Session unavailable");
       if (
@@ -331,6 +359,13 @@ export function openState(directory: string, now: () => number = Date.now) {
           BigInt(Math.floor(admissionTime / 1000))
       )
         throw new Error("Approval deadline expired");
+      if (
+        oldest &&
+        db
+          .prepare("DELETE FROM owner_commands WHERE command_id = ?")
+          .run(oldest.command_id!).changes !== 1
+      )
+        throw new Error("Owner command journal full");
       db.prepare(
         "INSERT INTO owner_commands (command_id, scope, input, producer, recipient, actor_digest, history_version, outcome, created) VALUES (?, ?, ?, ?, ?, ?, ?, 'unknown', ?)",
       ).run(...commandKey(command), at);
@@ -339,7 +374,7 @@ export function openState(directory: string, now: () => number = Date.now) {
       dispatchTokens.set(token, { id, generation, command, fresh: true });
       return token;
     } catch (error) {
-      db.exec("ROLLBACK");
+      if (db.isTransaction) db.exec("ROLLBACK");
       throw error;
     }
   }
@@ -350,17 +385,13 @@ export function openState(directory: string, now: () => number = Date.now) {
     const attempt = dispatchTokens.get(token);
     if (!attempt) throw new Error("Invalid owner command attempt");
     dispatchTokens.delete(token);
-    let inTransaction = false;
     let initiated = false;
     try {
       const at = clock();
       db.exec("BEGIN IMMEDIATE");
-      inTransaction = true;
       if (!currentOwnerSession(attempt.id, attempt.generation, at))
         throw new Error("Session unavailable");
-      const dispatchTime = now();
-      if (!Number.isSafeInteger(dispatchTime) || dispatchTime < at)
-        throw new Error("Invalid system clock");
+      const dispatchTime = finalOwnerCommandClock(at);
       if (!currentOwnerSession(attempt.id, attempt.generation, dispatchTime))
         throw new Error("Session unavailable");
       if (
@@ -377,7 +408,7 @@ export function openState(directory: string, now: () => number = Date.now) {
       db.exec("COMMIT");
       return result;
     } catch (error) {
-      if (inTransaction) {
+      if (db.isTransaction) {
         try {
           db.exec("ROLLBACK");
         } catch {

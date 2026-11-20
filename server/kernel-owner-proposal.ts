@@ -646,11 +646,6 @@ export function assembleLocalOwnerApprovalScope(
     (character) =>
       `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
   );
-  if (
-    item.execution_reference !==
-    `basic-harness-policy:${createHash("sha256").update(profileText).digest("hex")}`
-  )
-    throw new Error("Invalid execution profile binding");
   for (const field of ["qualified_work_bindings", "qualified_scm_bindings"]) {
     if (!Object.hasOwn(item, field)) continue;
     for (const binding of objectList(item[field])) {
@@ -675,6 +670,16 @@ export function assembleLocalOwnerApprovalScope(
   }
   if (hasWorkBindings || hasScmBindings)
     throw new UnsupportedApprovalScope("Unsupported qualified approval scope");
+  // Kernel hashes the original profile bytes, which are not exposed in this
+  // scope. A mismatch with the canonical candidate cannot establish tampering
+  // or authorize approval. The received scope digest was verified separately.
+  if (
+    item.execution_reference !==
+    `basic-harness-policy:${createHash("sha256").update(profileText).digest("hex")}`
+  )
+    throw new UnsupportedApprovalScope(
+      "Unsupported execution profile encoding",
+    );
   const proposalDigest = createHash("sha256")
     .update(canonicalProposal(item.proposal))
     .digest("hex");

@@ -11,6 +11,97 @@ const digest = (value: string) =>
   createHash("sha256").update(value).digest("hex");
 
 describe("owner command admission journal", () => {
+  it.each(["admission", "dispatch"] as const)(
+    "keeps authority closed after SQLite rolls back clock revocation during %s",
+    (phase) => {
+      const dir = mkdtempSync(
+        join(tmpdir(), "owner-journal-revocation-failure-"),
+      );
+      let time = 1000;
+      let samplesUntilRegression = 0;
+      const now = () =>
+        samplesUntilRegression > 0 && --samplesUntilRegression === 0
+          ? time - 100
+          : time;
+      const state = openState(dir, now);
+      const send = vi.fn();
+      const command = prepareLocalOwnerCommand(
+        "program",
+        { action: "start-managed", expected_revision: 1 },
+        () => "unsent",
+      );
+      try {
+        try {
+          state.db
+            .prepare("INSERT INTO sessions VALUES (?, ?, ?, 3000, 4000)")
+            .run(
+              digest("s"),
+              digest("g"),
+              JSON.stringify({
+                owner: true,
+                cookie: { expires: new Date(4000).toISOString() },
+              }),
+            );
+          state.db.exec(`INSERT INTO settings VALUES ('bootstrap', 'synthetic');
+            CREATE TRIGGER fail_revocation BEFORE DELETE ON settings WHEN OLD.name = 'bootstrap'
+            BEGIN SELECT RAISE(ABORT, 'synthetic revocation failure'); END;`);
+          const attempt =
+            phase === "dispatch"
+              ? state.beginOwnerCommand("s", "g", command)
+              : undefined;
+          samplesUntilRegression = 2;
+          expect(() =>
+            attempt
+              ? state.dispatchOwnerCommand(attempt, send)
+              : state.beginOwnerCommand("s", "g", command),
+          ).toThrow("synthetic revocation failure");
+          expect(state.db.isTransaction).toBe(false);
+          expect(
+            state.db.prepare("SELECT id FROM sessions").all(),
+          ).toHaveLength(1);
+          expect(
+            state.db
+              .prepare("SELECT value FROM settings WHERE name = 'bootstrap'")
+              .get(),
+          ).toBeDefined();
+          expect(
+            state.db.prepare("SELECT command_id FROM owner_commands").all(),
+          ).toEqual([]);
+          expect(send).not.toHaveBeenCalled();
+          time = 1100;
+          const authenticate = vi.fn();
+          state.store.get("s", authenticate);
+          expect(authenticate).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({
+              message: "synthetic revocation failure",
+            }),
+          );
+          state.db.exec("DROP TRIGGER fail_revocation");
+          const afterRecovery = vi.fn();
+          state.store.get("s", afterRecovery);
+          expect(afterRecovery).toHaveBeenCalledExactlyOnceWith(null, null);
+        } finally {
+          state.db.close();
+        }
+        const restarted = openState(dir, now);
+        try {
+          expect(restarted.db.prepare("SELECT id FROM sessions").all()).toEqual(
+            [],
+          );
+          expect(
+            restarted.db
+              .prepare("SELECT value FROM settings WHERE name = 'bootstrap'")
+              .get(),
+          ).toBeUndefined();
+        } finally {
+          restarted.db.close();
+        }
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("migrates v2 evidence without attribution and isolates command admission from receipt pairing", () => {
     const dir = mkdtempSync(join(tmpdir(), "owner-journal-pairing-"));
     const make = (
@@ -658,6 +749,28 @@ describe("owner command admission journal", () => {
         { action: "start-managed", expected_revision: 1 },
         () => "new-command",
       );
+      const historical = () =>
+        state.db
+          .prepare(
+            "SELECT 1 FROM owner_commands WHERE command_id = 'historic-0'",
+          )
+          .get();
+      const clock = state.db.prepare.bind(state.db);
+      const insertion = vi
+        .spyOn(state.db, "prepare")
+        .mockImplementation((sql) => {
+          if (sql.startsWith("INSERT INTO owner_commands"))
+            throw new Error("synthetic insert failure");
+          return clock(sql);
+        });
+      try {
+        expect(() => state.beginOwnerCommand("s", "g", command)).toThrow(
+          "synthetic insert failure",
+        );
+        expect(historical()).toBeDefined();
+      } finally {
+        insertion.mockRestore();
+      }
       state.beginOwnerCommand("s", "g", command);
       expect(
         state.db.prepare("SELECT count(*) AS count FROM owner_commands").get()

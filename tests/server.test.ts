@@ -73,6 +73,132 @@ afterEach(() => {
 });
 
 describe("authenticated application", () => {
+  it.each([
+    ["admission", 2],
+    ["dispatch", 4],
+  ] as const)(
+    "durably revokes owner authority on a backward final %s sample",
+    async (_phase, finalSample) => {
+      let time = Date.now();
+      let samplesUntilRegression = 0;
+      let regressions = 0;
+      const clock = () => {
+        if (samplesUntilRegression > 0 && --samplesUntilRegression === 0) {
+          regressions++;
+          return time - 1000;
+        }
+        return time;
+      };
+      const sendCommand = vi.fn();
+      const { app, dir, assets } = await fixture(clock, {
+        scope: "program",
+        readProposal: async () => ({
+          digest: "a".repeat(64),
+          text: "proposal",
+        }),
+        readApprovalScope: async () => ({
+          digest: "b".repeat(64),
+          proposalDigest: "a".repeat(64),
+          text: "scope",
+        }),
+        readRevision: async () => ({ revision: "-1", status: "absent" }),
+        canSend: () => {
+          samplesUntilRegression = finalSample;
+          return true;
+        },
+        sendCommand,
+        close: () => {},
+      });
+      let cookie: string;
+      const check = (backend: typeof app) =>
+        backend.inject({
+          method: "GET",
+          url: "/api/kernel/session-check",
+          headers: { ...headers, cookie },
+        });
+      try {
+        const bootstrap = await app.inject({
+          method: "POST",
+          url: "/api/bootstrap",
+          headers,
+          payload: { token, password },
+        });
+        expect(bootstrap.statusCode).toBe(200);
+        const login = await app.inject({
+          method: "POST",
+          url: "/api/login",
+          headers,
+          payload: { password },
+        });
+        expect(login.statusCode).toBe(200);
+        cookie = String(login.headers["set-cookie"]).split(";")[0]!;
+        expect((await check(app)).statusCode).toBe(200);
+        // Seed outstanding synthetic setup authority alongside the session so
+        // the same committed revocation must remove both, not just fence approval.
+        const db = new DatabaseSync(join(dir, "console.sqlite"));
+        try {
+          db.prepare("INSERT INTO settings VALUES ('bootstrap', ?)").run(
+            JSON.stringify({
+              digest: createHash("sha256").update(token).digest("hex"),
+              expires: time + 60_000,
+            }),
+          );
+          const review = await app.inject({
+            method: "POST",
+            url: "/api/kernel/owner-review",
+            headers: { ...headers, cookie },
+            payload: { expires_at: String(Math.floor(time / 1000) + 60) },
+          });
+          expect(review.statusCode).toBe(200);
+          const result = await app.inject({
+            method: "POST",
+            url: "/api/kernel/owner",
+            headers: { ...headers, cookie },
+            payload: { action: "approve", review: review.json().review },
+          });
+          expect(result.statusCode).toBe(503);
+          expect(regressions).toBe(1);
+          expect(sendCommand).not.toHaveBeenCalled();
+          expect(
+            db.prepare("SELECT command_id FROM owner_commands").all(),
+          ).toEqual([]);
+          time += 1000;
+          expect((await check(app)).statusCode).toBe(401);
+          expect(
+            db
+              .prepare("SELECT value FROM settings WHERE name = 'bootstrap'")
+              .get(),
+          ).toBeUndefined();
+        } finally {
+          db.close();
+        }
+      } finally {
+        await app.close();
+      }
+      const restarted = await createApp({
+        stateDirectory: dir,
+        staticDirectory: assets,
+        origin,
+        now: clock,
+      });
+      try {
+        expect((await check(restarted)).statusCode).toBe(401);
+        const db = new DatabaseSync(join(dir, "console.sqlite"));
+        try {
+          expect(
+            db
+              .prepare("SELECT value FROM settings WHERE name = 'bootstrap'")
+              .get(),
+          ).toBeUndefined();
+        } finally {
+          db.close();
+        }
+      } finally {
+        await restarted.close();
+      }
+    },
+  );
+
   it("recovers only the paired exact original over the read-only route after restart", async () => {
     const time = Date.now();
     const pairing = { producer: "kernel", recipient: "console" };
