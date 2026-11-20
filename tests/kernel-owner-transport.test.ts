@@ -8,7 +8,101 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createApp } from "../server/app.ts";
 import { openState } from "../server/state.ts";
 import { createLocalOwnerTransport as createTransport } from "../server/kernel-owner-transport.ts";
-import { prepareLocalOwnerCommand } from "../server/kernel-owner-v1.ts";
+import {
+  ownerIdentityDigest,
+  prepareLocalOwnerCommand,
+} from "../server/kernel-owner-v1.ts";
+
+it("reads exact dispositions on history-only channels without dispatching approval", async () => {
+  const pairing = { producer: "p", recipient: "r" };
+  const scope = "Program \u007f\u{1f680}";
+  const actorDigest = ownerIdentityDigest("owner\u00e9");
+  const cmd = (producer = "p", recipient = "r", historyVersion?: 1 | 2) =>
+    prepareLocalOwnerCommand(
+      scope,
+      {
+        action: "approve",
+        expected_revision: -1,
+        decision_id: "d",
+        expires_at: 3000000000,
+        proposal_digest: "a".repeat(64),
+        scope_digest: "b".repeat(64),
+      },
+      () => "command",
+      {
+        producer,
+        recipient,
+        ...(historyVersion ? { historyVersion, actorDigest } : {}),
+      },
+    );
+  let result: Record<string, unknown> = {
+    version: 2,
+    status: "intent-recorded",
+    receipt: null,
+  };
+  const { client, requests } = await pair((socket) =>
+    socket.write(response(result)),
+  );
+  const transport = createTransport(
+    client,
+    scope,
+    1000,
+    [
+      "snapshot",
+      "record",
+      "events",
+      "approval-disposition",
+      "approval-disposition-v2",
+    ],
+    pairing,
+  );
+  expect(transport.approvalSupported).toBe(false);
+  const original = cmd("p", "r", 2);
+  await expect(transport.sendCommand(original)).rejects.toThrow(
+    "Unsupported owner operation",
+  );
+  for (const other of [cmd("q", "r", 2), cmd("p", "s", 2), cmd()])
+    await expect(transport.readDisposition(other)).rejects.toThrow(
+      "Approval disposition unavailable",
+    );
+  expect(requests).toEqual([]);
+  expect(await transport.readDisposition(original)).toEqual({
+    kind: "intent-recorded",
+  });
+  expect(await transport.readDisposition(original)).toEqual({
+    kind: "intent-recorded",
+  });
+  expect(requests).toEqual(
+    Array(2).fill({
+      version: 1,
+      action: "approval-disposition-v2",
+      ...pairing,
+      program_digest: createHash("sha256")
+        .update('"Program \\u007f\\ud83d\\ude80"')
+        .digest("hex"),
+      actor_digest: createHash("sha256").update('"owner\\u00e9"').digest("hex"),
+      original: original.request,
+    }),
+  );
+  result = { version: 1, status: "unknown", receipt: null };
+  expect(await transport.readDisposition(cmd("p", "r", 1))).toEqual({
+    kind: "unknown",
+  });
+  expect(requests.at(-1)?.action).toBe("approval-disposition");
+  result = {
+    version: 2,
+    status: "terminal-refusal",
+    receipt: null,
+    reason: "stale-revision",
+  };
+  expect(await transport.readDisposition(original)).toEqual({
+    kind: "terminal-refusal",
+    reason: "stale-revision",
+  });
+  result = { ...result, reason: "unknown-reason" };
+  await expect(transport.readDisposition(original)).rejects.toThrow();
+  expect(transport.canReadDisposition(original)).toBe(false);
+});
 
 const cleanups: (() => Promise<void>)[] = [];
 const operations = [

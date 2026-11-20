@@ -53,13 +53,17 @@ and the trusted supervisor are security assumptions. The producer's declarations
 are not the effective host policy, which remains unknown. No proposal data is
 cached by the adapter or persisted in browser storage. Approval uses separately
 provisioned authority and exact reviewed identity. The local journal retains
-historical receipts or unknown outcomes; a receipt is not proof of current
-authority or effect, and replay is limited to the original channel. Other owner
-actions are unsupported. No real live mutation is authorized without separate
-owner approval. Synthetic tests do not establish installed consumer conformance
-or live integration; #11 installation and #12 conformance remain separate. No
-Kernel HTTP server, arbitrary dispatcher, browser-selected principal, active
-SQLite peer or new authentication system follows from this decision.
+historical receipts, proven stale-revision refusals or unknown outcomes. A
+receipt is not proof of current authority or effect. Replay is limited to the
+original channel; recovery on a replacement is read-only and requires the
+supervisor's authoritative-journal continuity attestation and Kernel's exact
+original request and identity checks. Unpaired legacy intents remain unknown.
+Other owner actions are unsupported. No real live mutation is authorized without
+separate owner approval. Synthetic tests do not establish installed consumer
+conformance or live integration; #11 installation and #12 conformance remain
+separate. No Kernel HTTP server, arbitrary dispatcher, browser-selected
+principal, active SQLite peer or new authentication system follows from this
+decision.
 
 While the proposal is visible, Console checks the existing session without
 extending its idle or absolute expiry. The view hides the proposal while a check

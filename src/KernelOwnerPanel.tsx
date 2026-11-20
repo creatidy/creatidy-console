@@ -2,7 +2,12 @@ import { useEffect, useRef, useState } from "react";
 
 export default function KernelOwnerPanel({ expired }: { expired: () => void }) {
   const [status, setStatus] = useState<
-    "checking" | "unavailable" | "disconnected" | "connected"
+    | "checking"
+    | "unavailable"
+    | "disconnected"
+    | "connected"
+    | "unsupported"
+    | "invalid"
   >("checking");
   const [proposal, setProposal] = useState<{
     scope: string;
@@ -72,6 +77,15 @@ export default function KernelOwnerPanel({ expired }: { expired: () => void }) {
         proposalDigest?: unknown;
         text?: unknown;
       };
+      if (result.status === "unsupported" || result.status === "invalid") {
+        if (current === scopeGeneration.current)
+          setScopeStatus(
+            result.status === "unsupported"
+              ? "Console does not support this approval scope format."
+              : "Kernel returned an invalid approval scope.",
+          );
+        return;
+      }
       if (
         result.status !== "connected" ||
         result.scope !== proposal?.scope ||
@@ -132,7 +146,7 @@ export default function KernelOwnerPanel({ expired }: { expired: () => void }) {
       controller = new AbortController();
       const active = controller;
       const signal = active.signal;
-      const timeout = setTimeout(() => active.abort(), 5000);
+      const timeout = setTimeout(() => active.abort(), 11000);
       try {
         if (!cached) {
           const response = await fetch("/api/kernel/owner", {
@@ -174,7 +188,9 @@ export default function KernelOwnerPanel({ expired }: { expired: () => void }) {
             };
           } else if (
             result.status === "unavailable" ||
-            result.status === "disconnected"
+            result.status === "disconnected" ||
+            result.status === "unsupported" ||
+            result.status === "invalid"
           ) {
             setStatus(result.status);
             return;
@@ -232,7 +248,11 @@ export default function KernelOwnerPanel({ expired }: { expired: () => void }) {
             ? "Unavailable: no verified Kernel owner capability is connected. Console login does not grant Kernel authority."
             : status === "connected"
               ? `Verified proposal received when this view opened; it may have changed. Reload to recheck. ${canApprove ? "Approval requires a fresh review." : "No owner commands are available."}`
-              : "Kernel proposal unavailable: the channel disconnected, refused the read, or returned invalid or oversized data. No owner commands are available."}
+              : status === "unsupported"
+                ? "Console does not support this Kernel proposal format. No owner commands are available."
+                : status === "invalid"
+                  ? "Kernel returned an invalid or oversized proposal response. No owner commands are available."
+                  : "Kernel proposal unavailable: the channel disconnected or refused the read. No owner commands are available."}
       </p>
       {proposal && status === "connected" && visible && (
         <>
@@ -270,6 +290,31 @@ export default function KernelOwnerPanel({ expired }: { expired: () => void }) {
   );
 }
 
+type HistoryEntry = {
+  commandId: string;
+  scope: string;
+  producer?: string;
+  recipient?: string;
+  action: string;
+  outcome: "unknown" | "historical" | "refused";
+  canReplay: boolean;
+  canRecover: boolean;
+  approval: {
+    revision: string;
+    proposalDigest: string;
+    scopeDigest: string;
+    decisionId: string;
+    requestedExpiry: string;
+  } | null;
+  receipt: {
+    status: string;
+    settlement: string | null;
+    decisionId?: string;
+    specDigest?: string;
+    effectiveExpiry?: string;
+  } | null;
+};
+
 function KernelApprovalPanel({
   visible,
   scope,
@@ -292,29 +337,7 @@ function KernelApprovalPanel({
     text: string;
   }>();
   const [pending, setPending] = useState(false);
-  const [history, setHistory] = useState<
-    Array<{
-      commandId: string;
-      scope: string;
-      action: string;
-      outcome: "unknown" | "historical";
-      canReplay: boolean;
-      approval: {
-        revision: string;
-        proposalDigest: string;
-        scopeDigest: string;
-        decisionId: string;
-        requestedExpiry: string;
-      } | null;
-      receipt: {
-        status: string;
-        settlement: string | null;
-        decisionId?: string;
-        specDigest?: string;
-        effectiveExpiry?: string;
-      } | null;
-    }>
-  >();
+  const [history, setHistory] = useState<HistoryEntry[]>();
   const [historyVisible, setHistoryVisible] = useState(false);
   const generation = useRef(0);
   const active = useRef<AbortController | undefined>(undefined);
@@ -539,117 +562,102 @@ function KernelApprovalPanel({
         result.commands.length > 128
       )
         throw new Error();
-      const commands = result.commands.map(
-        (
-          item: unknown,
-        ): {
-          commandId: string;
-          scope: string;
-          action: string;
-          outcome: "unknown" | "historical";
-          canReplay: boolean;
-          approval: {
+      const commands = result.commands.map((item: unknown): HistoryEntry => {
+        if (
+          !item ||
+          typeof item !== "object" ||
+          !("commandId" in item) ||
+          !("scope" in item) ||
+          !("action" in item) ||
+          !("outcome" in item) ||
+          !("canReplay" in item) ||
+          !("approval" in item) ||
+          !("receipt" in item) ||
+          typeof item.commandId !== "string" ||
+          typeof item.scope !== "string" ||
+          typeof item.action !== "string" ||
+          typeof item.canReplay !== "boolean" ||
+          (item.outcome !== "unknown" &&
+            item.outcome !== "historical" &&
+            item.outcome !== "refused")
+        )
+          throw new Error();
+        const approval = item.approval;
+        if (item.action === "approve") {
+          if (
+            !approval ||
+            typeof approval !== "object" ||
+            !("revision" in approval) ||
+            typeof approval.revision !== "string" ||
+            !/^(?:-1|0|[1-9][0-9]*)$/.test(approval.revision) ||
+            !("proposalDigest" in approval) ||
+            typeof approval.proposalDigest !== "string" ||
+            !/^[0-9a-f]{64}$/.test(approval.proposalDigest) ||
+            !("scopeDigest" in approval) ||
+            typeof approval.scopeDigest !== "string" ||
+            !/^[0-9a-f]{64}$/.test(approval.scopeDigest) ||
+            !("decisionId" in approval) ||
+            typeof approval.decisionId !== "string" ||
+            !approval.decisionId.trim() ||
+            !("requestedExpiry" in approval) ||
+            typeof approval.requestedExpiry !== "string" ||
+            !/^[1-9][0-9]*$/.test(approval.requestedExpiry)
+          )
+            throw new Error();
+        } else if (approval !== null) throw new Error();
+        const receipt = item.receipt;
+        if (item.outcome === "historical") {
+          if (
+            !receipt ||
+            typeof receipt !== "object" ||
+            !("action" in receipt) ||
+            receipt.action !== item.action ||
+            !("status" in receipt) ||
+            typeof receipt.status !== "string" ||
+            !("settlement" in receipt) ||
+            (receipt.settlement !== null &&
+              typeof receipt.settlement !== "string") ||
+            (item.action === "approve" &&
+              (!("decisionId" in receipt) ||
+                typeof receipt.decisionId !== "string" ||
+                !("specDigest" in receipt) ||
+                typeof receipt.specDigest !== "string" ||
+                !/^[0-9a-f]{64}$/.test(receipt.specDigest) ||
+                !("effectiveExpiry" in receipt) ||
+                typeof receipt.effectiveExpiry !== "string" ||
+                !/^[1-9][0-9]*$/.test(receipt.effectiveExpiry)))
+          )
+            throw new Error();
+        } else if (receipt !== null) throw new Error();
+        return {
+          commandId: item.commandId,
+          scope: item.scope,
+          action: item.action,
+          outcome: item.outcome,
+          canReplay: item.canReplay,
+          canRecover: "canRecover" in item && item.canRecover === true,
+          ...("producer" in item &&
+          typeof item.producer === "string" &&
+          "recipient" in item &&
+          typeof item.recipient === "string"
+            ? { producer: item.producer, recipient: item.recipient }
+            : {}),
+          approval: approval as {
             revision: string;
             proposalDigest: string;
             scopeDigest: string;
             decisionId: string;
             requestedExpiry: string;
-          } | null;
-          receipt: {
+          } | null,
+          receipt: receipt as {
             status: string;
             settlement: string | null;
             decisionId?: string;
             specDigest?: string;
             effectiveExpiry?: string;
-          } | null;
-        } => {
-          if (
-            !item ||
-            typeof item !== "object" ||
-            !("commandId" in item) ||
-            !("scope" in item) ||
-            !("action" in item) ||
-            !("outcome" in item) ||
-            !("canReplay" in item) ||
-            !("approval" in item) ||
-            !("receipt" in item) ||
-            typeof item.commandId !== "string" ||
-            typeof item.scope !== "string" ||
-            typeof item.action !== "string" ||
-            typeof item.canReplay !== "boolean" ||
-            (item.outcome !== "unknown" && item.outcome !== "historical")
-          )
-            throw new Error();
-          const approval = item.approval;
-          if (item.action === "approve") {
-            if (
-              !approval ||
-              typeof approval !== "object" ||
-              !("revision" in approval) ||
-              typeof approval.revision !== "string" ||
-              !/^(?:-1|0|[1-9][0-9]*)$/.test(approval.revision) ||
-              !("proposalDigest" in approval) ||
-              typeof approval.proposalDigest !== "string" ||
-              !/^[0-9a-f]{64}$/.test(approval.proposalDigest) ||
-              !("scopeDigest" in approval) ||
-              typeof approval.scopeDigest !== "string" ||
-              !/^[0-9a-f]{64}$/.test(approval.scopeDigest) ||
-              !("decisionId" in approval) ||
-              typeof approval.decisionId !== "string" ||
-              !approval.decisionId.trim() ||
-              !("requestedExpiry" in approval) ||
-              typeof approval.requestedExpiry !== "string" ||
-              !/^[1-9][0-9]*$/.test(approval.requestedExpiry)
-            )
-              throw new Error();
-          } else if (approval !== null) throw new Error();
-          const receipt = item.receipt;
-          if (item.outcome === "historical") {
-            if (
-              !receipt ||
-              typeof receipt !== "object" ||
-              !("action" in receipt) ||
-              receipt.action !== item.action ||
-              !("status" in receipt) ||
-              typeof receipt.status !== "string" ||
-              !("settlement" in receipt) ||
-              (receipt.settlement !== null &&
-                typeof receipt.settlement !== "string") ||
-              (item.action === "approve" &&
-                (!("decisionId" in receipt) ||
-                  typeof receipt.decisionId !== "string" ||
-                  !("specDigest" in receipt) ||
-                  typeof receipt.specDigest !== "string" ||
-                  !/^[0-9a-f]{64}$/.test(receipt.specDigest) ||
-                  !("effectiveExpiry" in receipt) ||
-                  typeof receipt.effectiveExpiry !== "string" ||
-                  !/^[1-9][0-9]*$/.test(receipt.effectiveExpiry)))
-            )
-              throw new Error();
-          } else if (receipt !== null) throw new Error();
-          return {
-            commandId: item.commandId,
-            scope: item.scope,
-            action: item.action,
-            outcome: item.outcome,
-            canReplay: item.canReplay,
-            approval: approval as {
-              revision: string;
-              proposalDigest: string;
-              scopeDigest: string;
-              decisionId: string;
-              requestedExpiry: string;
-            } | null,
-            receipt: receipt as {
-              status: string;
-              settlement: string | null;
-              decisionId?: string;
-              specDigest?: string;
-              effectiveExpiry?: string;
-            } | null,
-          };
-        },
-      );
+          } | null,
+        };
+      });
       const session = await fetch("/api/kernel/session-check", {
         cache: "no-store",
         signal: controller.signal,
@@ -680,11 +688,15 @@ function KernelApprovalPanel({
     }
   }
 
-  async function replay(commandId: string) {
+  async function replay(commandId: string, readOnly: boolean) {
     if (pending || document.visibilityState !== "visible") return;
     setHistory(undefined);
     setPending(true);
-    setMessage("Checking the exact original command on its original channel.");
+    setMessage(
+      readOnly
+        ? "Reading the disposition of the exact original approval."
+        : "Checking the exact original command on its original channel.",
+    );
     const controller = new AbortController();
     active.current = controller;
     const timeout = setTimeout(() => controller.abort(), 10000);
@@ -702,7 +714,7 @@ function KernelApprovalPanel({
       }
       if (response.status === 409) {
         setMessage(
-          "The original channel is unavailable; the outcome remains unknown.",
+          "No authorized outcome check is available for this pending command.",
         );
         return;
       }
@@ -711,7 +723,11 @@ function KernelApprovalPanel({
       setMessage(
         result.kind === "historical-receipt-shape"
           ? "A historical receipt was returned; it is not proof of current authority or an effect."
-          : "The outcome remains unknown; do not issue a new command blindly.",
+          : result.kind === "terminal-refusal"
+            ? "Kernel refused this approval before execution because its revision was stale. Do not retry it. A new approval requires a fresh review."
+            : result.kind === "intent-recorded"
+              ? "Kernel recorded the intent without a receipt. The outcome remains unknown."
+              : "The outcome remains unknown; do not issue a new command blindly.",
       );
     } catch {
       setMessage(
@@ -795,8 +811,15 @@ function KernelApprovalPanel({
                 Scope: {entry.scope}; {entry.action}:{" "}
                 {entry.outcome === "unknown"
                   ? "outcome unknown; do not retry blindly"
-                  : "historical receipt only"}{" "}
+                  : entry.outcome === "refused"
+                    ? "terminal refusal: stale revision; not executed"
+                    : "historical receipt only"}{" "}
                 (command {entry.commandId}){" "}
+                <p>
+                  {entry.producer
+                    ? `Producer: ${entry.producer}; recipient: ${entry.recipient}`
+                    : "Legacy entry: producer pairing not recorded"}
+                </p>
                 {entry.approval && (
                   <div>
                     <p>Reviewed revision: {entry.approval.revision}</p>
@@ -829,22 +852,34 @@ function KernelApprovalPanel({
                     )}
                   </div>
                 )}
-                {entry.canReplay && entry.outcome === "unknown" && (
-                  <>
-                    <p>
-                      The original channel reported an existing intent without a
-                      receipt. Checking resends the exact same command on that
-                      channel; it does not create new authority. This option is
-                      unavailable after losing the channel or restarting.
-                    </p>
-                    <button
-                      type="button"
-                      disabled={pending}
-                      onClick={() => void replay(entry.commandId)}
-                    >
-                      Check original receipt
-                    </button>
-                  </>
+                {entry.canRecover && entry.outcome === "unknown" ? (
+                  <button
+                    type="button"
+                    disabled={pending}
+                    onClick={() => void replay(entry.commandId, true)}
+                  >
+                    Read approval disposition
+                  </button>
+                ) : (
+                  entry.canReplay &&
+                  entry.outcome === "unknown" && (
+                    <>
+                      <p>
+                        The original channel reported an existing intent without
+                        a receipt. Checking resends the exact same command on
+                        that channel; it does not create new authority. This
+                        option is unavailable after losing the channel or
+                        restarting.
+                      </p>
+                      <button
+                        type="button"
+                        disabled={pending}
+                        onClick={() => void replay(entry.commandId, false)}
+                      >
+                        Check original receipt
+                      </button>
+                    </>
+                  )
                 )}
               </li>
             ))}

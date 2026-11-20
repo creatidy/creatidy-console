@@ -4,6 +4,7 @@ import {
   assembleLocalOwnerApprovalScope,
   assembleLocalOwnerProposal,
   MAX_PROPOSAL_BYTES,
+  UnsupportedOwnerPayload,
 } from "../server/kernel-owner-proposal.ts";
 
 const subject = {
@@ -188,6 +189,39 @@ describe("synthetic Kernel proposal chunks", () => {
         proposalDigest: createHash("sha256").update(canonical).digest("hex"),
       }),
     );
+    const qualified = {
+      ...value,
+      qualified_work_bindings: [
+        {
+          family: "work",
+          implementation: "fixture",
+          version: "1",
+          origin: "https://example.test",
+          tenant: "tenant",
+          namespace: "work",
+          api_version: "1",
+          rights: "read",
+        },
+      ],
+    };
+    expect(() =>
+      assembleLocalOwnerApprovalScope(
+        frames(chunks(Buffer.from(JSON.stringify(qualified)))),
+        "program",
+      ),
+    ).toThrow(UnsupportedOwnerPayload);
+    expect(() =>
+      assembleLocalOwnerApprovalScope(
+        frames(
+          chunks(
+            Buffer.from(
+              JSON.stringify({ ...qualified, qualified_work_bindings: [null] }),
+            ),
+          ),
+        ),
+        "program",
+      ),
+    ).not.toThrow(UnsupportedOwnerPayload);
     for (const altered of [
       { ...value, version: 2 },
       { ...value, policy: null },
@@ -222,6 +256,54 @@ describe("synthetic Kernel proposal chunks", () => {
           "program",
         ),
       ).toThrow();
+  });
+  it("classifies qualified v2/v3 separately from malformed qualified data and wrong Program", () => {
+    const cut = {
+      kind: "ordinary-qualified-dependencies",
+      version: 1,
+      subject: "subject",
+      edges: [],
+      required: [],
+      classifications: [],
+    };
+    const v2 = { ...proposal(), version: 2, qualified_cuts: [cut] };
+    const v3 = {
+      ...proposal(),
+      version: 3,
+      drafts: [],
+      dependencies: [],
+      qualified_cuts: [],
+      qualified_drafts: [
+        {
+          kind: "ordinary-qualified-draft",
+          version: 1,
+          task_id: "task",
+          declaration,
+          cut,
+          ci_subjects: [],
+        },
+      ],
+    };
+    for (const value of [v2, v3])
+      expect(() =>
+        assembleLocalOwnerProposal(
+          frames(chunks(Buffer.from(JSON.stringify(value)))),
+          "program",
+        ),
+      ).toThrow(UnsupportedOwnerPayload);
+    for (const value of [
+      { ...v2, program: "other" },
+      { ...v2, qualified_cuts: [] },
+      { ...v3, qualified_drafts: [null] },
+    ]) {
+      const parse = () =>
+        assembleLocalOwnerProposal(
+          frames(chunks(Buffer.from(JSON.stringify(value)))),
+          "program",
+        );
+      expect(parse).toThrow();
+      expect(parse).not.toThrow(UnsupportedOwnerPayload);
+    }
   });
   it("assembles a proposal larger than one producer response", () => {
     const value = proposal();

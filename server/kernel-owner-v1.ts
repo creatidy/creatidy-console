@@ -1,4 +1,5 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import type { OwnerPairing } from "./kernel-owner-greeting.ts";
 import { iterator, parse, type ObjectNode } from "@humanwhocodes/momoa";
 
 // This codec describes Kernel's existing host-bound local v1 frames. It is not
@@ -48,17 +49,34 @@ function integer(value: unknown, minimum: bigint): Integer {
   throw new Error("Invalid owner intent");
 }
 
-function json(value: unknown) {
+export function ownerJson(value: unknown) {
   const api = JSON as JSON & { rawJSON: (source: string) => unknown };
   return JSON.stringify(value, (_key, item: unknown) =>
     typeof item === "bigint" ? api.rawJSON(item.toString()) : item,
   );
 }
 
+// Kernel core.intake.encode uses Python's ensure_ascii JSON encoding, including
+// surrogate pairs and DEL. Hash the exact ID, without Unicode normalization.
+export function ownerIdentityDigest(id: string) {
+  const encoded = JSON.stringify(id).replace(
+    /[\u007f-\uffff]/g,
+    (unit) => `\\u${unit.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+  return createHash("sha256").update(encoded).digest("hex");
+}
+
+export type OwnerCommandBinding = OwnerPairing & {
+  // Present only for an original opted-in descriptor and a verified scope.
+  actorDigest?: string;
+  historyVersion?: 1 | 2;
+};
+
 export function prepareLocalOwnerCommand(
   scope: string,
   input: unknown,
   generateId: () => string = randomUUID,
+  binding?: OwnerCommandBinding,
 ) {
   if (
     typeof scope !== "string" ||
@@ -66,6 +84,17 @@ export function prepareLocalOwnerCommand(
     Buffer.byteLength(scope) > 4096
   )
     throw new Error("Invalid owner scope");
+  if (
+    binding &&
+    (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(binding.producer) ||
+      !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(binding.recipient) ||
+      (binding.historyVersion === undefined
+        ? binding.actorDigest !== undefined
+        : (binding.historyVersion !== 1 && binding.historyVersion !== 2) ||
+          typeof binding.actorDigest !== "string" ||
+          !/^[0-9a-f]{64}$/.test(binding.actorDigest)))
+  )
+    throw new Error("Invalid owner command binding");
   const intent = object(input);
   const action = intent.action;
   if (
@@ -123,7 +152,7 @@ export function prepareLocalOwnerCommand(
     expected_revision: revision,
     ...details,
   });
-  const payload = Buffer.from(json(request));
+  const payload = Buffer.from(ownerJson(request));
   if (payload.length < 1 || payload.length > 65536)
     throw new Error("Owner frame exceeds limit");
   const encoded = Buffer.allocUnsafe(4 + payload.length);
@@ -133,11 +162,44 @@ export function prepareLocalOwnerCommand(
     scope,
     commandId,
     request,
+    binding: binding ? Object.freeze({ ...binding }) : undefined,
     frame: () => Buffer.from(encoded),
   });
   preparedCommands.add(command);
   return command;
 }
+
+export function restoreOwnerApproval(
+  scope: string,
+  id: string,
+  input: Uint8Array,
+  binding: OwnerCommandBinding,
+) {
+  const frame = Buffer.from(input);
+  if (
+    frame.length < 5 ||
+    frame.length > 4096 ||
+    frame.readUInt32BE() !== frame.length - 4
+  )
+    throw new Error("Invalid journal frame");
+  const { version, command_id, ...intent } = object(
+    parseOwnerJson(
+      new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+        frame.subarray(4),
+      ),
+    ),
+  );
+  if (version !== 1 || command_id !== id || intent.action !== "approve")
+    throw new Error("Invalid journal approval");
+  const command = prepareLocalOwnerCommand(scope, intent, () => id, binding);
+  if (!frame.equals(command.frame())) throw new Error("Journal input changed");
+  return command;
+}
+
+export type ApprovalDisposition =
+  | OwnerObservation
+  | { kind: "intent-recorded" }
+  | { kind: "terminal-refusal"; reason: "stale-revision" };
 
 export function isPreparedLocalOwnerCommand(value: unknown): boolean {
   return (

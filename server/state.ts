@@ -14,7 +14,7 @@ import type { Session } from "fastify";
 import type { SessionStore } from "@fastify/session";
 import {
   isPreparedLocalOwnerCommand,
-  type OwnerObservation,
+  type ApprovalDisposition,
   type prepareLocalOwnerCommand,
 } from "./kernel-owner-v1.ts";
 
@@ -61,32 +61,47 @@ export function openState(directory: string, now: () => number = Date.now) {
   db.exec(
     "PRAGMA journal_mode = DELETE; PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON;",
   );
-  const version = db.prepare("PRAGMA user_version").get()?.user_version;
-  if (version !== 0 && version !== 1 && version !== 2) {
-    db.close();
-    throw new Error("Unsupported state version");
-  }
-  if (version === 0) {
-    db.exec(`BEGIN IMMEDIATE;
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const version = db.prepare("PRAGMA user_version").get()?.user_version;
+    if (version !== 0 && version !== 1 && version !== 2 && version !== 3)
+      throw new Error("Unsupported state version");
+    if (version === 0) {
+      db.exec(`
       CREATE TABLE owner (id INTEGER PRIMARY KEY CHECK(id = 1), password_hash TEXT NOT NULL);
       CREATE TABLE sessions (id TEXT PRIMARY KEY, generation TEXT NOT NULL, data TEXT NOT NULL,
         idle_expires INTEGER NOT NULL, absolute_expires INTEGER NOT NULL);
-      CREATE TABLE settings (name TEXT PRIMARY KEY, value TEXT NOT NULL);
-      PRAGMA user_version = 1;
-      COMMIT;`);
-  }
-  if (version === 0 || version === 1) {
-    db.exec(`BEGIN IMMEDIATE;
+      CREATE TABLE settings (name TEXT PRIMARY KEY, value TEXT NOT NULL);`);
+    }
+    if (version !== 3) {
+      if (version === 2)
+        db.exec("ALTER TABLE owner_commands RENAME TO owner_commands_v2");
+      db.exec(`
       CREATE TABLE owner_commands (
         command_id TEXT PRIMARY KEY,
         scope TEXT NOT NULL,
         input BLOB NOT NULL,
-        outcome TEXT NOT NULL CHECK(outcome IN ('unknown', 'historical')),
+        outcome TEXT NOT NULL CHECK(outcome IN ('unknown', 'historical', 'refused')),
         receipt TEXT,
-        created INTEGER NOT NULL
-      );
-      PRAGMA user_version = 2;
-      COMMIT;`);
+        created INTEGER NOT NULL,
+        producer TEXT,
+        recipient TEXT,
+        actor_digest TEXT,
+        history_version INTEGER CHECK(history_version IN (1, 2)),
+        CHECK((producer IS NULL) = (recipient IS NULL)),
+        CHECK((actor_digest IS NULL) = (history_version IS NULL)),
+        CHECK(history_version IS NULL OR producer IS NOT NULL)
+      );`);
+      if (version === 2)
+        db.exec(`INSERT INTO owner_commands (command_id, scope, input, outcome, receipt, created)
+        SELECT command_id, scope, input, outcome, receipt, created FROM owner_commands_v2;
+      DROP TABLE owner_commands_v2;`);
+      db.exec("PRAGMA user_version = 3");
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.close();
+    throw error;
   }
 
   function clock() {
@@ -249,6 +264,29 @@ export function openState(directory: string, now: () => number = Date.now) {
     const expires = Date.parse(cookie.expires);
     return Number.isFinite(expires) && expires > at;
   }
+  type Command = ReturnType<typeof prepareLocalOwnerCommand>;
+  const exactCommand = `command_id = ? AND scope = ? AND input = ?
+    AND producer IS ? AND recipient IS ? AND actor_digest IS ? AND history_version IS ?`;
+  const commandKey = (command: Command) =>
+    [
+      command.commandId,
+      command.scope,
+      command.frame(),
+      command.binding?.producer ?? null,
+      command.binding?.recipient ?? null,
+      command.binding?.actorDigest ?? null,
+      command.binding?.historyVersion ?? null,
+    ] as const;
+  function ownerCommandBlocked(scope: string, producer?: string) {
+    // A new recipient cannot bypass an unknown for the same producer and Program.
+    // Legacy entries have no authority attribution and block that scope for anyone.
+    return !!db
+      .prepare(
+        `SELECT 1 FROM owner_commands WHERE scope = ? AND outcome = 'unknown'
+      AND (producer IS NULL OR ? IS NULL OR producer = ?)`,
+      )
+      .get(scope, producer ?? null, producer ?? null);
+  }
   function beginOwnerCommand(
     id: string,
     generation: string,
@@ -267,9 +305,9 @@ export function openState(directory: string, now: () => number = Date.now) {
           BigInt(command.request.expires_at) <= BigInt(Math.floor(at / 1000)))
       )
         throw new Error("Approval deadline expired");
-      // Keep unresolved intents indefinitely; only historical receipts may age out.
+      // Keep unresolved intents indefinitely; only proven outcomes may age out.
       db.prepare(
-        "DELETE FROM owner_commands WHERE command_id = (SELECT command_id FROM owner_commands WHERE outcome = 'historical' ORDER BY created, command_id LIMIT 1) AND (SELECT count(*) FROM owner_commands) >= 128",
+        "DELETE FROM owner_commands WHERE command_id = (SELECT command_id FROM owner_commands WHERE outcome != 'unknown' ORDER BY created, command_id LIMIT 1) AND (SELECT count(*) FROM owner_commands) >= 128",
       ).run();
       if (
         Number(
@@ -278,13 +316,7 @@ export function openState(directory: string, now: () => number = Date.now) {
         ) >= 128
       )
         throw new Error("Owner command journal full");
-      if (
-        db
-          .prepare(
-            "SELECT 1 FROM owner_commands WHERE scope = ? AND outcome = 'unknown'",
-          )
-          .get(command.scope)
-      )
+      if (ownerCommandBlocked(command.scope, command.binding?.producer))
         throw new Error("Owner command outcome unresolved");
       const frame = command.frame();
       if (frame.length > 4096) throw new Error("Owner command too large");
@@ -300,8 +332,8 @@ export function openState(directory: string, now: () => number = Date.now) {
       )
         throw new Error("Approval deadline expired");
       db.prepare(
-        "INSERT INTO owner_commands (command_id, scope, input, outcome, created) VALUES (?, ?, ?, 'unknown', ?)",
-      ).run(command.commandId, command.scope, frame, at);
+        "INSERT INTO owner_commands (command_id, scope, input, producer, recipient, actor_digest, history_version, outcome, created) VALUES (?, ?, ?, ?, ?, ?, ?, 'unknown', ?)",
+      ).run(...commandKey(command), at);
       db.exec("COMMIT");
       const token = {};
       dispatchTokens.set(token, { id, generation, command, fresh: true });
@@ -357,12 +389,8 @@ export function openState(directory: string, now: () => number = Date.now) {
       }
       if (attempt.fresh && !initiated)
         db.prepare(
-          "DELETE FROM owner_commands WHERE command_id = ? AND scope = ? AND input = ? AND outcome = 'unknown'",
-        ).run(
-          attempt.command.commandId,
-          attempt.command.scope,
-          attempt.command.frame(),
-        );
+          `DELETE FROM owner_commands WHERE ${exactCommand} AND outcome = 'unknown'`,
+        ).run(...commandKey(attempt.command));
       throw error;
     }
   }
@@ -380,9 +408,9 @@ export function openState(directory: string, now: () => number = Date.now) {
         throw new Error("Session unavailable");
       const row = db
         .prepare(
-          "SELECT 1 FROM owner_commands WHERE command_id = ? AND scope = ? AND input = ? AND outcome = 'unknown'",
+          `SELECT 1 FROM owner_commands WHERE ${exactCommand} AND outcome = 'unknown'`,
         )
-        .get(command.commandId, command.scope, command.frame());
+        .get(...commandKey(command));
       if (!row) throw new Error("Original unknown command unavailable");
       db.exec("COMMIT");
       const token = {};
@@ -395,29 +423,44 @@ export function openState(directory: string, now: () => number = Date.now) {
   }
   function recordOwnerReceipt(
     command: ReturnType<typeof prepareLocalOwnerCommand>,
-    observation: OwnerObservation,
+    observation: ApprovalDisposition,
   ) {
     if (!isPreparedLocalOwnerCommand(command))
       throw new Error("Invalid owner command");
     if (!ownerJournalUsable) throw new Error("Owner journal unavailable");
-    if (observation.kind !== "historical-receipt-shape") return;
-    if (observation.action !== command.request.action)
+    if (
+      observation.kind !== "historical-receipt-shape" &&
+      observation.kind !== "terminal-refusal"
+    )
+      return;
+    const outcome =
+      observation.kind === "terminal-refusal" ? "refused" : "historical";
+    if (
+      observation.kind === "terminal-refusal"
+        ? command.request.action !== "approve" ||
+          command.binding?.historyVersion !== 2 ||
+          observation.reason !== "stale-revision"
+        : observation.action !== command.request.action
+    )
       throw new Error("Mismatched owner receipt");
-    const receipt = JSON.stringify(observation, (_key, value: unknown) =>
-      typeof value === "bigint" ? value.toString() : value,
-    );
+    const receipt =
+      observation.kind === "terminal-refusal"
+        ? null
+        : JSON.stringify(observation, (_key, value: unknown) =>
+            typeof value === "bigint" ? value.toString() : value,
+          );
     const updated = db
       .prepare(
-        "UPDATE owner_commands SET outcome = 'historical', receipt = ? WHERE command_id = ? AND scope = ? AND input = ? AND outcome = 'unknown'",
+        `UPDATE owner_commands SET outcome = ?, receipt = ? WHERE ${exactCommand} AND outcome = 'unknown'`,
       )
-      .run(receipt, command.commandId, command.scope, command.frame());
+      .run(outcome, receipt, ...commandKey(command));
     if (
       updated.changes !== 1 &&
       !db
         .prepare(
-          "SELECT 1 FROM owner_commands WHERE command_id = ? AND scope = ? AND input = ? AND outcome = 'historical' AND receipt = ?",
+          `SELECT 1 FROM owner_commands WHERE ${exactCommand} AND outcome = ? AND receipt IS ?`,
         )
-        .get(command.commandId, command.scope, command.frame(), receipt)
+        .get(...commandKey(command), outcome, receipt)
     )
       throw new Error("Owner receipt journal mismatch");
   }
@@ -427,6 +470,7 @@ export function openState(directory: string, now: () => number = Date.now) {
     revoke,
     clock,
     beginOwnerCommand,
+    ownerCommandBlocked,
     beginOwnerReplay,
     dispatchOwnerCommand,
     recordOwnerReceipt,

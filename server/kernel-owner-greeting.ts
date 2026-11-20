@@ -1,10 +1,10 @@
 import { iterator, parse, type ObjectNode } from "@humanwhocodes/momoa";
 
-type ExpectedBinding = Readonly<{
-  scope: string;
-  producer: string;
-  recipient: string;
-}>;
+export type OwnerPairing = Readonly<{ producer: string; recipient: string }>;
+type ExpectedBinding = OwnerPairing &
+  Readonly<{
+    scope: string;
+  }>;
 
 // This validates only the producer's framed greeting. It does not authenticate
 // the peer or acquire, protect, or authorize a descriptor.
@@ -89,6 +89,7 @@ export function validateOwnerGreeting(
     const base = ["snapshot", "record", "events"];
     const proposal = ["proposal", "proposal-chunk"];
     const approval = ["approval-scope", "approval-scope-chunk", "approve"];
+    const history = ["approval-disposition", "approval-disposition-v2"];
     const operations = record.operations;
     if (
       !Array.isArray(operations) ||
@@ -99,13 +100,15 @@ export function validateOwnerGreeting(
     if (
       set.size !== operations.length ||
       [...set].some(
-        (name) => ![...base, ...proposal, ...approval].includes(name),
+        (name) =>
+          ![...base, ...proposal, ...approval, ...history].includes(name),
       ) ||
       !base.every((name) => set.has(name)) ||
       (proposal.some((name) => set.has(name)) &&
         !proposal.every((name) => set.has(name))) ||
       (approval.some((name) => set.has(name)) &&
-        ![...proposal, ...approval].every((name) => set.has(name)))
+        ![...proposal, ...approval].every((name) => set.has(name))) ||
+      (set.has(history[1]!) && !set.has(history[0]!))
     )
       throw new Error("Inconsistent operations");
     return Object.freeze([...set]);

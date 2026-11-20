@@ -324,22 +324,37 @@ not proof that every producer profile is canonical. The host's label still does
 not prove producer identity, and the displayed scope is not itself a grant.
 
 The development admission path accepts only a reviewed approval with exact
-scope, proposal, revision and requested expiry. It records the original input
-and an unknown outcome before a possible send, preserves unresolved records
-across restart and bounds storage by aging out historical records first. A
-manual exact receipt check is available only on the same retained channel after
-it reported the original intent without a receipt; a lost channel or restart
-does not establish continuity. No snapshot label clears an unknown outcome.
-Historical receipts do not prove a present grant or effect. The optional
-supervisor-launched backend exposes this scoped approval path only with the
-inherited owner capability and a validated v2 operation declaration containing
-approval support; a validated v1 greeting remains proposal-only. A v2 descriptor
-without a proposal or approval binding is not probed for unsupported operations.
-Ordinary launches have no command capability. An observed receipt that cannot be
-persisted is retained for local persistence retry only while this process
-remains alive; a crash before persistence leaves the durable outcome unknown.
-Synthetic tests and isolated producer probes do not establish live deployment or
-authority to operate a real producer.
+scope, proposal, revision and requested expiry. It records the original input,
+producer/recipient pairing and an unknown outcome before a possible send. It
+preserves unresolved records across restart and bounds storage by aging out
+resolved records. Unpaired legacy unknowns continue to block their scope and are
+never attributed to a new connection. In one Console state directory the
+supervisor uses a stable producer label for each journal lineage; changing
+recipients does not bypass an unresolved command for that producer and Program.
+The optional supervisor-launched backend exposes this scoped approval path only
+with the inherited owner capability and a validated v2 operation declaration
+containing approval support; a validated v1 greeting remains proposal-only. A v2
+descriptor without a proposal or approval binding is not probed for unsupported
+operations. Qualified proposal v2/v3 and qualified fields in a v1 approval scope
+are not supported by Console; a recognized unsupported payload grants no approve
+action.
+
+The
+[Kernel recovery contract at `7910acde`](https://forgejo.creatidy.com/Creatidy/creatidy-kernel/src/commit/7910acde72541ee111911486b9579bc4bcd711f7/docs/architecture/contracts.md#approval-disposition-recovery)
+allows explicit read-only recovery even on history-only replacement descriptors.
+Only opted-in original commands retain the actor assertion from the exact
+reviewed approval scope. The replacement must declare the read, match the
+original producer, recipient and Program, and verify the original Program and
+actor assertions and immutable request. Only the trusted supervisor establishes
+custody of the authoritative original journal and attests it by opting in;
+labels, paths and snapshot epochs do not establish continuity. A historical
+receipt is not a current grant or physical settlement. An exact v2
+stale-revision refusal releases the uncertainty block without permitting a
+retry; intent without receipt, unknown or failed lookup never does. Without
+opted-in recovery, the existing exact receipt check remains restricted to the
+original channel after it reported an existing intent. Validated outcomes that
+cannot be persisted are retained for local persistence retry while Console is
+running. Synthetic evidence does not establish deployment or live authority.
 
 Each real command additionally requires idempotency/input/reconciliation, audit
 receipt and negative tests for denial, expiration, stale subject, multiple

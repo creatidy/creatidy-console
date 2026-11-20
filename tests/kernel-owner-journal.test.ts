@@ -11,6 +11,107 @@ const digest = (value: string) =>
   createHash("sha256").update(value).digest("hex");
 
 describe("owner command admission journal", () => {
+  it("migrates v2 evidence without attribution and isolates command admission from receipt pairing", () => {
+    const dir = mkdtempSync(join(tmpdir(), "owner-journal-pairing-"));
+    const make = (
+      id: string,
+      scope: string,
+      producer: string,
+      recipient: string,
+    ) =>
+      prepareLocalOwnerCommand(
+        scope,
+        {
+          action: "approve",
+          expected_revision: -1,
+          decision_id: "d",
+          expires_at: 3000,
+          proposal_digest: "a".repeat(64),
+          scope_digest: "b".repeat(64),
+        },
+        () => id,
+        { producer, recipient, historyVersion: 2, actorDigest: "c".repeat(64) },
+      );
+    try {
+      const original = make("old", "legacy", "p", "r");
+      const old = openState(dir, () => 1000);
+      old.db.exec(`DROP TABLE owner_commands;
+        CREATE TABLE owner_commands (command_id TEXT PRIMARY KEY, scope TEXT NOT NULL, input BLOB NOT NULL,
+          outcome TEXT NOT NULL, receipt TEXT, created INTEGER NOT NULL);
+        PRAGMA user_version = 2;`);
+      old.db
+        .prepare(
+          "INSERT INTO owner_commands VALUES (?, ?, ?, 'unknown', NULL, 1000)",
+        )
+        .run(original.commandId, original.scope, original.frame());
+      old.db
+        .prepare(
+          "INSERT INTO owner_commands VALUES ('history', 'legacy', ?, 'historical', 'old-receipt', 999)",
+        )
+        .run(original.frame());
+      old.db.prepare("INSERT INTO sessions VALUES (?, ?, ?, 2000, 3000)").run(
+        digest("s"),
+        digest("g"),
+        JSON.stringify({
+          owner: true,
+          cookie: { expires: new Date(3000).toISOString() },
+        }),
+      );
+      old.db.close();
+      const state = openState(dir, () => 1001);
+      try {
+        expect(
+          state.db.prepare("PRAGMA user_version").get()?.user_version,
+        ).toBe(3);
+        expect(state.ownerCommandBlocked("legacy", "q")).toBe(true);
+        expect(
+          state.db
+            .prepare(
+              "SELECT producer, recipient, receipt FROM owner_commands WHERE command_id = 'history'",
+            )
+            .get(),
+        ).toEqual({ producer: null, recipient: null, receipt: "old-receipt" });
+        const refused = {
+          kind: "terminal-refusal",
+          reason: "stale-revision",
+        } as const;
+        expect(() => state.recordOwnerReceipt(original, refused)).toThrow(
+          "journal mismatch",
+        );
+        const one = make("new", "program", "p", "r");
+        state.beginOwnerCommand("s", "g", one);
+        expect(state.ownerCommandBlocked("program", "p")).toBe(true);
+        expect(state.ownerCommandBlocked("program", "q")).toBe(false);
+        const otherRecipient = make("new", "program", "p", "another");
+        expect(() => state.beginOwnerCommand("s", "g", otherRecipient)).toThrow(
+          "outcome unresolved",
+        );
+        expect(() =>
+          state.beginOwnerReplay("s", "g", otherRecipient),
+        ).toThrow();
+        expect(() => state.recordOwnerReceipt(otherRecipient, refused)).toThrow(
+          "journal mismatch",
+        );
+        state.recordOwnerReceipt(one, refused);
+        state.recordOwnerReceipt(one, refused);
+        expect(state.ownerCommandBlocked("program", "p")).toBe(false);
+        expect(() => state.beginOwnerReplay("s", "g", one)).toThrow();
+      } finally {
+        state.db.close();
+      }
+      const restarted = openState(dir, () => 1002);
+      expect(
+        restarted.db
+          .prepare(
+            "SELECT outcome, receipt FROM owner_commands WHERE command_id = 'new'",
+          )
+          .get(),
+      ).toEqual({ outcome: "refused", receipt: null });
+      restarted.db.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
   it("checks session expiry at the final dispatch clock sample", () => {
     const dir = mkdtempSync(join(tmpdir(), "owner-journal-final-session-"));
     try {

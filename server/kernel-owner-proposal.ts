@@ -144,7 +144,27 @@ function declaration(value: unknown) {
   }
 }
 
-function validateProposal(value: unknown, scope: string) {
+export class UnsupportedOwnerPayload extends Error {}
+export class UnsupportedApprovalScope extends UnsupportedOwnerPayload {}
+
+function objectList(value: unknown, min = 0) {
+  if (
+    !Array.isArray(value) ||
+    value.length < min ||
+    value.some(
+      (item) => !item || typeof item !== "object" || Array.isArray(item),
+    )
+  )
+    throw new Error("Invalid qualified list");
+  return value as Record<string, unknown>[];
+}
+
+function validateProposal(
+  value: unknown,
+  scope: string,
+  allowQualified = false,
+) {
+  const version = (value as Record<string, unknown> | null)?.version;
   const proposal = record(value, [
     "version",
     "kind",
@@ -152,22 +172,55 @@ function validateProposal(value: unknown, scope: string) {
     "objective",
     "drafts",
     "dependencies",
+    ...(version === 2 || version === 3 ? ["qualified_cuts"] : []),
+    ...(version === 3 ? ["qualified_drafts"] : []),
   ]);
   if (
-    proposal.version !== 1 ||
+    (version !== 1 && version !== 2 && version !== 3) ||
     proposal.kind !== "ordinary-program-proposal" ||
     proposal.program !== scope
   )
-    throw new Error("Unsupported proposal subject");
+    throw new Error("Invalid proposal subject");
   string(proposal.objective);
   const { drafts, dependencies } = proposal;
   if (
     !Array.isArray(drafts) ||
-    !drafts.length ||
+    (version !== 3 && !drafts.length) ||
     !Array.isArray(dependencies) ||
     drafts.length !== dependencies.length
   )
     throw new Error("Invalid proposal entries");
+  if (version !== 1) {
+    const cut = (item: Record<string, unknown>) => {
+      if (
+        item.kind !== "ordinary-qualified-dependencies" ||
+        item.version !== 1 ||
+        typeof item.subject !== "string" ||
+        !Array.isArray(item.edges) ||
+        !Array.isArray(item.required) ||
+        !Array.isArray(item.classifications)
+      )
+        throw new Error("Invalid qualified cut");
+    };
+    for (const item of objectList(
+      proposal.qualified_cuts,
+      version === 2 ? 1 : 0,
+    ))
+      cut(item);
+    if (version === 3)
+      for (const item of objectList(proposal.qualified_drafts, 1)) {
+        if (
+          item.kind !== "ordinary-qualified-draft" ||
+          (item.version !== 1 && item.version !== 2) ||
+          typeof item.task_id !== "string" ||
+          typeof item.declaration !== "string" ||
+          !Array.isArray(item.ci_subjects) ||
+          (item.version === 2 && typeof item.ci_profile !== "string")
+        )
+          throw new Error("Invalid qualified draft");
+        cut(objectList([item.cut])[0]!);
+      }
+  }
   const ids = new Set<string>();
   for (let i = 0; i < drafts.length; i++) {
     const draft = record(drafts[i], [
@@ -257,6 +310,8 @@ function validateProposal(value: unknown, scope: string) {
       edges.add(key);
     }
   }
+  if (version !== 1 && !allowQualified)
+    throw new UnsupportedOwnerPayload("Unsupported qualified proposal");
   return proposal;
 }
 
@@ -354,8 +409,6 @@ export function assembleLocalOwnerProposal(
   return { digest, proposal: validateProposal(value, scope), text };
 }
 
-export class UnsupportedApprovalScope extends Error {}
-
 // The complete producer-supplied text is evidence, not an authorization.
 export function assembleLocalOwnerApprovalScope(
   frames: readonly Uint8Array[],
@@ -383,7 +436,20 @@ export function assembleLocalOwnerApprovalScope(
     "execution_profile",
     "execution_reference",
   ];
-  record(item, fields);
+  const proposal = validateProposal(item.proposal, scope, true);
+  const hasWorkBindings = Object.hasOwn(item, "qualified_work_bindings");
+  const hasScmBindings = Object.hasOwn(item, "qualified_scm_bindings");
+  if (
+    (proposal.version !== 1 && !hasWorkBindings) ||
+    (proposal.version === 3 && !hasScmBindings) ||
+    (hasScmBindings && !hasWorkBindings)
+  )
+    throw new Error("Invalid qualified approval scope");
+  record(item, [
+    ...fields,
+    ...(hasWorkBindings ? ["qualified_work_bindings"] : []),
+    ...(hasScmBindings ? ["qualified_scm_bindings"] : []),
+  ]);
   if (item.kind !== "ordinary-approval-scope" || item.version !== 1)
     throw new Error("Unsupported approval scope");
   const owner = string(item.owner);
@@ -585,9 +651,32 @@ export function assembleLocalOwnerApprovalScope(
     `basic-harness-policy:${createHash("sha256").update(profileText).digest("hex")}`
   )
     throw new Error("Invalid execution profile binding");
-  validateProposal(item.proposal, scope);
+  for (const field of ["qualified_work_bindings", "qualified_scm_bindings"]) {
+    if (!Object.hasOwn(item, field)) continue;
+    for (const binding of objectList(item[field])) {
+      const keys = [
+        "family",
+        "implementation",
+        "version",
+        "origin",
+        "tenant",
+        "namespace",
+        "api_version",
+        "rights",
+      ];
+      record(binding, keys);
+      if (
+        binding.family !==
+        (field === "qualified_work_bindings" ? "work" : "scm")
+      )
+        throw new Error("Invalid qualified approval binding");
+      for (const key of keys) string(binding[key]);
+    }
+  }
+  if (hasWorkBindings || hasScmBindings)
+    throw new UnsupportedApprovalScope("Unsupported qualified approval scope");
   const proposalDigest = createHash("sha256")
     .update(canonicalProposal(item.proposal))
     .digest("hex");
-  return { digest, proposalDigest, text };
+  return { digest, proposalDigest, text, owner };
 }

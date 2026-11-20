@@ -56,6 +56,8 @@ describe("synthetic Kernel owner greeting", () => {
       base,
       [...base, ...proposal],
       [...approval, ...proposal, ...base],
+      [...base, "approval-disposition"],
+      [...base, "approval-disposition", "approval-disposition-v2"],
     ])
       expect(
         validateOwnerGreeting(
@@ -70,6 +72,7 @@ describe("synthetic Kernel owner greeting", () => {
       [...base, ...approval],
       [...base, "snapshot"],
       [...base, "stop"],
+      [...base, "approval-disposition-v2"],
       [...base, 1],
     ])
       expect(() =>

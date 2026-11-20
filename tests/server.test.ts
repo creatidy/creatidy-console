@@ -73,6 +73,152 @@ afterEach(() => {
 });
 
 describe("authenticated application", () => {
+  it("recovers only the paired exact original over the read-only route after restart", async () => {
+    const time = Date.now();
+    const pairing = { producer: "kernel", recipient: "console" };
+    let sent: ReturnType<typeof prepareLocalOwnerCommand> | undefined;
+    const { app, dir, assets } = await fixture(() => time, {
+      scope: "program",
+      pairing,
+      historyVersion: 2,
+      readProposal: async () => ({ digest: "a".repeat(64), text: "proposal" }),
+      readApprovalScope: async () => ({
+        digest: "b".repeat(64),
+        proposalDigest: "a".repeat(64),
+        owner: "actor",
+        text: "scope",
+      }),
+      readRevision: async () => ({ revision: "-1", status: "absent" }),
+      canSend: () => true,
+      sendCommand: async (command) => {
+        sent = command;
+        return { kind: "unknown" };
+      },
+      close: () => {},
+    });
+    const bootstrap = await app.inject({
+      method: "POST",
+      url: "/api/bootstrap",
+      headers,
+      payload: { token, password },
+    });
+    expect(bootstrap.statusCode).toBe(200);
+    const login = await app.inject({
+      method: "POST",
+      url: "/api/login",
+      headers,
+      payload: { password },
+    });
+    expect(login.statusCode).toBe(200);
+    const cookie = String(login.headers["set-cookie"]).split(";")[0]!;
+    const auth = { ...headers, cookie };
+    try {
+      const review = await app.inject({
+        method: "POST",
+        url: "/api/kernel/owner-review",
+        headers: auth,
+        payload: { expires_at: String(Math.floor(time / 1000) + 1) },
+      });
+      expect(review.statusCode).toBe(200);
+      const submit = await app.inject({
+        method: "POST",
+        url: "/api/kernel/owner",
+        headers: auth,
+        payload: { action: "approve", review: review.json().review },
+      });
+      expect(submit.json()).toEqual({ kind: "unknown" });
+      expect(sent?.binding).toMatchObject({
+        ...pairing,
+        historyVersion: 2,
+        actorDigest: createHash("sha256").update('"actor"').digest("hex"),
+      });
+    } finally {
+      await app.close();
+    }
+    const sendCommand = vi.fn();
+    const readDisposition = vi.fn(
+      async (command: ReturnType<typeof prepareLocalOwnerCommand>) => {
+        expect(command.frame()).toEqual(sent!.frame());
+        expect(command.binding).toEqual(sent!.binding);
+        return { kind: "terminal-refusal", reason: "stale-revision" } as const;
+      },
+    );
+    const replacement = (recipient: string) =>
+      createApp({
+        stateDirectory: dir,
+        staticDirectory: assets,
+        origin,
+        now: () => time + 5000,
+        kernelOwner: {
+          scope: "program",
+          pairing: { ...pairing, recipient },
+          historyVersion: 2,
+          proposalSupported: false,
+          approvalSupported: false,
+          readProposal: async () => {
+            throw new Error("not supported");
+          },
+          canSend: () => true,
+          canReadDisposition: () => true,
+          readDisposition,
+          sendCommand,
+          close: () => {},
+        },
+      });
+    const request = {
+      method: "POST" as const,
+      url: "/api/kernel/owner-replay",
+      headers: auth,
+      payload: { commandId: sent!.commandId },
+    };
+    const wrong = await replacement("wrong");
+    try {
+      expect((await wrong.inject(request)).statusCode).toBe(409);
+      expect(readDisposition).not.toHaveBeenCalled();
+    } finally {
+      await wrong.close();
+    }
+    const recovered = await replacement(pairing.recipient);
+    try {
+      expect(
+        (
+          await recovered.inject({
+            ...request,
+            headers: { ...auth, origin: "https://other.test" },
+          })
+        ).statusCode,
+      ).toBe(403);
+      expect((await recovered.inject({ ...request, headers })).statusCode).toBe(
+        401,
+      );
+      const journal = () =>
+        recovered.inject({
+          method: "GET",
+          url: "/api/kernel/owner-journal",
+          headers: auth,
+        });
+      expect((await journal()).json().commands[0]).toMatchObject({
+        ...pairing,
+        outcome: "unknown",
+        canRecover: true,
+        canReplay: false,
+      });
+      expect((await recovered.inject(request)).json()).toEqual({
+        kind: "terminal-refusal",
+        reason: "stale-revision",
+      });
+      expect((await journal()).json().commands[0]).toMatchObject({
+        outcome: "refused",
+        receipt: null,
+        canRecover: false,
+      });
+      expect((await recovered.inject(request)).statusCode).toBe(409);
+      expect(readDisposition).toHaveBeenCalledTimes(1);
+      expect(sendCommand).not.toHaveBeenCalled();
+    } finally {
+      await recovered.close();
+    }
+  });
   it("retries a transient receipt persistence failure immediately without another command", async () => {
     const statements = new WeakSet<StatementSync>();
     let failures = 0;
@@ -83,7 +229,7 @@ describe("authenticated application", () => {
       .spyOn(DatabaseSync.prototype, "prepare")
       .mockImplementation(function (this: DatabaseSync, sql: string) {
         const statement = prepare.call(this, sql);
-        if (sql.startsWith("UPDATE owner_commands SET outcome = 'historical'"))
+        if (sql.startsWith("UPDATE owner_commands SET outcome = ?"))
           statements.add(statement);
         return statement;
       });

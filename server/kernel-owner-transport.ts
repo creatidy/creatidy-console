@@ -1,20 +1,28 @@
 import { Socket } from "node:net";
+import type { OwnerPairing } from "./kernel-owner-greeting.ts";
 import {
   assembleLocalOwnerApprovalScope,
   assembleLocalOwnerProposal,
   MAX_PROPOSAL_BYTES,
+  UnsupportedOwnerPayload,
   UnsupportedApprovalScope,
 } from "./kernel-owner-proposal.ts";
 import {
   classifyLocalOwnerResult,
   isPreparedLocalOwnerCommand,
+  ownerIdentityDigest,
+  ownerJson,
   parseOwnerJson,
   prepareLocalOwnerCommand,
   type OwnerObservation,
+  type ApprovalDisposition,
 } from "./kernel-owner-v1.ts";
 
 const RESPONSE_LIMIT = 1024 * 1024;
 const CHUNK_LIMIT = 16 * 1024;
+
+export class InvalidOwnerResponse extends Error {}
+class OwnerChannelUnavailable extends Error {}
 
 function record(value: unknown, keys: string[]): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value))
@@ -35,7 +43,7 @@ function payload(frame: Buffer): unknown {
 }
 
 function requestFrame(value: unknown): Buffer {
-  const bytes = Buffer.from(JSON.stringify(value));
+  const bytes = Buffer.from(ownerJson(value));
   if (!bytes.length || bytes.length > 65536)
     throw new Error("Invalid owner request");
   const frame = Buffer.allocUnsafe(bytes.length + 4);
@@ -51,6 +59,7 @@ export function createLocalOwnerTransport(
   scope: string,
   timeoutMs = 5000,
   operations: readonly string[] | null = null,
+  pairing?: OwnerPairing,
 ) {
   if (
     !(socket instanceof Socket) ||
@@ -71,8 +80,31 @@ export function createLocalOwnerTransport(
   let closed = false;
   const supported = (name: string) =>
     operations === null ? name === "proposal-chunk" : operations.includes(name);
-  let approvalSupported =
+  const approvalDeclared =
     supported("approval-scope-chunk") && supported("approve");
+  let approvalSupported = approvalDeclared;
+  const historyVersion = supported("approval-disposition-v2")
+    ? 2
+    : supported("approval-disposition")
+      ? 1
+      : undefined;
+  const verifiedPairing = pairing && Object.freeze({ ...pairing });
+  type Command = ReturnType<typeof prepareLocalOwnerCommand>;
+  const matchesPairing = (command: Command) =>
+    command.scope === scope &&
+    (verifiedPairing === undefined ||
+      (command.binding?.producer === verifiedPairing.producer &&
+        command.binding?.recipient === verifiedPairing.recipient));
+  const canReadDisposition = (command: Command) =>
+    !closed &&
+    !socket.destroyed &&
+    !!historyVersion &&
+    !!verifiedPairing &&
+    matchesPairing(command) &&
+    command.request.action === "approve" &&
+    !!command.binding?.historyVersion &&
+    !!command.binding.actorDigest &&
+    isPreparedLocalOwnerCommand(command);
   const observedUnknown = new WeakSet<object>();
   let waiting: (() => void) | undefined;
   const close = () => {
@@ -91,32 +123,38 @@ export function createLocalOwnerTransport(
 
   async function exchange(frame: Buffer, limit: number): Promise<Buffer> {
     if (closed || socket.readableLength !== 0)
-      throw new Error("Owner channel unavailable");
+      throw new OwnerChannelUnavailable("Owner channel unavailable");
     return new Promise((resolve, reject) => {
       let header: Buffer | undefined;
       let length = 0;
       let written = false;
       let response: Buffer | undefined;
-      const fail = () => {
+      const fail = (invalid = false) => {
         waiting = undefined;
-        reject(new Error("Owner channel unavailable"));
+        reject(
+          invalid
+            ? new InvalidOwnerResponse(
+                "Owner channel unavailable: invalid response frame",
+              )
+            : new OwnerChannelUnavailable("Owner channel unavailable"),
+        );
       };
       const read = () => {
         if (closed) return fail();
         if (!header) {
           header = (socket.read(4) as Buffer | null) ?? undefined;
           if (!header) return;
-          if (header.length !== 4) return fail();
+          if (header.length !== 4) return fail(true);
           length = header.readUInt32BE();
-          if (length < 1 || length > limit) return fail();
+          if (length < 1 || length > limit) return fail(true);
         }
         if (!response) {
           const body = socket.read(length) as Buffer | null;
           if (!body) return;
-          if (body.length !== length) return fail();
+          if (body.length !== length) return fail(true);
           response = Buffer.concat([header, body]);
         }
-        if (socket.readableLength !== 0) return fail();
+        if (socket.readableLength !== 0) return fail(true);
         if (written) {
           waiting = undefined;
           resolve(response);
@@ -133,7 +171,8 @@ export function createLocalOwnerTransport(
   }
 
   async function operation<T>(run: () => Promise<T>): Promise<T> {
-    if (closed || busy) throw new Error("Owner channel unavailable");
+    if (closed || busy)
+      throw new OwnerChannelUnavailable("Owner channel unavailable");
     busy = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -142,13 +181,21 @@ export function createLocalOwnerTransport(
         new Promise<never>((_, reject) => {
           timer = setTimeout(() => {
             close();
-            reject(new Error("Owner channel unavailable"));
+            reject(new OwnerChannelUnavailable("Owner channel unavailable"));
           }, timeoutMs);
         }),
       ]);
-    } catch {
+    } catch (error) {
+      if (error instanceof UnsupportedOwnerPayload) throw error;
       close();
-      throw new Error("Owner channel unavailable");
+      if (
+        error instanceof OwnerChannelUnavailable ||
+        error instanceof InvalidOwnerResponse
+      )
+        throw error;
+      throw new InvalidOwnerResponse(
+        "Owner channel unavailable: invalid producer response",
+      );
     } finally {
       if (timer) clearTimeout(timer);
       busy = false;
@@ -218,33 +265,102 @@ export function createLocalOwnerTransport(
 
   return Object.freeze({
     close,
+    historyVersion,
+    proposalSupported: supported("proposal-chunk"),
+    approvalScopeSupported: approvalDeclared,
     get approvalSupported() {
       return approvalSupported && !closed && !socket.destroyed;
     },
     canSend() {
       return !closed && !busy && !socket.destroyed;
     },
+    canReadDisposition,
+    async readDisposition(command: Command): Promise<ApprovalDisposition> {
+      if (!canReadDisposition(command))
+        throw new Error("Approval disposition unavailable");
+      const version =
+        historyVersion === 2 && command.binding!.historyVersion === 2 ? 2 : 1;
+      return operation(async () => {
+        const frame = await exchange(
+          requestFrame({
+            version: 1,
+            action:
+              version === 2
+                ? "approval-disposition-v2"
+                : "approval-disposition",
+            producer: verifiedPairing!.producer,
+            recipient: verifiedPairing!.recipient,
+            program_digest: ownerIdentityDigest(scope),
+            actor_digest: command.binding!.actorDigest,
+            original: command.request,
+          }),
+          RESPONSE_LIMIT,
+        );
+        const envelope = record(payload(frame), ["version", "ok", "result"]);
+        if (envelope.version !== 1 || envelope.ok !== true)
+          throw new Error("Invalid disposition envelope");
+        const result = envelope.result as Record<string, unknown> | null;
+        if (version === 2 && result?.status === "terminal-refusal") {
+          const refusal = record(result, [
+            "version",
+            "status",
+            "receipt",
+            "reason",
+          ]);
+          if (
+            refusal.version !== 2 ||
+            refusal.receipt !== null ||
+            refusal.reason !== "stale-revision"
+          )
+            throw new Error("Invalid terminal refusal");
+          return { kind: "terminal-refusal", reason: "stale-revision" };
+        }
+        const disposition = record(result, ["version", "status", "receipt"]);
+        if (disposition.version !== version)
+          throw new Error("Invalid disposition version");
+        if (disposition.status === "historical-receipt") {
+          const receipt = classifyLocalOwnerResult(
+            command.request,
+            disposition.receipt,
+          );
+          if (receipt.kind === "historical-receipt-shape") return receipt;
+        }
+        if (
+          disposition.receipt === null &&
+          (disposition.status === "unknown" ||
+            disposition.status === "intent-recorded")
+        )
+          return { kind: disposition.status };
+        throw new Error("Invalid disposition result");
+      });
+    },
     async readProposal() {
       if (!supported("proposal-chunk"))
-        throw new Error("Unsupported owner operation");
-      return operation(async () =>
-        assembleLocalOwnerProposal(await readChunks("proposal-chunk"), scope),
-      );
+        throw new UnsupportedOwnerPayload("Unsupported owner operation");
+      return operation(async () => {
+        const frames = await readChunks("proposal-chunk");
+        try {
+          return assembleLocalOwnerProposal(frames, scope);
+        } catch (error) {
+          if (error instanceof UnsupportedOwnerPayload)
+            approvalSupported = false;
+          throw error;
+        }
+      });
     },
     async readApprovalScope() {
-      if (!approvalSupported) throw new Error("Unsupported owner operation");
-      const result = await operation(async () => {
+      if (!approvalDeclared)
+        throw new UnsupportedApprovalScope("Unsupported owner operation");
+      return operation(async () => {
         const frames = await readChunks("approval-scope-chunk");
         try {
           return assembleLocalOwnerApprovalScope(frames, scope);
         } catch (error) {
           if (!(error instanceof UnsupportedApprovalScope)) throw error;
           approvalSupported = false;
-          return null;
+          throw error;
         }
       });
-      if (!result) throw new Error("Unsupported approval scope");
-      return result;
     },
     async readRevision() {
       if (!supported("snapshot"))
@@ -326,7 +442,11 @@ export function createLocalOwnerTransport(
         (command.request.action === "approve" && !approvalSupported)
       )
         throw new Error("Unsupported owner operation");
-      if (command.scope !== scope) return { kind: "unknown" };
+      if (
+        !matchesPairing(command) ||
+        (verifiedPairing && command.binding?.historyVersion !== historyVersion)
+      )
+        return { kind: "unknown" };
       try {
         return await operation(async () => {
           const frame = await exchange(command.frame(), RESPONSE_LIMIT);

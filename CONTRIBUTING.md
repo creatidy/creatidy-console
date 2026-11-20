@@ -118,10 +118,15 @@ The default startup does not load the addon or use a descriptor. This is a
 synthetic verification path, not a supported deployment recipe or live
 integration receipt. Proposal text is untrusted; declarations do not establish
 effective host policy. A historical receipt is not proof of current authority or
-effect; a lost reply remains unknown, and replay is restricted to the original
-channel. Other owner actions are unsupported. No real live mutation is
-authorized without separate owner authorization. Synthetic evidence does not
-satisfy #11 installation or #12 producer/browser conformance.
+effect. Replay is restricted to the original channel. A lost reply remains
+unknown unless the read-only disposition contract proves a historical receipt or
+an exact terminal refusal. Only opt in to disposition when the trusted
+supervisor has established custody of the authoritative original journal; use a
+history-only replacement when command authority is not needed. A fresh channel,
+matching labels and matching paths alone do not suffice. Other owner actions are
+unsupported. No real live mutation is authorized without separate owner
+authorization. Synthetic evidence does not satisfy #11 installation or #12
+producer/browser conformance.
 
 `make bootstrap` creates `bootstrap-token` in the private state directory with
 mode 0600, expires in 15 minutes, and refuses once an owner exists. Read it only

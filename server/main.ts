@@ -30,19 +30,29 @@ try {
     const { createLocalOwnerTransport } =
       await import("./kernel-owner-transport.ts");
     const scope = process.env.CONSOLE_KERNEL_OWNER_SCOPE ?? "";
-    const { socket, operations } = await receiveInheritedOwnerChannel(fd, {
-      scope,
+    const pairing = {
       producer: process.env.CONSOLE_KERNEL_OWNER_PRODUCER ?? "",
       recipient: process.env.CONSOLE_KERNEL_OWNER_RECIPIENT ?? "",
+    };
+    const { socket, operations } = await receiveInheritedOwnerChannel(fd, {
+      scope,
+      ...pairing,
     });
     const transport = createLocalOwnerTransport(
       socket,
       scope,
       5000,
       operations,
+      pairing,
     );
     kernelOwner = {
       scope,
+      pairing,
+      proposalSupported: transport.proposalSupported,
+      approvalScopeSupported: transport.approvalScopeSupported,
+      ...(transport.historyVersion
+        ? { historyVersion: transport.historyVersion }
+        : {}),
       get approvalSupported() {
         return transport.approvalSupported;
       },
@@ -53,6 +63,8 @@ try {
       sendCommand: transport.sendCommand,
       canReplay: transport.canReplay,
       replayCommand: transport.replayCommand,
+      canReadDisposition: transport.canReadDisposition,
+      readDisposition: transport.readDisposition,
       close: transport.close,
     };
   } else if (process.env.CONSOLE_KERNEL_OWNER !== undefined) {
