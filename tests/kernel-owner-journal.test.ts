@@ -11,7 +11,12 @@ const digest = (value: string) =>
   createHash("sha256").update(value).digest("hex");
 
 describe("owner command admission journal", () => {
-  it.each(["admission", "dispatch"] as const)(
+  it.each([
+    "admission",
+    "dispatch",
+    "admission restart",
+    "dispatch restart",
+  ] as const)(
     "keeps authority closed after SQLite rolls back clock revocation during %s",
     (phase) => {
       const dir = mkdtempSync(
@@ -45,10 +50,9 @@ describe("owner command admission journal", () => {
           state.db.exec(`INSERT INTO settings VALUES ('bootstrap', 'synthetic');
             CREATE TRIGGER fail_revocation BEFORE DELETE ON settings WHEN OLD.name = 'bootstrap'
             BEGIN SELECT RAISE(ABORT, 'synthetic revocation failure'); END;`);
-          const attempt =
-            phase === "dispatch"
-              ? state.beginOwnerCommand("s", "g", command)
-              : undefined;
+          const attempt = phase.startsWith("dispatch")
+            ? state.beginOwnerCommand("s", "g", command)
+            : undefined;
           samplesUntilRegression = 2;
           expect(() =>
             attempt
@@ -69,17 +73,25 @@ describe("owner command admission journal", () => {
           ).toEqual([]);
           expect(send).not.toHaveBeenCalled();
           time = 1100;
-          const authenticate = vi.fn();
-          state.store.get("s", authenticate);
-          expect(authenticate).toHaveBeenCalledExactlyOnceWith(
-            expect.objectContaining({
-              message: "synthetic revocation failure",
-            }),
-          );
+          if (!phase.endsWith("restart")) {
+            const authenticate = vi.fn();
+            state.store.get("s", authenticate);
+            expect(authenticate).toHaveBeenCalledExactlyOnceWith(
+              expect.objectContaining({
+                message: "synthetic revocation failure",
+              }),
+            );
+          } else {
+            expect(() => openState(dir, now)).toThrow(
+              "synthetic revocation failure",
+            );
+          }
           state.db.exec("DROP TRIGGER fail_revocation");
-          const afterRecovery = vi.fn();
-          state.store.get("s", afterRecovery);
-          expect(afterRecovery).toHaveBeenCalledExactlyOnceWith(null, null);
+          if (!phase.endsWith("restart")) {
+            const afterRecovery = vi.fn();
+            state.store.get("s", afterRecovery);
+            expect(afterRecovery).toHaveBeenCalledExactlyOnceWith(null, null);
+          }
         } finally {
           state.db.close();
         }
@@ -696,8 +708,19 @@ describe("owner command admission journal", () => {
         () => "different-command",
       );
       expect(() => state.beginOwnerCommand("s", "g", replacement)).toThrow(
-        "outcome unresolved",
+        "Session unavailable",
       );
+      state.db.prepare("INSERT INTO sessions VALUES (?, ?, ?, 2000, 3000)").run(
+        digest("new-session"),
+        digest("new-generation"),
+        JSON.stringify({
+          owner: true,
+          cookie: { expires: new Date(3000).toISOString() },
+        }),
+      );
+      expect(() =>
+        state.beginOwnerCommand("new-session", "new-generation", replacement),
+      ).toThrow("outcome unresolved");
       state.db.close();
     } finally {
       rmSync(dir, { recursive: true, force: true });

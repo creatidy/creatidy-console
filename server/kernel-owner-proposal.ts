@@ -34,14 +34,17 @@ function integer(value: unknown, minimum: bigint): bigint {
   throw new Error("Invalid proposal integer");
 }
 
+export function kernelJsonString(value: string): string {
+  return JSON.stringify(value).replace(
+    /[\u007f-\uffff]/g,
+    (character) =>
+      `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+}
+
 function canonicalProposal(value: unknown): string {
   if (value === null || typeof value === "boolean") return String(value);
-  if (typeof value === "string")
-    return JSON.stringify(value).replace(
-      /[\u007f-\uffff]/g,
-      (character) =>
-        `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
-    );
+  if (typeof value === "string") return kernelJsonString(value);
   if (typeof value === "bigint") return value.toString();
   if (typeof value === "number" && Number.isSafeInteger(value))
     return String(value);

@@ -741,6 +741,41 @@ it("reads only a scope-bound, versioned producer revision", async () => {
     createLocalOwnerTransport(pair2.client, "program").readRevision(),
   ).rejects.toThrow("Owner channel unavailable");
   expect(pair2.client.destroyed).toBe(true);
+
+  // The raw ID fits Console's configuration limit but its Python
+  // ensure_ascii=True JSON string exceeds the producer snapshot field limit.
+  const longScope = "\u2713".repeat(700);
+  const encoded = '"' + "\\u2713".repeat(700) + '"';
+  const marker = {
+    oversized: true,
+    index: 0,
+    bytes: encoded.length,
+    sha256: createHash("sha256").update(encoded).digest("hex"),
+  };
+  const pair3 = await pair((socket) =>
+    socket.write(response({ ...snapshot, scope: marker })),
+  );
+  const longChannel = createLocalOwnerTransport(pair3.client, longScope);
+  await expect(longChannel.readRevision()).resolves.toEqual({
+    revision: "-1",
+    status: "absent",
+  });
+  expect(pair3.client.destroyed).toBe(false);
+  longChannel.close();
+  for (const invalid of [
+    { bytes: marker.bytes - 1 },
+    { sha256: "b".repeat(64) },
+    { index: 1 },
+    { extra: true },
+  ]) {
+    const { client } = await pair((socket) =>
+      socket.write(response({ ...snapshot, scope: { ...marker, ...invalid } })),
+    );
+    await expect(
+      createLocalOwnerTransport(client, longScope).readRevision(),
+    ).rejects.toThrow("Owner channel unavailable: invalid");
+    expect(client.destroyed).toBe(true);
+  }
 });
 
 it("serializes commands and preserves uncertainty on EOF without retries", async () => {

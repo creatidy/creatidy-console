@@ -1,12 +1,16 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   closeSync,
   constants,
   fchmodSync,
   fstatSync,
+  fsyncSync,
+  ftruncateSync,
   lstatSync,
   mkdirSync,
   openSync,
+  readSync,
+  writeSync,
 } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -104,49 +108,120 @@ export function openState(directory: string, now: () => number = Date.now) {
     throw error;
   }
 
-  // Keep authority closed if SQLite cannot commit a detected revocation.
-  // A later clock observation must retry it even after wall time recovers.
-  let clockRevocationPending = false;
-  function sampleClock() {
-    const current = now();
-    if (!Number.isSafeInteger(current) || current < 0)
-      throw new Error("Invalid system clock");
-    return current;
-  }
-  function recordClock(current: number, minimum = current) {
-    if (current < minimum) clockRevocationPending = true;
+  type ClockObservation = { current: number; guard: string; revoke: boolean };
+  function observeClock(
+    minimum?: number,
+    rolledBack?: ClockObservation,
+  ): ClockObservation {
+    // Under SQLite's write fence, durably arm a nonce before taking a sample.
+    // Only the same transaction as the watermark/revocation may acknowledge it.
+    const guardFile = openSync(
+      join(directory, "clock-guard"),
+      constants.O_CREAT |
+        constants.O_RDWR |
+        constants.O_NOFOLLOW |
+        constants.O_NONBLOCK,
+      0o600,
+    );
+    const guard = randomUUID();
+    let interrupted: boolean;
+    try {
+      const info = fstatSync(guardFile);
+      if (
+        !info.isFile() ||
+        info.nlink !== 1 ||
+        (info.mode & 0o077) !== 0 ||
+        (process.getuid && info.uid !== process.getuid())
+      )
+        throw new Error("Invalid clock guard");
+      const previousGuard = Buffer.alloc(37);
+      const length = readSync(
+        guardFile,
+        previousGuard,
+        0,
+        previousGuard.length,
+        0,
+      );
+      const last = previousGuard.subarray(0, length).toString("latin1");
+      const acknowledged =
+        db
+          .prepare("SELECT value FROM settings WHERE name = 'clock_guard'")
+          .get()?.value ?? "";
+      interrupted =
+        last !== acknowledged &&
+        !(rolledBack && !rolledBack.revoke && last === rolledBack.guard);
+      if (writeSync(guardFile, guard, 0, "ascii") !== guard.length)
+        throw new Error("Cannot arm clock guard");
+      if (info.size > guard.length) ftruncateSync(guardFile, guard.length);
+      fsyncSync(guardFile);
+      if (info.size === 0) {
+        const parent = openSync(
+          directory,
+          constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+        );
+        try {
+          fsyncSync(parent);
+        } finally {
+          closeSync(parent);
+        }
+      }
+    } finally {
+      closeSync(guardFile);
+    }
+
+    let current: number;
+    try {
+      current = now();
+      if (!Number.isSafeInteger(current) || current < 0)
+        throw new Error("Invalid system clock");
+    } catch (error) {
+      // A known failure to obtain a sample is not a clock regression. The
+      // caller has not made any other writes yet; never clear prior evidence.
+      if (!interrupted && !rolledBack) {
+        db.prepare(
+          "INSERT OR REPLACE INTO settings (name, value) VALUES ('clock_guard', ?)",
+        ).run(guard);
+        db.exec("COMMIT");
+      }
+      throw error;
+    }
     const row = db
       .prepare("SELECT value FROM settings WHERE name = 'clock'")
       .get();
     const previous = row ? Number(row.value) : current;
     if (!Number.isSafeInteger(previous) || previous < 0)
       throw new Error("Invalid persisted clock");
-    if (current < previous) clockRevocationPending = true;
-    if (clockRevocationPending) {
+    const revoke =
+      interrupted ||
+      current < previous ||
+      current < (minimum ?? current) ||
+      (rolledBack !== undefined && current < rolledBack.current);
+    if (revoke) {
       db.prepare("DELETE FROM sessions").run();
       db.prepare("DELETE FROM settings WHERE name = 'bootstrap'").run();
     }
     db.prepare(
-      "INSERT OR REPLACE INTO settings (name, value) VALUES ('clock', ?)",
-    ).run(String(current));
+      "INSERT OR REPLACE INTO settings (name, value) VALUES ('clock', ?), ('clock_guard', ?)",
+    ).run(String(current), guard);
+    return { current, guard, revoke };
   }
-  function commitClock() {
-    db.exec("COMMIT");
-    clockRevocationPending = false;
-  }
-  function clock(minimum?: number) {
-    const current = sampleClock();
+  function clock() {
     db.exec("BEGIN IMMEDIATE");
     try {
-      recordClock(current, minimum);
-      commitClock();
-      return current;
+      const observed = observeClock();
+      db.exec("COMMIT");
+      return observed.current;
     } catch (error) {
       if (db.isTransaction) db.exec("ROLLBACK");
       throw error;
     }
   }
-  clock();
+  try {
+    clock();
+  } catch (error) {
+    db.close();
+    throw error;
+  }
 
   const store: SessionStore = {
     get(id, callback) {
@@ -289,37 +364,31 @@ export function openState(directory: string, now: () => number = Date.now) {
     );
   }
   function finalOwnerRefusal(
-    current: number,
-    at: number,
+    { current, revoke }: ClockObservation,
     id: string,
     generation: string,
     command: Command,
     fresh: boolean,
   ) {
-    recordClock(current, at);
-    if (clockRevocationPending) return "Invalid system clock";
+    if (revoke) return "Invalid system clock";
     if (!currentOwnerSession(id, generation, current))
       return "Session unavailable";
     if (fresh && approvalExpired(command, current))
       return "Approval deadline expired";
     return null;
   }
-  function rollbackOwnerTransaction(observed: number | undefined) {
+  function rollbackOwnerTransaction(observed?: ClockObservation) {
+    if (db.isTransaction) db.exec("ROLLBACK");
+    if (!observed || observed.revoke) return;
+    // This caller can account for its own interrupted healthy sample. A fresh
+    // sample below that observation or the committed watermark still revokes.
     try {
-      if (db.isTransaction) db.exec("ROLLBACK");
-    } catch (error) {
-      if (observed !== undefined) clockRevocationPending = true;
-      throw error;
-    }
-    if (observed === undefined || clockRevocationPending) return;
-    // Preserve the floor of the lost observation without overwriting a later
-    // durable observation. A fresh sample below either floor revokes authority.
-    try {
-      clock(observed);
+      db.exec("BEGIN IMMEDIATE");
+      observeClock(undefined, observed);
+      db.exec("COMMIT");
     } catch {
-      clockRevocationPending = true;
-      // The command already failed; subsequent authority checks must either
-      // commit revocation or fail closed, even if the wall clock has recovered.
+      // An unacknowledged guard will force revocation on the next use/start.
+      if (db.isTransaction) db.exec("ROLLBACK");
     }
   }
   const exactCommand = `command_id = ? AND scope = ? AND input = ?
@@ -353,7 +422,7 @@ export function openState(directory: string, now: () => number = Date.now) {
       throw new Error("Invalid owner command");
     const at = clock();
     db.exec("BEGIN IMMEDIATE");
-    let observed: number | undefined;
+    let observed: ClockObservation | undefined;
     try {
       if (!currentOwnerSession(id, generation, at))
         throw new Error("Session unavailable");
@@ -378,10 +447,9 @@ export function openState(directory: string, now: () => number = Date.now) {
         throw new Error("Owner command outcome unresolved");
       const frame = command.frame();
       if (frame.length > 4096) throw new Error("Owner command too large");
-      observed = sampleClock();
+      observed = observeClock(at);
       const refusal = finalOwnerRefusal(
         observed,
-        at,
         id,
         generation,
         command,
@@ -390,7 +458,7 @@ export function openState(directory: string, now: () => number = Date.now) {
       if (refusal) {
         // No journal changes yet. Keep this observation and any revocation
         // under the existing write fence even though the command was refused.
-        commitClock();
+        db.exec("COMMIT");
         observed = undefined;
         throw new Error(refusal);
       }
@@ -421,23 +489,22 @@ export function openState(directory: string, now: () => number = Date.now) {
     if (!attempt) throw new Error("Invalid owner command attempt");
     dispatchTokens.delete(token);
     let initiated = false;
-    let observed: number | undefined;
+    let observed: ClockObservation | undefined;
     try {
       const at = clock();
       db.exec("BEGIN IMMEDIATE");
       if (!currentOwnerSession(attempt.id, attempt.generation, at))
         throw new Error("Session unavailable");
-      observed = sampleClock();
+      observed = observeClock(at);
       const refusal = finalOwnerRefusal(
         observed,
-        at,
         attempt.id,
         attempt.generation,
         attempt.command,
         attempt.fresh,
       );
       if (refusal) {
-        commitClock();
+        db.exec("COMMIT");
         observed = undefined;
         throw new Error(refusal);
       }

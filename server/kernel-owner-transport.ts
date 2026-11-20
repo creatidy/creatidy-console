@@ -1,8 +1,10 @@
+import { createHash } from "node:crypto";
 import { Socket } from "node:net";
 import type { OwnerPairing } from "./kernel-owner-greeting.ts";
 import {
   assembleLocalOwnerApprovalScope,
   assembleLocalOwnerProposal,
+  kernelJsonString,
   MAX_PROPOSAL_BYTES,
   UnsupportedOwnerPayload,
   UnsupportedApprovalScope,
@@ -39,6 +41,18 @@ function record(value: unknown, keys: string[]): Record<string, unknown> {
 function payload(frame: Buffer): unknown {
   return parseOwnerJson(
     new TextDecoder("utf-8", { fatal: true }).decode(frame.subarray(4)),
+  );
+}
+
+function matchesSnapshotScope(value: unknown, scope: string) {
+  const encoded = kernelJsonString(scope);
+  if (encoded.length <= 4096) return value === scope;
+  const marker = record(value, ["oversized", "index", "bytes", "sha256"]);
+  return (
+    marker.oversized === true &&
+    marker.index === 0 &&
+    marker.bytes === encoded.length &&
+    marker.sha256 === createHash("sha256").update(encoded).digest("hex")
   );
 }
 
@@ -409,7 +423,7 @@ export function createLocalOwnerTransport(
           envelope.version !== 1 ||
           envelope.ok !== true ||
           snapshot.version !== 1 ||
-          snapshot.scope !== scope ||
+          !matchesSnapshotScope(snapshot.scope, scope) ||
           snapshot.page !== 0
         )
           throw new Error("Invalid owner snapshot");

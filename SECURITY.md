@@ -110,7 +110,10 @@ flexibility.
   authoritative session state across restart; separate browser sessions. A
   cookie alone is not authority after revocation. An observed backward
   wall-clock change invalidates sessions and setup authority, including after
-  restart; unobserved clock excursions cannot be detected by the application.
+  restart; unobserved clock excursions cannot be detected by the application. If
+  a clock check is interrupted before SQLite can record its result, Console
+  invalidates both authorities before reusing state. Keep `clock-guard` with the
+  SQLite state; it contains no credential or timestamp.
 - Cookies are HttpOnly, host-only and SameSite with explicit lifetime. Require
   Secure on HTTPS; loopback HTTP must be configured explicitly and tested
   separately, never used as a silent fallback for remote HTTPS. No permissive
