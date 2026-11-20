@@ -142,11 +142,13 @@ sets the exact browser origin; HTTPS requires `CONSOLE_TLS_KEY` and
 `CONSOLE_TLS_CERT` paths and never falls back to HTTP. `CONSOLE_BIND_HOST`
 defaults to `127.0.0.1`; HTTP binds only loopback. Explicit non-loopback HTTPS
 exposure still needs appropriate network, certificate and operational security.
-`CONSOLE_STATIC_DIR` optionally selects the built UI directory instead of
-`dist`. The application does not trust forwarded headers. Sessions have
-30-minute idle and 24-hour absolute limits; logout revokes the current browser
-session. An observed backward system-clock change revokes all sessions and
-outstanding setup authority, including after restart; sign in again or issue
+An inherited Kernel descriptor that enables approval or disposition requires a
+loopback listener and a loopback browser origin. Do not proxy that listener to a
+remote browser. `CONSOLE_STATIC_DIR` optionally selects the built UI directory
+instead of `dist`. The application does not trust forwarded headers. Sessions
+have 30-minute idle and 24-hour absolute limits; logout revokes the current
+browser session. An observed backward system-clock change revokes all sessions
+and outstanding setup authority, including after restart; sign in again or issue
 fresh setup authority. The application cannot detect a clock change that occurs
 entirely between observations. Keep the host clock reliable.
 
@@ -174,7 +176,14 @@ For a consistent backup stop the server and copy the complete owner-only state
 directory into protected storage. Restoring old state can resurrect revoked
 sessions. With the server stopped, run
 `node server/bootstrap.ts revoke-sessions` against the restored state before
-restarting; this deletes all sessions and rotates the cookie signing key.
+restarting; this deletes all sessions and rotates the cookie signing key. It
+does not reconcile the Kernel owner command journal. Preserve the latest Console
+journal and its exact inputs, especially all unresolved commands. An older or
+incomplete copy can lack a command that Kernel already received. If continuity
+with the latest journal cannot be established, start without the inherited
+Kernel owner descriptor (`CONSOLE_KERNEL_OWNER` unset, no descriptor argument).
+Keep that capability disabled until continuity has been verified; an empty
+restored journal or a fresh login is not evidence that commands were never sent.
 Backups contain password hashes and signing material and must be protected like
 credentials. A schema version newer than the application fails closed; do not
 modify SQLite by hand as an upgrade path.

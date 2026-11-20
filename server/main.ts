@@ -82,8 +82,15 @@ try {
   const origin = process.env.CONSOLE_ORIGIN ?? "http://127.0.0.1:4173";
   const url = new URL(origin);
   const bind = process.env.CONSOLE_BIND_HOST ?? "127.0.0.1";
-  if (url.protocol === "http:" && !["127.0.0.1", "::1"].includes(bind)) {
+  const loopback = ["127.0.0.1", "::1"].includes(bind);
+  if (url.protocol === "http:" && !loopback) {
     throw new Error("HTTP binding must be loopback");
+  }
+  if (
+    (kernelOwner?.approvalSupported || kernelOwner?.historyVersion) &&
+    (!loopback || !["127.0.0.1", "[::1]", "localhost"].includes(url.hostname))
+  ) {
+    throw new Error("Kernel owner approval and disposition require loopback");
   }
   const stateDirectory =
     process.env.CONSOLE_STATE_DIR ??

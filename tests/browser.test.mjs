@@ -336,6 +336,8 @@ it.skipIf(!existsSync(chrome))(
           action: "approve",
           review: "f".repeat(64),
         });
+        if (approvals === 1)
+          return route.fulfill({ status: 503, json: { kind: "not-sent" } });
         return route.fulfill({ json: { kind: "unknown" } });
       });
       await page.getByLabel("Requested producer expiry").fill("2000000000");
@@ -344,8 +346,12 @@ it.skipIf(!existsSync(chrome))(
       expect(await page.locator("pre img").count()).toBe(0);
       expect(await page.getByText(/Observed revision: -1/).count()).toBe(1);
       await page.getByRole("button", { name: "Confirm approval" }).click();
+      await page.getByText(/No approval was sent/).waitFor();
+      expect(await page.getByText(/Approval outcome.*unknown/).count()).toBe(0);
+      await page.getByRole("button", { name: "Review exact approval" }).click();
+      await page.getByRole("button", { name: "Confirm approval" }).click();
       await page.getByText(/Approval outcome is unknown/).waitFor();
-      expect(approvals).toBe(1);
+      expect(approvals).toBe(2);
       await page.route("**/api/kernel/owner-journal", (route) =>
         route.fulfill({
           json: {

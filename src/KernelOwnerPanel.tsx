@@ -504,10 +504,19 @@ function KernelApprovalPanel({
         return;
       }
       if (response.status === 503) {
-        const refusal = (await response.json()) as { error?: unknown };
+        const refusal = (await response.json()) as {
+          error?: unknown;
+          kind?: unknown;
+        };
         if (refusal.error === "Owner channel busy; no command sent") {
           setMessage(
             "The owner channel was busy; no approval was sent. Review again when it is available.",
+          );
+          return;
+        }
+        if (refusal.kind === "not-sent") {
+          setMessage(
+            "No approval was sent. Review again when the owner channel is available.",
           );
           return;
         }

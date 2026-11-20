@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+  cpSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
@@ -73,6 +74,87 @@ afterEach(() => {
 });
 
 describe("authenticated application", () => {
+  it.each(["before", "after"] as const)(
+    "distinguishes disconnect %s dispatch",
+    async (phase) => {
+      let confirming = false;
+      const sendCommand = vi.fn(async () => {
+        throw new Error("Disconnected during send");
+      });
+      const { app, dir } = await fixture(Date.now, {
+        scope: "program",
+        readProposal: async () => ({
+          text: "proposal",
+          digest: "a".repeat(64),
+        }),
+        readApprovalScope: async () => {
+          if (confirming && phase === "before")
+            throw new Error("Disconnected during scope read");
+          return {
+            text: "scope",
+            digest: "b".repeat(64),
+            proposalDigest: "a".repeat(64),
+          };
+        },
+        readRevision: async () => ({ revision: "-1", status: "absent" }),
+        canSend: () => true,
+        sendCommand,
+        close: () => {},
+      });
+      try {
+        expect(
+          (
+            await app.inject({
+              method: "POST",
+              url: "/api/bootstrap",
+              headers,
+              payload: { token, password },
+            })
+          ).statusCode,
+        ).toBe(200);
+        const login = await app.inject({
+          method: "POST",
+          url: "/api/login",
+          headers,
+          payload: { password },
+        });
+        const auth = {
+          ...headers,
+          cookie: String(login.headers["set-cookie"]).split(";")[0]!,
+        };
+        const review = await app.inject({
+          method: "POST",
+          url: "/api/kernel/owner-review",
+          headers: auth,
+          payload: { expires_at: String(Math.floor(Date.now() / 1000) + 120) },
+        });
+        expect(review.statusCode).toBe(200);
+        confirming = true;
+        const result = await app.inject({
+          method: "POST",
+          url: "/api/kernel/owner",
+          headers: auth,
+          payload: { action: "approve", review: review.json().review },
+        });
+        expect(result.statusCode).toBe(503);
+        expect(result.json()).toMatchObject({
+          kind: phase === "before" ? "not-sent" : "unknown",
+        });
+        expect(sendCommand).toHaveBeenCalledTimes(phase === "before" ? 0 : 1);
+        const db = new DatabaseSync(join(dir, "console.sqlite"));
+        try {
+          expect(
+            db.prepare("SELECT outcome FROM owner_commands").all(),
+          ).toEqual(phase === "before" ? [] : [{ outcome: "unknown" }]);
+        } finally {
+          db.close();
+        }
+      } finally {
+        await app.close();
+      }
+    },
+  );
+
   it.each([
     ["admission", "backward", 2, -1000],
     ["dispatch", "backward", 4, -1000],
@@ -2483,7 +2565,7 @@ describe("authenticated application", () => {
     state.db.close();
   });
 
-  it("issues local-only setup authority and revokes restored sessions", async () => {
+  it("issues local-only setup authority and restores without the owner descriptor when the journal is stale", async () => {
     const dir = mkdtempSync(join(tmpdir(), "console-cli-"));
     directories.push(dir);
     const env = { HOME: dir, CONSOLE_STATE_DIR: dir };
@@ -2525,6 +2607,20 @@ describe("authenticated application", () => {
     });
     const cookie = String(login.headers["set-cookie"]).split(";")[0]!;
     await app.close();
+    const backup = join(dir, "backup");
+    mkdirSync(backup, { mode: 0o700 });
+    for (const name of ["console.sqlite", "clock-guard"])
+      cpSync(join(dir, name), join(backup, name));
+    const newer = new DatabaseSync(join(dir, "console.sqlite"));
+    try {
+      newer
+        .prepare(
+          "INSERT INTO owner_commands (command_id, scope, input, outcome, created) VALUES (?, ?, ?, 'unknown', ?)",
+        )
+        .run("original", "program", Buffer.from("synthetic"), Date.now());
+    } finally {
+      newer.close();
+    }
     expect(
       spawnSync(process.execPath, ["server/bootstrap.ts", "issue"], {
         env,
@@ -2533,12 +2629,12 @@ describe("authenticated application", () => {
     ).not.toBe(0);
     expect(
       spawnSync(process.execPath, ["server/bootstrap.ts", "revoke-sessions"], {
-        env,
+        env: { ...env, CONSOLE_STATE_DIR: backup },
         encoding: "utf8",
       }).status,
     ).toBe(0);
     const restored = await createApp({
-      stateDirectory: dir,
+      stateDirectory: backup,
       staticDirectory: assets,
       origin,
     });
@@ -2551,6 +2647,30 @@ describe("authenticated application", () => {
         })
       ).statusCode,
     ).toBe(401);
+    const newLogin = await restored.inject({
+      method: "POST",
+      url: "/api/login",
+      headers,
+      payload: { password },
+    });
+    expect(newLogin.statusCode).toBe(200);
+    const auth = {
+      ...headers,
+      cookie: String(newLogin.headers["set-cookie"]).split(";")[0]!,
+    };
+    const journal = await restored.inject({
+      method: "GET",
+      url: "/api/kernel/owner-journal",
+      headers: auth,
+    });
+    expect(journal.json().commands).toEqual([]);
+    const denied = await restored.inject({
+      method: "POST",
+      url: "/api/kernel/owner",
+      headers: auth,
+      payload: { action: "approve", review: "f".repeat(64) },
+    });
+    expect(denied.statusCode).toBe(503);
     await restored.close();
   });
 

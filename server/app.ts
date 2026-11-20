@@ -857,6 +857,7 @@ export async function createApp(options: AppOptions) {
     )
       return reply.code(409).send({ error: "Review unavailable" });
     reviews.delete(input.review);
+    let initiated = false;
     try {
       const scope = await channel.readApprovalScope();
       const revision = await channel.readRevision();
@@ -907,9 +908,14 @@ export async function createApp(options: AppOptions) {
         command,
         review.expires,
       );
-      const pending = dispatchOwnerCommand(token, (prepared) =>
-        observeDispatch(command, channel.sendCommand!(prepared), channel),
-      );
+      const pending = dispatchOwnerCommand(token, (prepared) => {
+        initiated = true;
+        return observeDispatch(
+          command,
+          channel.sendCommand!(prepared),
+          channel,
+        );
+      });
       const result = await pending;
       if (!(await authenticated(request)))
         return reply.code(401).send({ error: "Login required" });
@@ -921,7 +927,11 @@ export async function createApp(options: AppOptions) {
     } catch {
       return reply
         .code(503)
-        .send({ error: "Command unavailable or outcome unknown" });
+        .send(
+          initiated
+            ? { kind: "unknown", error: "Approval outcome unknown" }
+            : { kind: "not-sent", error: "Approval was not sent" },
+        );
     }
   });
   app.post("/api/kernel/owner-replay", async (request, reply) => {
