@@ -325,6 +325,7 @@ export function openState(directory: string, now: () => number = Date.now) {
       generation: string;
       command: ReturnType<typeof prepareLocalOwnerCommand>;
       fresh: boolean;
+      reviewExpires?: number;
     }
   >();
   let ownerJournalUsable = true;
@@ -369,12 +370,15 @@ export function openState(directory: string, now: () => number = Date.now) {
     generation: string,
     command: Command,
     fresh: boolean,
+    reviewExpires?: number,
   ) {
     if (revoke) return "Invalid system clock";
     if (!currentOwnerSession(id, generation, current))
       return "Session unavailable";
     if (fresh && approvalExpired(command, current))
       return "Approval deadline expired";
+    if (fresh && reviewExpires !== undefined && reviewExpires <= current)
+      return "Review deadline expired";
     return null;
   }
   function rollbackOwnerTransaction(observed?: ClockObservation) {
@@ -417,9 +421,12 @@ export function openState(directory: string, now: () => number = Date.now) {
     id: string,
     generation: string,
     command: ReturnType<typeof prepareLocalOwnerCommand>,
+    reviewExpires?: number,
   ) {
     if (!isPreparedLocalOwnerCommand(command))
       throw new Error("Invalid owner command");
+    if (reviewExpires !== undefined && !Number.isSafeInteger(reviewExpires))
+      throw new Error("Invalid review deadline");
     const at = clock();
     db.exec("BEGIN IMMEDIATE");
     let observed: ClockObservation | undefined;
@@ -454,6 +461,7 @@ export function openState(directory: string, now: () => number = Date.now) {
         generation,
         command,
         true,
+        reviewExpires,
       );
       if (refusal) {
         // No journal changes yet. Keep this observation and any revocation
@@ -474,7 +482,13 @@ export function openState(directory: string, now: () => number = Date.now) {
       ).run(...commandKey(command), at);
       db.exec("COMMIT");
       const token = {};
-      dispatchTokens.set(token, { id, generation, command, fresh: true });
+      dispatchTokens.set(token, {
+        id,
+        generation,
+        command,
+        fresh: true,
+        ...(reviewExpires === undefined ? {} : { reviewExpires }),
+      });
       return token;
     } catch (error) {
       rollbackOwnerTransaction(observed);
@@ -502,6 +516,7 @@ export function openState(directory: string, now: () => number = Date.now) {
         attempt.generation,
         attempt.command,
         attempt.fresh,
+        attempt.reviewExpires,
       );
       if (refusal) {
         db.exec("COMMIT");

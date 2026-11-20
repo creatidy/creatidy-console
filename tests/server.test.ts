@@ -78,15 +78,19 @@ describe("authenticated application", () => {
     ["dispatch", "backward", 4, -1000],
     ["admission", "expiry then recovery", 2, 31 * 60_000],
     ["dispatch", "expiry then recovery", 4, 31 * 60_000],
+    ["admission", "confirmation expiry", 2, 60_000],
+    ["dispatch", "confirmation expiry", 4, 60_000],
   ] as const)(
-    "durably revokes owner authority at final %s with %s",
-    async (_phase, _scenario, finalSample, jump) => {
+    "refuses approval at final %s with %s",
+    async (_phase, scenario, finalSample, jump) => {
+      const confirmationOnly = scenario === "confirmation expiry";
       let time = Date.now();
       let samplesUntilJump = 0;
       let jumps = 0;
       const clock = () => {
         if (samplesUntilJump > 0 && --samplesUntilJump === 0) {
           jumps++;
+          if (confirmationOnly) return (time += jump);
           return time + jump;
         }
         return time;
@@ -142,14 +146,14 @@ describe("authenticated application", () => {
           db.prepare("INSERT INTO settings VALUES ('bootstrap', ?)").run(
             JSON.stringify({
               digest: createHash("sha256").update(token).digest("hex"),
-              expires: time + 60_000,
+              expires: time + 120_000,
             }),
           );
           const review = await app.inject({
             method: "POST",
             url: "/api/kernel/owner-review",
             headers: { ...headers, cookie },
-            payload: { expires_at: String(Math.floor(time / 1000) + 60) },
+            payload: { expires_at: String(Math.floor(time / 1000) + 120) },
           });
           expect(review.statusCode).toBe(200);
           const result = await app.inject({
@@ -165,12 +169,13 @@ describe("authenticated application", () => {
             db.prepare("SELECT command_id FROM owner_commands").all(),
           ).toEqual([]);
           time += 1000;
-          expect((await check(app)).statusCode).toBe(401);
-          expect(
-            db
-              .prepare("SELECT value FROM settings WHERE name = 'bootstrap'")
-              .get(),
-          ).toBeUndefined();
+          expect((await check(app)).statusCode).toBe(
+            confirmationOnly ? 200 : 401,
+          );
+          const setup = db
+            .prepare("SELECT value FROM settings WHERE name = 'bootstrap'")
+            .get();
+          expect(setup !== undefined).toBe(confirmationOnly);
         } finally {
           db.close();
         }
@@ -184,14 +189,15 @@ describe("authenticated application", () => {
         now: clock,
       });
       try {
-        expect((await check(restarted)).statusCode).toBe(401);
+        expect((await check(restarted)).statusCode).toBe(
+          confirmationOnly ? 200 : 401,
+        );
         const db = new DatabaseSync(join(dir, "console.sqlite"));
         try {
-          expect(
-            db
-              .prepare("SELECT value FROM settings WHERE name = 'bootstrap'")
-              .get(),
-          ).toBeUndefined();
+          const setup = db
+            .prepare("SELECT value FROM settings WHERE name = 'bootstrap'")
+            .get();
+          expect(setup !== undefined).toBe(confirmationOnly);
         } finally {
           db.close();
         }

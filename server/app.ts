@@ -905,6 +905,7 @@ export async function createApp(options: AppOptions) {
         request.session.sessionStoreId,
         request.session.sessionId,
         command,
+        review.expires,
       );
       const pending = dispatchOwnerCommand(token, (prepared) =>
         observeDispatch(command, channel.sendCommand!(prepared), channel),
