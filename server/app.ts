@@ -835,9 +835,10 @@ export async function createApp(options: AppOptions) {
       !channel.canSend ||
       !channel.sendCommand
     )
-      return reply
-        .code(503)
-        .send({ error: "Kernel owner capability unavailable" });
+      return reply.code(503).send({
+        kind: "not-sent",
+        error: "Kernel owner capability unavailable",
+      });
     const body = request.body;
     if (!body || typeof body !== "object" || Array.isArray(body))
       return reply.code(400).send({ error: "Invalid request" });

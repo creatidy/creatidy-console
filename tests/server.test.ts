@@ -59,8 +59,12 @@ async function fixture(
     ...(kernelOwner
       ? {
           kernelOwner: {
-            approvalSupported: !!kernelOwner.readApprovalScope,
             ...kernelOwner,
+            get approvalSupported() {
+              return (
+                kernelOwner.approvalSupported ?? !!kernelOwner.readApprovalScope
+              );
+            },
           },
         }
       : {}),
@@ -74,86 +78,91 @@ afterEach(() => {
 });
 
 describe("authenticated application", () => {
-  it.each(["before", "after"] as const)(
-    "distinguishes disconnect %s dispatch",
-    async (phase) => {
-      let confirming = false;
-      const sendCommand = vi.fn(async () => {
-        throw new Error("Disconnected during send");
-      });
-      const { app, dir } = await fixture(Date.now, {
-        scope: "program",
-        readProposal: async () => ({
-          text: "proposal",
-          digest: "a".repeat(64),
-        }),
-        readApprovalScope: async () => {
-          if (confirming && phase === "before")
-            throw new Error("Disconnected during scope read");
-          return {
-            text: "scope",
-            digest: "b".repeat(64),
-            proposalDigest: "a".repeat(64),
-          };
-        },
-        readRevision: async () => ({ revision: "-1", status: "absent" }),
-        canSend: () => true,
-        sendCommand,
-        close: () => {},
-      });
-      try {
-        expect(
-          (
-            await app.inject({
-              method: "POST",
-              url: "/api/bootstrap",
-              headers,
-              payload: { token, password },
-            })
-          ).statusCode,
-        ).toBe(200);
-        const login = await app.inject({
-          method: "POST",
-          url: "/api/login",
-          headers,
-          payload: { password },
-        });
-        const auth = {
-          ...headers,
-          cookie: String(login.headers["set-cookie"]).split(";")[0]!,
+  it.each([
+    "before confirmation",
+    "during revalidation",
+    "after initiation",
+  ] as const)("distinguishes disconnect %s", async (phase) => {
+    let confirming = false;
+    const sent = phase === "after initiation";
+    const sendCommand = vi.fn(async () => {
+      throw new Error("Disconnected during send");
+    });
+    const { app, dir } = await fixture(Date.now, {
+      scope: "program",
+      get approvalSupported() {
+        return !(confirming && phase === "before confirmation");
+      },
+      readProposal: async () => ({
+        text: "proposal",
+        digest: "a".repeat(64),
+      }),
+      readApprovalScope: async () => {
+        if (confirming && phase === "during revalidation")
+          throw new Error("Disconnected during scope read");
+        return {
+          text: "scope",
+          digest: "b".repeat(64),
+          proposalDigest: "a".repeat(64),
         };
-        const review = await app.inject({
-          method: "POST",
-          url: "/api/kernel/owner-review",
-          headers: auth,
-          payload: { expires_at: String(Math.floor(Date.now() / 1000) + 120) },
-        });
-        expect(review.statusCode).toBe(200);
-        confirming = true;
-        const result = await app.inject({
-          method: "POST",
-          url: "/api/kernel/owner",
-          headers: auth,
-          payload: { action: "approve", review: review.json().review },
-        });
-        expect(result.statusCode).toBe(503);
-        expect(result.json()).toMatchObject({
-          kind: phase === "before" ? "not-sent" : "unknown",
-        });
-        expect(sendCommand).toHaveBeenCalledTimes(phase === "before" ? 0 : 1);
-        const db = new DatabaseSync(join(dir, "console.sqlite"));
-        try {
-          expect(
-            db.prepare("SELECT outcome FROM owner_commands").all(),
-          ).toEqual(phase === "before" ? [] : [{ outcome: "unknown" }]);
-        } finally {
-          db.close();
-        }
+      },
+      readRevision: async () => ({ revision: "-1", status: "absent" }),
+      canSend: () => true,
+      sendCommand,
+      close: () => {},
+    });
+    try {
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/api/bootstrap",
+            headers,
+            payload: { token, password },
+          })
+        ).statusCode,
+      ).toBe(200);
+      const login = await app.inject({
+        method: "POST",
+        url: "/api/login",
+        headers,
+        payload: { password },
+      });
+      const auth = {
+        ...headers,
+        cookie: String(login.headers["set-cookie"]).split(";")[0]!,
+      };
+      const review = await app.inject({
+        method: "POST",
+        url: "/api/kernel/owner-review",
+        headers: auth,
+        payload: { expires_at: String(Math.floor(Date.now() / 1000) + 120) },
+      });
+      expect(review.statusCode).toBe(200);
+      confirming = true;
+      const result = await app.inject({
+        method: "POST",
+        url: "/api/kernel/owner",
+        headers: auth,
+        payload: { action: "approve", review: review.json().review },
+      });
+      expect(result.statusCode).toBe(503);
+      expect(result.json()).toMatchObject({
+        kind: sent ? "unknown" : "not-sent",
+      });
+      expect(sendCommand).toHaveBeenCalledTimes(sent ? 1 : 0);
+      const db = new DatabaseSync(join(dir, "console.sqlite"));
+      try {
+        expect(db.prepare("SELECT outcome FROM owner_commands").all()).toEqual(
+          sent ? [{ outcome: "unknown" }] : [],
+        );
       } finally {
-        await app.close();
+        db.close();
       }
-    },
-  );
+    } finally {
+      await app.close();
+    }
+  });
 
   it.each([
     ["admission", "backward", 2, -1000],
