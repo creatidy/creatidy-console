@@ -11,6 +11,7 @@ import { createLocalOwnerTransport as createTransport } from "../server/kernel-o
 import {
   MAX_PROPOSAL_BYTES,
   UnsupportedApprovalScope,
+  UnsupportedOwnerPayload,
 } from "../server/kernel-owner-proposal.ts";
 import {
   ownerIdentityDigest,
@@ -1096,6 +1097,7 @@ it("closes on changed chunks, oversized lengths and timeout without leaking data
     "Owner channel unavailable",
   );
   expect(changed.requests).toHaveLength(2);
+  expect(changed.client.destroyed).toBe(true);
   const malicious = await pair((socket) => {
     const header = Buffer.alloc(4);
     header.writeUInt32BE(0xffffffff);
@@ -1112,7 +1114,7 @@ it("closes on changed chunks, oversized lengths and timeout without leaking data
   expect(stalled.client.destroyed).toBe(true);
 });
 
-it("rejects truncated frames and oversized proposal aggregates", async () => {
+it("rejects truncated proposal frames", async () => {
   const truncated = await pair((socket) => {
     const header = Buffer.alloc(4);
     header.writeUInt32BE(100);
@@ -1121,23 +1123,172 @@ it("rejects truncated frames and oversized proposal aggregates", async () => {
   await expect(
     createLocalOwnerTransport(truncated.client, "program").readProposal(),
   ).rejects.toThrow("Owner channel unavailable");
-  const oversized = await pair((socket) => {
+  expect(truncated.client.destroyed).toBe(true);
+});
+
+it.each([
+  { data_base64: "" },
+  { complete: true },
+  { offset: 1 },
+  { digest: "invalid" },
+])("closes on malformed oversized proposal chunks (%j)", async (invalid) => {
+  const { client, requests } = await pair((socket) =>
     socket.write(
       response({
-        version: 1,
-        digest: "a".repeat(64),
-        offset: 0,
-        bytes: 4 * 1024 * 1024 + 1,
-        data_base64: "",
+        ...chunk(Buffer.alloc(8192, 120), 0, "a".repeat(64)),
+        bytes: MAX_PROPOSAL_BYTES + 1,
         complete: false,
+        ...invalid,
       }),
-    );
-  });
+    ),
+  );
   await expect(
-    createLocalOwnerTransport(oversized.client, "program").readProposal(),
-  ).rejects.toThrow("Owner channel unavailable");
-  expect(oversized.requests).toHaveLength(1);
+    createLocalOwnerTransport(client, "program").readProposal(),
+  ).rejects.toThrow("Owner channel unavailable: invalid");
+  expect(client.destroyed).toBe(true);
+  expect(requests).toHaveLength(1);
 });
+
+it.each([1, 2] as const)(
+  "keeps authorized v%s recovery after an oversized proposal",
+  async (historyVersion) => {
+    const raw = proposal(MAX_PROPOSAL_BYTES);
+    const digest = createHash("sha256").update(raw).digest("hex");
+    const pairing = { producer: "p", recipient: "r" };
+    const actorDigest = ownerIdentityDigest("owner");
+    const expiresAt = Math.floor(Date.now() / 1000) + 120;
+    const original = prepareLocalOwnerCommand(
+      "program",
+      {
+        action: "approve",
+        expected_revision: -1,
+        decision_id: "d",
+        expires_at: expiresAt,
+        proposal_digest: "a".repeat(64),
+        scope_digest: "b".repeat(64),
+      },
+      () => "00000000-0000-4000-8000-000000000001",
+      { ...pairing, actorDigest, historyVersion },
+    );
+    const action =
+      historyVersion === 1 ? "approval-disposition" : "approval-disposition-v2";
+    const { client, requests } = await pair((socket, request) => {
+      if (request.action === "proposal-chunk")
+        socket.write(response(chunk(raw, request.offset as number, digest)));
+      else if (request.action === action)
+        socket.write(
+          response(
+            historyVersion === 1
+              ? {
+                  version: 1,
+                  status: "historical-receipt",
+                  receipt: {
+                    version: 1,
+                    authority: "historical-only",
+                    status: "approved",
+                    decision_id: "d",
+                    spec_digest: "c".repeat(64),
+                    expires_at: expiresAt,
+                  },
+                }
+              : {
+                  version: 2,
+                  status: "terminal-refusal",
+                  receipt: null,
+                  reason: "stale-revision",
+                },
+          ),
+        );
+      else socket.end();
+    });
+    const channel = createTransport(
+      client,
+      "program",
+      1000,
+      [...operations, "approval-disposition", "approval-disposition-v2"],
+      pairing,
+    );
+    const { app, dir, headers } = await ownerApp({
+      scope: "program",
+      pairing,
+      readProposal: channel.readProposal,
+      readApprovalScope: channel.readApprovalScope,
+      readRevision: channel.readRevision,
+      canSend: channel.canSend,
+      sendCommand: channel.sendCommand,
+      canReadDisposition: channel.canReadDisposition,
+      readDisposition: channel.readDisposition,
+      close: channel.close,
+      get approvalSupported() {
+        return channel.approvalSupported;
+      },
+    });
+    const auth = await loginOwner(app, headers);
+    const state = openState(dir);
+    try {
+      state.db
+        .prepare(
+          "INSERT INTO owner_commands (command_id, scope, input, outcome, created, producer, recipient, actor_digest, history_version) VALUES (?, ?, ?, 'unknown', ?, ?, ?, ?, ?)",
+        )
+        .run(
+          original.commandId,
+          "program",
+          frame(original.request),
+          Date.now(),
+          pairing.producer,
+          pairing.recipient,
+          actorDigest,
+          historyVersion,
+        );
+    } finally {
+      state.db.close();
+    }
+    expect(channel.approvalSupported).toBe(true);
+    await expect(channel.readProposal()).rejects.toBeInstanceOf(
+      UnsupportedOwnerPayload,
+    );
+    expect(channel.approvalSupported).toBe(false);
+    expect(client.destroyed).toBe(false);
+    const snapshot = await app.inject({
+      method: "GET",
+      url: "/api/kernel/owner",
+      headers: auth,
+    });
+    expect(snapshot.json()).toEqual({ status: "unsupported", actions: [] });
+    const review = await app.inject({
+      method: "POST",
+      url: "/api/kernel/owner-review",
+      headers: auth,
+      payload: { expires_at: String(expiresAt) },
+    });
+    expect(review.statusCode).toBe(503);
+    const replay = {
+      method: "POST",
+      url: "/api/kernel/owner-replay",
+      payload: { commandId: original.commandId },
+    } as const;
+    expect((await app.inject({ ...replay, headers })).statusCode).toBe(401);
+    const receipt = await app.inject({ ...replay, headers: auth });
+    expect(receipt.statusCode, receipt.body).toBe(200);
+    expect(receipt.json()).toMatchObject(
+      historyVersion === 1
+        ? { kind: "historical-receipt-shape" }
+        : { kind: "terminal-refusal", reason: "stale-revision" },
+    );
+    expect(requests.map(({ action, offset }) => [action, offset])).toEqual([
+      ["proposal-chunk", 0],
+      ["proposal-chunk", 0],
+      [action, undefined],
+    ]);
+    expect(requests.at(-1)).toMatchObject({
+      ...pairing,
+      actor_digest: actorDigest,
+      program_digest: ownerIdentityDigest("program"),
+      original: original.request,
+    });
+    expect(client.destroyed).toBe(false);
+  },
+);
 
 async function ownerApp(
   kernelOwner: NonNullable<Parameters<typeof createApp>[0]["kernelOwner"]>,

@@ -273,12 +273,12 @@ export function createLocalOwnerTransport(
         throw new Error("Invalid proposal chunk");
       if (total > MAX_PROPOSAL_BYTES) {
         // Each chunk is a separate exchange. Stop after the validated first
-        // chunk, without accepting or requesting the rest of the scope.
+        // chunk, without accepting or requesting the rest of the payload.
         if (action === "approval-scope-chunk")
           throw new UnsupportedApprovalScope(
             "Approval scope exceeds size limit",
           );
-        throw new Error("Invalid proposal chunk");
+        throw new UnsupportedOwnerPayload("Proposal exceeds size limit");
       }
       frames.push(frame);
     } while (offset < total);
@@ -360,8 +360,8 @@ export function createLocalOwnerTransport(
       if (!supported("proposal-chunk"))
         throw new UnsupportedOwnerPayload("Unsupported owner operation");
       return operation(async () => {
-        const frames = await readChunks("proposal-chunk");
         try {
+          const frames = await readChunks("proposal-chunk");
           return assembleLocalOwnerProposal(frames, scope);
         } catch (error) {
           if (error instanceof UnsupportedOwnerPayload)
