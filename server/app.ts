@@ -609,8 +609,9 @@ export async function createApp(options: AppOptions) {
           !("action" in parsed) ||
           !("command_id" in parsed) ||
           parsed.command_id !== row.command_id ||
+          typeof parsed.action !== "string" ||
           !["approve", "start-managed", "stop", "reconcile"].includes(
-            String(parsed.action),
+            parsed.action,
           )
         )
           throw new Error("Invalid journal record");

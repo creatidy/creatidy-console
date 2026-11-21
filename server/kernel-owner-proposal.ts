@@ -624,12 +624,11 @@ export function assembleLocalOwnerApprovalScope(
     "trust",
   ]);
   if (
-    !["kilo-pull", "codex", "kilo-pull+codex"].includes(
-      String(profile.harness),
-    ) ||
+    typeof profile.harness !== "string" ||
+    !["kilo-pull", "codex", "kilo-pull+codex"].includes(profile.harness) ||
     profile.trust !== "trusted_development"
   )
-    throw new Error("Unsupported execution profile");
+    throw new Error("Invalid execution profile");
   for (const field of ["provider", "model", "effort"])
     if (profile[field] !== null) string(profile[field]);
   if (

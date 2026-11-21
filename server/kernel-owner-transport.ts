@@ -434,8 +434,9 @@ export function createLocalOwnerTransport(
         )
           return { revision: "-1", status: "absent" };
         if (
+          typeof snapshot.status !== "string" ||
           !["draft", "active", "paused", "completed", "cancelled"].includes(
-            String(snapshot.status),
+            snapshot.status,
           ) ||
           typeof snapshot.spec_digest !== "string" ||
           !/^[0-9a-f]{64}$/.test(snapshot.spec_digest) ||
@@ -448,7 +449,7 @@ export function createLocalOwnerTransport(
           throw new Error("Invalid owner revision");
         return {
           revision: revision.toString(),
-          status: String(snapshot.status),
+          status: snapshot.status,
           specDigest: snapshot.spec_digest,
         };
       });

@@ -697,33 +697,34 @@ it("does not infer replay safety from a lost approval reply", async () => {
   await expect(channel.replayCommand(command)).rejects.toThrow();
 });
 
+const snapshot = {
+  version: 1,
+  producer: "producer",
+  scope: "program",
+  program_revision: null,
+  spec_digest: null,
+  status: "absent",
+  work_units: [],
+  attempts: [],
+  reservations: [],
+  commands: [],
+  command_coverage: [0, 0, true],
+  claims: [],
+  correlations: [],
+  decisions: [],
+  usage_subtotals: [],
+  budget_configured: false,
+  budget_revoked: null,
+  authority: {},
+  missing_usage: "unknown",
+  route_identity: null,
+  physical_settlement: null,
+  page: 0,
+  coverage: {},
+  position: {},
+};
+
 it("reads only a scope-bound, versioned producer revision", async () => {
-  const snapshot = {
-    version: 1,
-    producer: "producer",
-    scope: "program",
-    program_revision: null,
-    spec_digest: null,
-    status: "absent",
-    work_units: [],
-    attempts: [],
-    reservations: [],
-    commands: [],
-    command_coverage: [0, 0, true],
-    claims: [],
-    correlations: [],
-    decisions: [],
-    usage_subtotals: [],
-    budget_configured: false,
-    budget_revoked: null,
-    authority: {},
-    missing_usage: "unknown",
-    route_identity: null,
-    physical_settlement: null,
-    page: 0,
-    coverage: {},
-    position: {},
-  };
   const pair1 = await pair((socket, request) => {
     expect(request).toEqual({ version: 1, action: "snapshot" });
     socket.write(response(snapshot));
@@ -777,6 +778,141 @@ it("reads only a scope-bound, versioned producer revision", async () => {
     expect(client.destroyed).toBe(true);
   }
 });
+
+const enumTypes = (valid: string) => [[valid], 1, true, null, {}];
+
+it.each(["draft", "active", "paused", "completed", "cancelled"])(
+  "accepts the literal %s revision status",
+  async (status) => {
+    const { client } = await pair((socket) =>
+      socket.write(
+        response({
+          ...snapshot,
+          status,
+          program_revision: 1,
+          spec_digest: "a".repeat(64),
+        }),
+      ),
+    );
+    const channel = createLocalOwnerTransport(client, "program");
+    expect(await channel.readRevision()).toEqual({
+      status,
+      revision: "1",
+      specDigest: "a".repeat(64),
+    });
+    channel.close();
+  },
+);
+
+it.each(["kilo-pull", "codex", "kilo-pull+codex"])(
+  "accepts the literal %s harness with nullable or string options",
+  async (harness) => {
+    const raw = approvalScope(
+      canonicalProfile
+        .replace('"codex"', JSON.stringify(harness))
+        .replace('"model":null', '"model":"synthetic"'),
+    );
+    const digest = createHash("sha256").update(raw).digest("hex");
+    const { client } = await pair((socket, request) =>
+      socket.write(response(chunk(raw, request.offset as number, digest))),
+    );
+    const channel = createLocalOwnerTransport(client, "program");
+    await expect(channel.readApprovalScope()).resolves.toMatchObject({
+      digest,
+    });
+    channel.close();
+  },
+);
+
+it.each([
+  ...enumTypes("active").map((value) => ({ field: "status", value })),
+  ...enumTypes("codex").map((value) => ({ field: "harness", value })),
+  { field: "trust", value: ["trusted_development"] },
+  ...["provider", "model", "effort"].map((field) => ({
+    field,
+    value: ["synthetic"],
+  })),
+])(
+  "rejects malformed approval evidence $field = $value before review or dispatch",
+  async ({ field, value }) => {
+    const isSnapshot = field === "status";
+    const profile = {
+      ...JSON.parse(canonicalProfile),
+      ...(isSnapshot ? {} : { [field]: value }),
+    };
+    // Hash the supplied profile bytes even for malformed values, so a separate
+    // reference mismatch cannot mask an invalid enum type.
+    const scope = approvalScope(JSON.stringify(profile), 10);
+    const raw = Buffer.from(
+      JSON.stringify(JSON.parse(scope.toString()).proposal),
+    );
+    const proposalDigest = createHash("sha256").update(raw).digest("hex");
+    const scopeDigest = createHash("sha256").update(scope).digest("hex");
+    const { client, requests } = await pair((socket, request) => {
+      if (request.action === "snapshot") {
+        socket.write(
+          response({
+            ...snapshot,
+            status: isSnapshot ? value : "active",
+            program_revision: 1,
+            spec_digest: "a".repeat(64),
+          }),
+        );
+      } else if (request.action === "proposal-chunk") {
+        socket.write(
+          response(chunk(raw, request.offset as number, proposalDigest)),
+        );
+      } else if (request.action === "approval-scope-chunk") {
+        socket.write(
+          response(chunk(scope, request.offset as number, scopeDigest)),
+        );
+      } else {
+        socket.end();
+      }
+    });
+    const channel = createLocalOwnerTransport(client, "program");
+    const { app, headers } = await ownerApp({
+      scope: "program",
+      readProposal: channel.readProposal,
+      readApprovalScope: channel.readApprovalScope,
+      readRevision: channel.readRevision,
+      canSend: channel.canSend,
+      sendCommand: channel.sendCommand,
+      close: channel.close,
+      get approvalSupported() {
+        return channel.approvalSupported;
+      },
+    });
+    const auth = await loginOwner(app, headers);
+    const review = await app.inject({
+      method: "POST",
+      url: "/api/kernel/owner-review",
+      headers: auth,
+      payload: { expires_at: String(Math.floor(Date.now() / 1000) + 120) },
+    });
+    expect(review.statusCode, review.body).toBe(503);
+    expect(review.json()).not.toHaveProperty("review");
+    expect(client.destroyed).toBe(true);
+    const command = await app.inject({
+      method: "POST",
+      url: "/api/kernel/owner",
+      headers: auth,
+      payload: { action: "approve", review: "0".repeat(64) },
+    });
+    expect(command.json()).toMatchObject({ kind: "not-sent" });
+    const journal = await app.inject({
+      method: "GET",
+      url: "/api/kernel/owner-journal",
+      headers: auth,
+    });
+    expect(journal.json().commands).toEqual([]);
+    expect(requests.map(({ action }) => action)).toEqual([
+      "proposal-chunk",
+      "approval-scope-chunk",
+      ...(isSnapshot ? ["snapshot"] : []),
+    ]);
+  },
+);
 
 it("serializes commands and preserves uncertainty on EOF without retries", async () => {
   const { client, requests } = await pair((socket) => socket.end());
@@ -973,24 +1109,11 @@ it("rejects truncated frames and oversized proposal aggregates", async () => {
   expect(oversized.requests).toHaveLength(1);
 });
 
-it("serves verified socket proposals only to current sessions and coalesces concurrent reads", async () => {
-  const raw = proposal(9000);
-  const digest = createHash("sha256").update(raw).digest("hex");
-  let release: (() => void) | undefined;
-  let started!: () => void;
-  const waiting = new Promise<void>((resolve) => {
-    started = resolve;
-  });
-  const { client, requests } = await pair((socket, request) => {
-    const send = () =>
-      socket.write(response(chunk(raw, request.offset as number, digest)));
-    if (requests.length === 1) {
-      release = send;
-      started();
-    } else send();
-  });
-  const channel = createLocalOwnerTransport(client, "program");
+async function ownerApp(
+  kernelOwner: NonNullable<Parameters<typeof createApp>[0]["kernelOwner"]>,
+) {
   const dir = await mkdtemp(join(tmpdir(), "console-owner-app-"));
+  cleanups.push(() => rm(dir, { recursive: true, force: true }));
   const assets = join(dir, "assets");
   mkdirSync(assets);
   const state = openState(dir);
@@ -1009,81 +1132,159 @@ it("serves verified socket proposals only to current sessions and coalesces conc
     stateDirectory: dir,
     staticDirectory: assets,
     origin,
-    kernelOwner: {
-      scope: "program",
-      readProposal: channel.readProposal,
-      close: channel.close,
-    },
+    kernelOwner,
   });
+  cleanups.unshift(() => app.close());
+  return { app, dir, headers };
+}
+
+async function loginOwner(
+  app: Awaited<ReturnType<typeof createApp>>,
+  headers: { host: string; origin: string },
+) {
+  const setup = await app.inject({
+    method: "POST",
+    url: "/api/bootstrap",
+    headers,
+    payload: { token: "synthetic-token", password: "synthetic-password" },
+  });
+  expect(setup.statusCode).toBe(200);
+  const login = await app.inject({
+    method: "POST",
+    url: "/api/login",
+    headers,
+    payload: { password: "synthetic-password" },
+  });
+  expect(login.statusCode).toBe(200);
+  const cookie = String(login.headers["set-cookie"]).split(";")[0]!;
+  return { ...headers, cookie };
+}
+
+it("requires a literal action when reading stored command history", async () => {
+  const { app, dir, headers } = await ownerApp({
+    scope: "program",
+    readProposal: async () => {
+      throw new Error("No producer");
+    },
+    close: () => {},
+  });
+  const auth = await loginOwner(app, headers);
+  const state = openState(dir);
   try {
-    expect(
-      (await app.inject({ method: "GET", url: "/api/kernel/owner", headers }))
-        .statusCode,
-    ).toBe(401);
-    expect(requests).toHaveLength(0);
-    await app.inject({
-      method: "POST",
-      url: "/api/bootstrap",
-      headers,
-      payload: { token: "synthetic-token", password: "synthetic-password" },
-    });
-    const login = await app.inject({
-      method: "POST",
-      url: "/api/login",
-      headers,
-      payload: { password: "synthetic-password" },
-    });
-    const cookie = String(login.headers["set-cookie"]).split(";")[0]!;
-    const auth = { ...headers, cookie };
-    expect(
-      (
-        await app.inject({
-          method: "GET",
-          url: "/api/kernel/owner",
-          headers: { ...auth, origin: "https://attacker.example" },
-        })
-      ).statusCode,
-    ).toBe(403);
-    const first = app.inject({
-      method: "GET",
-      url: "/api/kernel/owner",
-      headers: auth,
-    });
-    await waiting;
-    const second = app.inject({
-      method: "GET",
-      url: "/api/kernel/owner",
-      headers: auth,
-    });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    release!();
-    const [a, b] = await Promise.all([first, second]);
-    expect(a.json()).toEqual({
-      status: "connected",
-      actions: [],
-      scope: "program",
-      digest,
-      text: raw.toString(),
-    });
-    expect(b.json()).toEqual(a.json());
-    expect(a.headers["cache-control"]).toBe("no-store");
-    expect(requests).toHaveLength(2);
-    expect(
-      requests.every((request) => request.action === "proposal-chunk"),
-    ).toBe(true);
-    expect(
-      (
-        await app.inject({
-          method: "POST",
-          url: "/api/kernel/owner",
-          headers: auth,
-          payload: { action: "approve" },
-        })
-      ).statusCode,
-    ).toBe(503);
-    expect(requests).toHaveLength(2);
+    const input = {
+      version: 1,
+      command_id: "synthetic-original",
+      action: "start-managed",
+      expected_revision: 1,
+    };
+    state.db
+      .prepare(
+        "INSERT INTO owner_commands (command_id, scope, input, outcome, created) VALUES (?, ?, ?, 'unknown', ?)",
+      )
+      .run(input.command_id, "program", frame(input), Date.now());
+    const readHistory = () =>
+      app.inject({
+        method: "GET",
+        url: "/api/kernel/owner-journal",
+        headers: auth,
+      });
+    const original = await readHistory();
+    expect(original.statusCode).toBe(200);
+    expect(original.json().commands).toMatchObject([
+      {
+        commandId: input.command_id,
+        action: "start-managed",
+        outcome: "unknown",
+        canRecover: false,
+      },
+    ]);
+    const replace = state.db.prepare(
+      "UPDATE owner_commands SET input = ? WHERE command_id = ?",
+    );
+    for (const action of enumTypes(input.action)) {
+      replace.run(frame({ ...input, action }), input.command_id);
+      const invalid = await readHistory();
+      expect(invalid.statusCode).toBe(503);
+      expect(invalid.json()).toEqual({ error: "Command history unavailable" });
+    }
   } finally {
-    await app.close();
-    await rm(dir, { recursive: true, force: true });
+    state.db.close();
   }
+});
+
+it("serves verified socket proposals only to current sessions and coalesces concurrent reads", async () => {
+  const raw = proposal(9000);
+  const digest = createHash("sha256").update(raw).digest("hex");
+  let release: (() => void) | undefined;
+  let started!: () => void;
+  const waiting = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  const { client, requests } = await pair((socket, request) => {
+    const send = () =>
+      socket.write(response(chunk(raw, request.offset as number, digest)));
+    if (requests.length === 1) {
+      release = send;
+      started();
+    } else send();
+  });
+  const channel = createLocalOwnerTransport(client, "program");
+  const { app, headers } = await ownerApp({
+    scope: "program",
+    readProposal: channel.readProposal,
+    close: channel.close,
+  });
+  expect(
+    (await app.inject({ method: "GET", url: "/api/kernel/owner", headers }))
+      .statusCode,
+  ).toBe(401);
+  expect(requests).toHaveLength(0);
+  const auth = await loginOwner(app, headers);
+  expect(
+    (
+      await app.inject({
+        method: "GET",
+        url: "/api/kernel/owner",
+        headers: { ...auth, origin: "https://attacker.example" },
+      })
+    ).statusCode,
+  ).toBe(403);
+  const first = app.inject({
+    method: "GET",
+    url: "/api/kernel/owner",
+    headers: auth,
+  });
+  await waiting;
+  const second = app.inject({
+    method: "GET",
+    url: "/api/kernel/owner",
+    headers: auth,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  release!();
+  const [a, b] = await Promise.all([first, second]);
+  expect(a.json()).toEqual({
+    status: "connected",
+    actions: [],
+    scope: "program",
+    digest,
+    text: raw.toString(),
+  });
+  expect(b.json()).toEqual(a.json());
+  expect(a.headers["cache-control"]).toBe("no-store");
+  expect(requests).toHaveLength(2);
+  expect(requests.every((request) => request.action === "proposal-chunk")).toBe(
+    true,
+  );
+  expect(
+    (
+      await app.inject({
+        method: "POST",
+        url: "/api/kernel/owner",
+        headers: auth,
+        payload: { action: "approve" },
+      })
+    ).statusCode,
+  ).toBe(503);
+  expect(requests).toHaveLength(2);
 });
