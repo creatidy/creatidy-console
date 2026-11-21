@@ -445,37 +445,19 @@ it.each([
     `\n ${canonicalProfile.replaceAll(",", ", ")}\n`,
     9000,
     2,
-    false,
   ],
   [
     "profile key order",
     '{"trust":"trusted_development","effort":null,"harness":"codex","model":null,"provider":null}',
     9000,
     2,
-    false,
   ],
-  [
-    "oversized approval scope",
-    canonicalProfile,
-    MAX_PROPOSAL_BYTES - 1800,
-    1,
-    false,
-  ],
-  ["zero-valued work and project budgets", canonicalProfile, 9000, 2, true],
+  ["oversized approval scope", canonicalProfile, MAX_PROPOSAL_BYTES - 1800, 1],
 ] as const)(
-  "keeps producer reads usable with %s",
-  async (_name, profileBytes, objectiveSize, scopeReads, zeroBudget) => {
+  "keeps producer reads usable after unsupported %s",
+  async (_name, profileBytes, objectiveSize, scopeReads) => {
     expect(JSON.parse(profileBytes)).toEqual(JSON.parse(canonicalProfile));
-    const scope = approvalScope(
-      profileBytes,
-      objectiveSize,
-      zeroBudget
-        ? {
-            work_budget: { max_active: 0, retained_bytes: 0 },
-            project_budget: { max_active: 0, retained_bytes: 0 },
-          }
-        : {},
-    );
+    const scope = approvalScope(profileBytes, objectiveSize);
     const raw = proposal(10);
     expect(scope.length > MAX_PROPOSAL_BYTES).toBe(scopeReads === 1);
     expect(proposal(objectiveSize).length).toBeLessThan(MAX_PROPOSAL_BYTES);
@@ -536,20 +518,13 @@ it.each([
       pairing,
     );
     expect(channel.approvalSupported).toBe(true);
-    if (zeroBudget) {
-      await expect(channel.readApprovalScope()).resolves.toMatchObject({
-        digest: scopeDigest,
-        text: scope.toString(),
-      });
-    } else {
-      await expect(channel.readApprovalScope()).rejects.toBeInstanceOf(
-        UnsupportedApprovalScope,
-      );
-      await expect(channel.sendCommand(command)).rejects.toThrow(
-        "Unsupported owner operation",
-      );
-    }
-    expect(channel.approvalSupported).toBe(zeroBudget);
+    await expect(channel.readApprovalScope()).rejects.toBeInstanceOf(
+      UnsupportedApprovalScope,
+    );
+    expect(channel.approvalSupported).toBe(false);
+    await expect(channel.sendCommand(command)).rejects.toThrow(
+      "Unsupported owner operation",
+    );
     expect((await channel.readProposal()).text).toBe(raw.toString());
     expect((await channel.readProposal()).text).toBe(raw.toString());
     await expect(channel.readDisposition(command)).resolves.toMatchObject({
@@ -570,7 +545,7 @@ it.each([
 it.each(
   ["work_budget", "project_budget"].flatMap((budget) =>
     ["max_active", "retained_bytes"].flatMap((field) =>
-      [-1, "0", false].map((value) => ({ budget, field, value })),
+      [0, -1, "1", true].map((value) => ({ budget, field, value })),
     ),
   ),
 )(

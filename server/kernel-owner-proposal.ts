@@ -565,9 +565,9 @@ export function assembleLocalOwnerApprovalScope(
       throw new Error("Unsupported budget");
     const counts = record(value.counts, categories);
     for (const category of categories) integer(counts[category], 0n);
-    // Kernel permits zero capacity; validating a scope does not grant work.
-    integer(value.max_active, 0n);
-    integer(value.retained_bytes, 0n);
+    // Kernel's WorkBudgetPolicy requires both capacity limits to be positive.
+    integer(value.max_active, 1n);
+    integer(value.retained_bytes, 1n);
     const seen = new Set<string>();
     for (const resource of value.resources) {
       const r = record(resource, ["metric", "unit", "quantity"]);
