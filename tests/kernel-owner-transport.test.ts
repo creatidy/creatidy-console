@@ -338,7 +338,13 @@ it("reads fragmented chunks over 1 MiB sequentially without sending before a cal
 const canonicalProfile =
   '{"effort":null,"harness":"codex","model":null,"provider":null,"trust":"trusted_development"}';
 
-function approvalScope(profileBytes: string, objectiveSize = 9000) {
+function approvalScope(
+  profileBytes: string,
+  objectiveSize = 9000,
+  limits: Partial<
+    Record<"work_budget" | "project_budget", Record<string, unknown>>
+  > = {},
+) {
   const reference = { policy_id: "p", version: "v", digest: "d" };
   const budget = {
     version: 1,
@@ -381,8 +387,8 @@ function approvalScope(profileBytes: string, objectiveSize = 9000) {
       evidence_producers: ["producer"],
       freshness_seconds: 1,
       repair_baseline_reference: null,
-      work_budget: budget,
-      project_budget: budget,
+      work_budget: { ...budget, ...limits.work_budget },
+      project_budget: { ...budget, ...limits.project_budget },
       project_id: "project",
     },
     verification: {
@@ -439,19 +445,37 @@ it.each([
     `\n ${canonicalProfile.replaceAll(",", ", ")}\n`,
     9000,
     2,
+    false,
   ],
   [
     "profile key order",
     '{"trust":"trusted_development","effort":null,"harness":"codex","model":null,"provider":null}',
     9000,
     2,
+    false,
   ],
-  ["oversized approval scope", canonicalProfile, MAX_PROPOSAL_BYTES - 1800, 1],
+  [
+    "oversized approval scope",
+    canonicalProfile,
+    MAX_PROPOSAL_BYTES - 1800,
+    1,
+    false,
+  ],
+  ["zero-valued work and project budgets", canonicalProfile, 9000, 2, true],
 ] as const)(
-  "keeps producer reads usable after unsupported %s",
-  async (_name, profileBytes, objectiveSize, scopeReads) => {
+  "keeps producer reads usable with %s",
+  async (_name, profileBytes, objectiveSize, scopeReads, zeroBudget) => {
     expect(JSON.parse(profileBytes)).toEqual(JSON.parse(canonicalProfile));
-    const scope = approvalScope(profileBytes, objectiveSize);
+    const scope = approvalScope(
+      profileBytes,
+      objectiveSize,
+      zeroBudget
+        ? {
+            work_budget: { max_active: 0, retained_bytes: 0 },
+            project_budget: { max_active: 0, retained_bytes: 0 },
+          }
+        : {},
+    );
     const raw = proposal(10);
     expect(scope.length > MAX_PROPOSAL_BYTES).toBe(scopeReads === 1);
     expect(proposal(objectiveSize).length).toBeLessThan(MAX_PROPOSAL_BYTES);
@@ -512,13 +536,20 @@ it.each([
       pairing,
     );
     expect(channel.approvalSupported).toBe(true);
-    await expect(channel.readApprovalScope()).rejects.toBeInstanceOf(
-      UnsupportedApprovalScope,
-    );
-    expect(channel.approvalSupported).toBe(false);
-    await expect(channel.sendCommand(command)).rejects.toThrow(
-      "Unsupported owner operation",
-    );
+    if (zeroBudget) {
+      await expect(channel.readApprovalScope()).resolves.toMatchObject({
+        digest: scopeDigest,
+        text: scope.toString(),
+      });
+    } else {
+      await expect(channel.readApprovalScope()).rejects.toBeInstanceOf(
+        UnsupportedApprovalScope,
+      );
+      await expect(channel.sendCommand(command)).rejects.toThrow(
+        "Unsupported owner operation",
+      );
+    }
+    expect(channel.approvalSupported).toBe(zeroBudget);
     expect((await channel.readProposal()).text).toBe(raw.toString());
     expect((await channel.readProposal()).text).toBe(raw.toString());
     await expect(channel.readDisposition(command)).resolves.toMatchObject({
@@ -533,6 +564,30 @@ it.each([
     ]);
     expect(client.destroyed).toBe(false);
     channel.close();
+  },
+);
+
+it.each(
+  ["work_budget", "project_budget"].flatMap((budget) =>
+    ["max_active", "retained_bytes"].flatMap((field) =>
+      [-1, "0", false].map((value) => ({ budget, field, value })),
+    ),
+  ),
+)(
+  "rejects $budget.$field = $value rather than coercing or accepting it",
+  async ({ budget, field, value }) => {
+    const raw = approvalScope(canonicalProfile, 10, {
+      [budget]: { [field]: value },
+    });
+    const digest = createHash("sha256").update(raw).digest("hex");
+    const { client } = await pair((socket, request) =>
+      socket.write(response(chunk(raw, request.offset as number, digest))),
+    );
+    const channel = createLocalOwnerTransport(client, "program");
+    await expect(channel.readApprovalScope()).rejects.toThrow(
+      "Owner channel unavailable: invalid",
+    );
+    expect(client.destroyed).toBe(true);
   },
 );
 
