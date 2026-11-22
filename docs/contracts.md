@@ -277,11 +277,11 @@ depends on the supervisor and protected descriptor inheritance. Channel closure
 does not itself cancel work or prove settlement. See the
 [merged producer contract](https://forgejo.creatidy.com/Creatidy/creatidy-kernel/src/commit/407f1be3195d3c698ac1f5e7c57e65e215d0c88a/docs/architecture/contracts.md).
 This delivery is not installed Console conformance or live integration evidence.
-The optional Linux supervisor-launched Console backend validates and retains the
-descriptor and greeting for authenticated proposal inspection. The default has
-no capability; submissions remain refused. Labels do not verify producer
-identity. A valid-looking receipt shape is not evidence of an authenticated
-producer or an observed effect.
+The earlier Linux supervisor-launched Console delivery validated and retained
+the descriptor and greeting for authenticated proposal inspection but did not
+enable submissions. The default still has no capability. Labels do not verify
+producer identity. A valid-looking receipt shape is not evidence of an
+authenticated producer or an observed effect.
 
 Kernel
 [PR #130](https://forgejo.creatidy.com/Creatidy/creatidy-kernel/pulls/130) was
@@ -294,11 +294,12 @@ not truncated or approvable. The original text is untrusted data; a matching
 digest alone grants no authority. Approval receipts are historical and may have
 an effective expiry earlier than requested. These fixture-level checks neither
 prove the identity or version of a running producer nor enable live commands.
-The local transport has synthetic Unix-socket tests. The application exposes
-only the complete verified original text, scope and digest through its
-authenticated, no-store endpoint; concurrent reads share an in-flight request.
-Disconnect, refusal, malformed data and oversize responses fail closed. No
-actual producer connection or installed provenance has been established.
+The local transport has synthetic Unix-socket tests. The initial application
+delivery exposed the complete verified original text, scope and digest through
+its authenticated, no-store endpoint; concurrent reads shared an in-flight
+request. Disconnect, refusal, malformed data and oversize responses fail closed.
+That earlier delivery did not establish an actual producer connection or
+installed provenance.
 
 The reviewed proposal does not itself contain the full host-bound owner policy,
 authority envelope, budgets or execution and verification context that Kernel
@@ -309,6 +310,54 @@ policy is unknown in this read-only view; it is not an approval. Real mutation
 requires separate owner authorization and its applicable security and evidence
 gates. The requested expiry is an upper bound, not a guaranteed effective
 deadline.
+
+Kernel
+[PR #132](https://forgejo.creatidy.com/Creatidy/creatidy-kernel/pulls/132) adds
+a separately digest-bound approval scope containing the producer's policy,
+verification and execution inputs as well as the proposal. Console can inspect a
+supported version-1 scope as complete untrusted text after checking the scope
+and embedded proposal digests; unsupported or oversized approval scope data does
+not disable the other supported reads. The execution profile reference is
+accepted only when the profile has a canonically reproducible encoding, because
+the producer may hash other original encodings that its scope does not expose.
+An otherwise valid scope whose reference does not match the canonical candidate
+cannot authorize approval; ordinary proposal and supported disposition reads
+remain available. Invalid bindings or verified integrity failures still close
+the channel. The host's label does not prove producer identity, and the
+displayed scope is not itself a grant.
+
+The development admission path accepts only a reviewed approval with exact
+scope, proposal, revision and requested expiry. It records the original input,
+producer/recipient pairing and an unknown outcome before a possible send. It
+preserves unresolved records across restart and bounds storage by aging out
+resolved records. Unpaired legacy unknowns continue to block their scope and are
+never attributed to a new connection. In one Console state directory the
+supervisor uses a stable producer label for each journal lineage; changing
+recipients does not bypass an unresolved command for that producer and Program.
+The optional supervisor-launched backend exposes this scoped approval path only
+with the inherited owner capability and a validated v2 operation declaration
+containing approval support; a validated v1 greeting remains proposal-only. A v2
+descriptor without a proposal or approval binding is not probed for unsupported
+operations. Qualified proposal v2/v3 and qualified fields in a v1 approval scope
+are not supported by Console; a recognized unsupported payload grants no approve
+action.
+
+The
+[Kernel recovery contract at `7910acde`](https://forgejo.creatidy.com/Creatidy/creatidy-kernel/src/commit/7910acde72541ee111911486b9579bc4bcd711f7/docs/architecture/contracts.md#approval-disposition-recovery)
+allows explicit read-only recovery even on history-only replacement descriptors.
+Only opted-in original commands retain the actor assertion from the exact
+reviewed approval scope. The replacement must declare the read, match the
+original producer, recipient and Program, and verify the original Program and
+actor assertions and immutable request. Only the trusted supervisor establishes
+custody of the authoritative original journal and attests it by opting in;
+labels, paths and snapshot epochs do not establish continuity. A historical
+receipt is not a current grant or physical settlement. An exact v2
+stale-revision refusal releases the uncertainty block without permitting a
+retry; intent without receipt, unknown or failed lookup never does. Without
+opted-in recovery, the existing exact receipt check remains restricted to the
+original channel after it reported an existing intent. Validated outcomes that
+cannot be persisted are retained for local persistence retry while Console is
+running. Synthetic evidence does not establish deployment or live authority.
 
 Each real command additionally requires idempotency/input/reconciliation, audit
 receipt and negative tests for denial, expiration, stale subject, multiple

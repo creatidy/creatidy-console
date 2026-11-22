@@ -45,16 +45,25 @@ browser-facing boundary for Kernel owner commands. A Console session does not
 grant Kernel authority: a trusted host must independently provision the correct
 Kernel-authorized capability. Kernel #124 delivered a Linux trusted-supervisor
 launch contract. The optional Linux supervisor-launched receiver retains the
-validated descriptor for fixed, bounded proposal reads only; default startup has
-no capability. The browser receives the verified original proposal text, scope
-and digest only after Console session checks before and after the read. Labels
-check pairing, not producer identity; descriptor custody and the trusted
-supervisor are security assumptions. The producer's declarations are not the
-effective host policy, which remains unknown. No proposal data is cached by the
-adapter or persisted in browser storage. Synthetic tests do not establish
-installed consumer conformance. All owner commands remain unavailable. No Kernel
-HTTP server, arbitrary dispatcher, browser-selected principal, active SQLite
-peer or new authentication system follows from this decision.
+validated descriptor for fixed, bounded reads and reviewed approve delivery;
+default startup has no capability. The browser receives the verified original
+proposal text, scope and digest only after Console session checks before and
+after the read. Labels check pairing, not producer identity; descriptor custody
+and the trusted supervisor are security assumptions. The producer's declarations
+are not the effective host policy, which remains unknown. No proposal data is
+cached by the adapter or persisted in browser storage. Approval uses separately
+provisioned authority and exact reviewed identity. The local journal retains
+historical receipts, proven stale-revision refusals or unknown outcomes. A
+receipt is not proof of current authority or effect. Replay is limited to the
+original channel; recovery on a replacement is read-only and requires the
+supervisor's authoritative-journal continuity attestation and Kernel's exact
+original request and identity checks. Unpaired legacy intents remain unknown.
+Other owner actions are unsupported. No real live mutation is authorized without
+separate owner approval. Synthetic tests do not establish installed consumer
+conformance or live integration; #11 installation and #12 conformance remain
+separate. No Kernel HTTP server, arbitrary dispatcher, browser-selected
+principal, active SQLite peer or new authentication system follows from this
+decision.
 
 While the proposal is visible, Console checks the existing session without
 extending its idle or absolute expiry. The view hides the proposal while a check
@@ -101,7 +110,10 @@ flexibility.
   authoritative session state across restart; separate browser sessions. A
   cookie alone is not authority after revocation. An observed backward
   wall-clock change invalidates sessions and setup authority, including after
-  restart; unobserved clock excursions cannot be detected by the application.
+  restart; unobserved clock excursions cannot be detected by the application. If
+  a clock check is interrupted before SQLite can record its result, Console
+  invalidates both authorities before reusing state. Keep `clock-guard` with the
+  SQLite state; it contains no credential or timestamp.
 - Cookies are HttpOnly, host-only and SameSite with explicit lifetime. Require
   Secure on HTTPS; loopback HTTP must be configured explicitly and tested
   separately, never used as a silent fallback for remote HTTPS. No permissive

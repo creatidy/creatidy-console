@@ -154,6 +154,94 @@ it.skipIf(!existsSync(chrome))(
           .getByRole("button", { name: /approve|stop|reconcile|start/i })
           .count(),
       ).toBe(0);
+      await page.route("**/api/kernel/owner-journal", (route) =>
+        route.fulfill({
+          json: {
+            status: "available",
+            commands: [
+              {
+                commandId: "retained-1",
+                scope: "scope-a",
+                action: "approve",
+                outcome: "unknown",
+                approval: {
+                  revision: "-1",
+                  proposalDigest: "a".repeat(64),
+                  scopeDigest: "b".repeat(64),
+                  decisionId: '<img src=x onerror="window.journalInjected=1">',
+                  requestedExpiry: "9223372036854775807",
+                },
+                receipt: null,
+                canReplay: false,
+              },
+              {
+                commandId: "retained-2",
+                scope: "scope-b",
+                action: "approve",
+                outcome: "historical",
+                approval: {
+                  revision: "9007199254740993",
+                  proposalDigest: "a".repeat(64),
+                  scopeDigest: "b".repeat(64),
+                  decisionId: "decision-2",
+                  requestedExpiry: "9223372036854775807",
+                },
+                receipt: {
+                  kind: "historical-receipt-shape",
+                  action: "approve",
+                  status: "approved",
+                  settlement: null,
+                  decisionId: "decision-2",
+                  specDigest: "c".repeat(64),
+                  effectiveExpiry: "9007199254740993",
+                },
+                canReplay: false,
+              },
+            ],
+          },
+        }),
+      );
+      await page
+        .getByRole("button", { name: "Inspect command history" })
+        .click();
+      await page.getByText(/Scope: scope-a/).waitFor();
+      expect(await page.getByText(/Scope: scope-b/).count()).toBe(1);
+      expect(
+        await page.getByText("Reviewed revision: 9007199254740993").count(),
+      ).toBe(1);
+      expect(
+        await page
+          .getByText("Receipt effective expiry: 9007199254740993")
+          .count(),
+      ).toBe(1);
+      expect(
+        await page.getByText(`Receipt spec SHA-256: ${"c".repeat(64)}`).count(),
+      ).toBe(1);
+      expect(
+        await page.locator('[aria-label="Command history"] img').count(),
+      ).toBe(0);
+      expect(await page.evaluate(() => window.journalInjected)).toBeUndefined();
+      expect(
+        await page
+          .getByRole("button", { name: "Check original receipt" })
+          .count(),
+      ).toBe(0);
+      await page.evaluate(() => {
+        Object.defineProperty(document, "visibilityState", {
+          configurable: true,
+          value: "hidden",
+        });
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      expect(await page.getByText(/Scope: scope-a/).count()).toBe(0);
+      await page.evaluate(() => {
+        Object.defineProperty(document, "visibilityState", {
+          configurable: true,
+          value: "visible",
+        });
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await page.unroute("**/api/kernel/owner-journal");
       const hostile =
         '<img src=x onerror="window.ownerInjected=1">' + "x".repeat(2048);
       let proposalReads = 0;
@@ -162,7 +250,7 @@ it.skipIf(!existsSync(chrome))(
         return route.fulfill({
           json: {
             status: "connected",
-            actions: [],
+            actions: ["approve"],
             scope: hostile,
             digest: "a".repeat(64),
             text: hostile,
@@ -174,12 +262,29 @@ it.skipIf(!existsSync(chrome))(
       await page.reload();
       await page
         .getByText(
-          "Verified proposal received when this view opened; it may have changed. Reload to recheck. No owner commands are available.",
+          "Verified proposal received when this view opened; it may have changed. Reload to recheck. Approval requires a fresh review.",
         )
         .waitFor();
       expect(await page.locator("pre").textContent()).toBe(hostile);
       expect(await page.locator("pre img").count()).toBe(0);
       expect(await page.evaluate(() => window.ownerInjected)).toBeUndefined();
+      await page.unroute("**/api/kernel/approval-scope");
+      await page.route("**/api/kernel/approval-scope", (route) =>
+        route.fulfill({
+          json: {
+            status: "connected",
+            scope: hostile,
+            digest: "b".repeat(64),
+            proposalDigest: "c".repeat(64),
+            text: "unmatched producer data",
+          },
+        }),
+      );
+      await page
+        .getByRole("button", { name: "Inspect approval scope" })
+        .click();
+      await page.getByText(/Approval scope unavailable/).waitFor();
+      expect(await page.getByText("unmatched producer data").count()).toBe(0);
       expect(
         await page.evaluate(
           () =>
@@ -190,6 +295,104 @@ it.skipIf(!existsSync(chrome))(
       expect(
         await page.getByText(/Effective host policy is unknown/).count(),
       ).toBe(1);
+      await page.route("**/api/kernel/approval-scope", (route) =>
+        route.fulfill({
+          json: {
+            status: "connected",
+            scope: hostile,
+            digest: "b".repeat(64),
+            proposalDigest: "a".repeat(64),
+            text: hostile,
+          },
+          headers: { "cache-control": "no-store" },
+        }),
+      );
+      await page
+        .getByRole("button", { name: "Inspect approval scope" })
+        .click();
+      await page.getByText(/Approval scope received/).waitFor();
+      expect(await page.locator("pre").count()).toBe(2);
+      expect(await page.locator("pre img").count()).toBe(0);
+      expect(await page.evaluate(() => window.ownerInjected)).toBeUndefined();
+      let approvals = 0;
+      await page.route("**/api/kernel/owner-review", (route) =>
+        route.fulfill({
+          json: {
+            review: "f".repeat(64),
+            scope: hostile,
+            proposalDigest: "a".repeat(64),
+            scopeDigest: "b".repeat(64),
+            revision: "-1",
+            status: "absent",
+            approvalExpiry: "2000000000",
+            text: hostile,
+          },
+        }),
+      );
+      await page.route("**/api/kernel/owner", (route) => {
+        if (route.request().method() !== "POST") return route.fallback();
+        approvals++;
+        expect(route.request().postDataJSON()).toEqual({
+          action: "approve",
+          review: "f".repeat(64),
+        });
+        if (approvals === 1)
+          return route.fulfill({ status: 503, json: { kind: "not-sent" } });
+        return route.fulfill({ json: { kind: "unknown" } });
+      });
+      await page.getByLabel("Requested producer expiry").fill("2000000000");
+      await page.getByRole("button", { name: "Review exact approval" }).click();
+      await page.getByText(/Review these exact values/).waitFor();
+      expect(await page.locator("pre img").count()).toBe(0);
+      expect(await page.getByText(/Observed revision: -1/).count()).toBe(1);
+      await page.getByRole("button", { name: "Confirm approval" }).click();
+      await page.getByText(/No approval was sent/).waitFor();
+      expect(await page.getByText(/Approval outcome.*unknown/).count()).toBe(0);
+      await page.getByRole("button", { name: "Review exact approval" }).click();
+      await page.getByRole("button", { name: "Confirm approval" }).click();
+      await page.getByText(/Approval outcome is unknown/).waitFor();
+      expect(approvals).toBe(2);
+      await page.route("**/api/kernel/owner-journal", (route) =>
+        route.fulfill({
+          json: {
+            status: "available",
+            commands: [
+              {
+                commandId: "synthetic-command",
+                scope: hostile,
+                action: "approve",
+                outcome: "unknown",
+                approval: {
+                  revision: "-1",
+                  proposalDigest: "a".repeat(64),
+                  scopeDigest: "b".repeat(64),
+                  decisionId: "decision",
+                  requestedExpiry: "2000000000",
+                },
+                receipt: null,
+                canReplay: true,
+              },
+            ],
+          },
+        }),
+      );
+      await page
+        .getByRole("button", { name: "Inspect command history" })
+        .click();
+      await page.getByText(/outcome unknown; do not retry blindly/).waitFor();
+      await page.route("**/api/kernel/owner-replay", (route) => {
+        expect(route.request().postDataJSON()).toEqual({
+          commandId: "synthetic-command",
+        });
+        return route.fulfill({ json: { kind: "historical-receipt-shape" } });
+      });
+      await page
+        .getByRole("button", { name: "Check original receipt" })
+        .click();
+      await page.getByText(/A historical receipt was returned/).waitFor();
+      await page.clock.fastForward(10000);
+      await page.getByText(/Approval scope received/).waitFor();
+      expect(await page.locator("pre").count()).toBe(2);
       let checks = 0;
       await page.route("**/api/kernel/session-check", (route) => {
         checks++;
