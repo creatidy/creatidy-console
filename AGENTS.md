@@ -19,15 +19,16 @@ Commands: `/implement-issue <number|URL|unambiguous title>`,
 `/finish-pr <Forgejo PR number|URL>`, `/review-pr <Forgejo PR number|URL>` and
 `/loop`. A plain `Implement issue #N` follows the implementation workflow.
 `/finish-pr` authorizes bounded in-scope remediation on the selected PR, not
-additional issues or merging. It consumes native `task` results directly, with
-at most 10 whole-PR review invocations per issue delivery, including
-initial/COMMENT/retries; its excluded progress ledger preserves the count across
-finish/phase/session reentry. `/review-pr` is standalone read-only review using
-the same `.kilo/agents/pr-reviewer.md` agent under the
-conversational-independence policy below; implementation self-review and resumed
-reviewers do not qualify. Every changed HEAD/base requires a fresh whole-PR
-review. Forgejo review publication is optional, never orchestration state. No
-external controller exists.
+additional issues or merging. It consumes native `task` results directly, with a
+default maximum of 10 whole-PR reviews per issue delivery, including
+initial/COMMENT/retries. A bounded owner-authorized exception is effective only
+under `.kilo/rules/30-implementation-discipline.md` and controlling
+higher-priority instructions; the excluded ledger preserves every ordinal across
+reentry. `/review-pr` is standalone read-only review using the same
+`.kilo/agents/pr-reviewer.md` agent under the conversational-independence policy
+below; implementation self-review and resumed reviewers do not qualify. Every
+changed HEAD/base requires a fresh whole-PR review. Forgejo review publication
+is optional, never orchestration state. No external controller exists.
 
 Only an explicit owner `/loop` invocation delegates autonomous selection and
 approved PR merge to develop/completed-issue closure. Its primary context is the

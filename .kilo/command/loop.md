@@ -228,16 +228,19 @@ stable `.kilo/agents/pr-reviewer.md` result/security contract used by
 reviewer. Parent makes no edits/branch switches while it runs. Do not feed past
 findings, reasoning or desired verdict to the reviewer.
 
-Maximum 10 whole-PR review invocations per issue delivery, INCLUDING the initial
-review, COMMENT, invalidated reviews and corrected retries. Reserve/persist each
-ordinal BEFORE dispatch in the shared delivery ledger; `/finish-pr` reentry,
-internal phases, new tasks and model/session changes cannot reset it. This is a
-safety ceiling, not a target; stop immediately for a genuine material decision.
-Fresh reviews inspect the COMPLETE PR, exact HEAD/base/merge base, read-only in
-a fresh conversation under AGENTS.md's conversational-independence policy, using
-an authorized execution path under the shared self-remediation contract, and
-return the existing structured JSON verdict/result. Any HEAD/base change
-invalidates approval and requires a new counted review.
+Default maximum 10 whole-PR review invocations per issue delivery, INCLUDING the
+initial review, COMMENT, invalidated reviews and corrected retries.
+Reserve/persist each ordinal BEFORE dispatch in the shared delivery ledger;
+`/finish-pr` reentry, internal phases, new tasks and model/session changes
+cannot reset it. This is a safety ceiling, not a target; stop immediately for a
+genuine material decision. An exception is effective only under
+`.kilo/rules/30-implementation-discipline.md` and controlling higher-priority
+instructions; preserve all existing ordinals. Fresh reviews inspect the COMPLETE
+PR, exact HEAD/base/merge base, read-only in a fresh conversation under
+AGENTS.md's conversational-independence policy, using an authorized execution
+path under the shared self-remediation contract, and return the existing
+structured JSON verdict/result. Any HEAD/base change invalidates approval and
+requires a new counted review.
 
 REQUEST_CHANGES: understand/reproduce actionable in-scope findings, remediate
 with appropriate regression evidence, validate, commit normally and push the
@@ -246,10 +249,12 @@ rewrite history to clean the loop. COMMENT and failed review dispatches consume
 a slot: distinguish findings, infrastructure failure and disagreement; diagnose
 and change environment/strategy, automatically using another available
 authorized independent path within both budgets. Preserve all ordinals.
-READY_TO_MERGE is internal, not loop termination. At review 10, exact valid
-APPROVE may advance to MERGE; owner decisions terminate STOP_AND_ASK, exhausted
-infrastructure paths or review budget yield BLOCKED, remaining actionable
-defects STOP_REVISE. No review 11 or unreviewable further patches.
+READY_TO_MERGE is internal, not loop termination. At the effective ceiling,
+exact valid APPROVE may advance to MERGE; owner decisions terminate
+STOP_AND_ASK, exhausted infrastructure paths or review budget yield BLOCKED,
+remaining actionable defects STOP_REVISE. Without an effective exception, no
+review 11; never make unreviewable further patches or exceed the effective
+ceiling.
 
 ## MERGE
 

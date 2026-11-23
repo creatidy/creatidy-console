@@ -76,22 +76,22 @@ dependencies; it is not a packaged installation or producer-integration receipt.
 | `make bootstrap` | Issue short-lived local first-owner authority                        |
 | `make start`     | Serve the built UI and authenticated API from one origin             |
 
-### Experimental Owner Proposal Read
+### Experimental Supervised Owner Channel
 
-The optional Linux-only descriptor check is not command delivery or installed
-producer conformance. Build it explicitly with `npm run build:native-owner`;
-there is no install hook or downloaded native package. It requires Node
-`24.19.0`, its matching headers at `../include/node` relative to the Node
-executable, and a trusted system C compiler available as `cc`. The build checks
-the Node and header version, compiles the Apache-2.0 Console source with the
-specified flags, and atomically writes `.cache/native/owner-receiver.node`.
-Different compilers, libc versions and target architectures may produce
-different binary bytes; this is not a cross-platform or bit-reproducible release
-artifact. The normal static `dist` build does not include this addon or a Node
-runtime. The build uses Node's MIT-licensed N-API headers without vendoring
-them. The local Linux build dynamically links the system C library. Any future
-distribution of Node, libc, or a native binary must independently include
-applicable licenses and validate its actual artifact and target platform.
+The optional Linux-only descriptor check does not establish installed producer
+conformance. Build it explicitly with `npm run build:native-owner`; there is no
+install hook or downloaded native package. It requires Node `24.19.0`, its
+matching headers at `../include/node` relative to the Node executable, and a
+trusted system C compiler available as `cc`. The build checks the Node and
+header version, compiles the Apache-2.0 Console source with the specified flags,
+and atomically writes `.cache/native/owner-receiver.node`. Different compilers,
+libc versions and target architectures may produce different binary bytes; this
+is not a cross-platform or bit-reproducible release artifact. The normal static
+`dist` build does not include this addon or a Node runtime. The build uses
+Node's MIT-licensed N-API headers without vendoring them. The local Linux build
+dynamically links the system C library. Any future distribution of Node, libc,
+or a native binary must independently include applicable licenses and validate
+its actual artifact and target platform.
 
 Only a trusted supervisor may opt in: set `CONSOLE_KERNEL_OWNER=1`, supply
 `CONSOLE_KERNEL_OWNER_SCOPE`, `CONSOLE_KERNEL_OWNER_PRODUCER`, and
@@ -111,13 +111,22 @@ The check accepts only a connected Unix stream descriptor at least 3, sets and
 verifies `FD_CLOEXEC`, reads one framed greeting of at most 65536 bytes with a
 five-second deadline, and validates the exact Kernel #124 greeting. It retains
 the channel for authenticated fixed proposal-chunk reads, with a 4 MiB aggregate
-limit and digest validation; it never sends owner commands. Startup fails closed
+limit and digest validation, and can deliver reviewed, revision-bound approve
+commands using independently provisioned Kernel authority. Startup fails closed
 on a missing addon, invalid descriptor, mismatch, malformed frame or timeout.
 The default startup does not load the addon or use a descriptor. This is a
 synthetic verification path, not a supported deployment recipe or live
 integration receipt. Proposal text is untrusted; declarations do not establish
-effective host policy. Approval and every other owner action remain unavailable
-and live mutation requires separate owner authorization.
+effective host policy. A historical receipt is not proof of current authority or
+effect. Replay is restricted to the original channel. A lost reply remains
+unknown unless the read-only disposition contract proves a historical receipt or
+an exact terminal refusal. Only opt in to disposition when the trusted
+supervisor has established custody of the authoritative original journal; use a
+history-only replacement when command authority is not needed. A fresh channel,
+matching labels and matching paths alone do not suffice. Other owner actions are
+unsupported. No real live mutation is authorized without separate owner
+authorization. Synthetic evidence does not satisfy #11 installation or #12
+producer/browser conformance.
 
 `make bootstrap` creates `bootstrap-token` in the private state directory with
 mode 0600, expires in 15 minutes, and refuses once an owner exists. Read it only
@@ -133,11 +142,13 @@ sets the exact browser origin; HTTPS requires `CONSOLE_TLS_KEY` and
 `CONSOLE_TLS_CERT` paths and never falls back to HTTP. `CONSOLE_BIND_HOST`
 defaults to `127.0.0.1`; HTTP binds only loopback. Explicit non-loopback HTTPS
 exposure still needs appropriate network, certificate and operational security.
-`CONSOLE_STATIC_DIR` optionally selects the built UI directory instead of
-`dist`. The application does not trust forwarded headers. Sessions have
-30-minute idle and 24-hour absolute limits; logout revokes the current browser
-session. An observed backward system-clock change revokes all sessions and
-outstanding setup authority, including after restart; sign in again or issue
+An inherited Kernel descriptor that enables approval or disposition requires a
+loopback listener and a loopback browser origin. Do not proxy that listener to a
+remote browser. `CONSOLE_STATIC_DIR` optionally selects the built UI directory
+instead of `dist`. The application does not trust forwarded headers. Sessions
+have 30-minute idle and 24-hour absolute limits; logout revokes the current
+browser session. An observed backward system-clock change revokes all sessions
+and outstanding setup authority, including after restart; sign in again or issue
 fresh setup authority. The application cannot detect a clock change that occurs
 entirely between observations. Keep the host clock reliable.
 
@@ -165,7 +176,14 @@ For a consistent backup stop the server and copy the complete owner-only state
 directory into protected storage. Restoring old state can resurrect revoked
 sessions. With the server stopped, run
 `node server/bootstrap.ts revoke-sessions` against the restored state before
-restarting; this deletes all sessions and rotates the cookie signing key.
+restarting; this deletes all sessions and rotates the cookie signing key. It
+does not reconcile the Kernel owner command journal. Preserve the latest Console
+journal and its exact inputs, especially all unresolved commands. An older or
+incomplete copy can lack a command that Kernel already received. If continuity
+with the latest journal cannot be established, start without the inherited
+Kernel owner descriptor (`CONSOLE_KERNEL_OWNER` unset, no descriptor argument).
+Keep that capability disabled until continuity has been verified; an empty
+restored journal or a fresh login is not evidence that commands were never sent.
 Backups contain password hashes and signing material and must be protected like
 credentials. A schema version newer than the application fails closed; do not
 modify SQLite by hand as an upgrade path.
@@ -181,8 +199,11 @@ validator; use topic-file links instead.
 Follow the [test design and evidence rules](.kilo/rules/validation.md): use
 focused development checks, preserve distinct artifact and security evidence,
 isolate mutable test state and report skipped evidence explicitly. The current
-full local and independent-review gates remain required; CI configuration alone
-does not prove a successful run against the current integration subject.
+implementation-side full local and independent code-review gates remain
+required; reviewers verify authoritative exact-HEAD CI rather than duplicating
+its suite. Targeted reviewer tests are optional investigations; an unavailable
+optional check alone does not require COMMENT. CI configuration alone does not
+prove a successful run against the current integration subject.
 
 Run `git diff --check` before commit. Stage only intended files. Do not track
 `node_modules`, `dist`, `.env`, process logs or Agent Manager recovery/worktree
@@ -227,15 +248,19 @@ Policy origin: current owner workflow-migration mandate and the actual Model
 Intelligence reference at `013cbb43e11d7f698d359db5a456d26d8075e34e`. Earlier
 bootstrap-only budgets are historical, not another active command policy.
 
-`/finish-pr` permits **at most 10 whole-PR review invocations per issue
-delivery**, including initial, COMMENT, invalidated reviews and corrected
-retries. Persist the next ordinal before every dispatch in the excluded
-`.task_progress.md` ledger, keyed by issue/PR and loop invocation when
-applicable. Recover the same counter across finish/phase/task/model/session
-changes. Missing/ambiguous recovery after bounded recovery is BLOCKED; no reset
-and no review 11. At the bound exact valid APPROVE can proceed; owner decisions
-stop, finite infrastructure paths or review budget yield BLOCKED and remaining
-actionable findings STOP_REVISE. Do not patch when no fresh-review slot remains.
+`/finish-pr` permits **at most 10 whole-PR review invocations per issue delivery
+by default**, including initial, COMMENT, invalidated reviews and corrected
+retries. An exception is effective only under
+[implementation discipline](.kilo/rules/30-implementation-discipline.md) and
+controlling higher-priority instructions. Persist the next ordinal before every
+dispatch in the excluded `.task_progress.md` ledger, keyed by issue/PR and loop
+invocation when applicable. Recover the same counter across
+finish/phase/task/model/session changes. Missing/ambiguous recovery after
+bounded recovery is BLOCKED; no reset and, without an effective exception, no
+review 11. At the effective ceiling exact valid APPROVE can proceed; owner
+decisions stop, finite infrastructure paths or review budget yield BLOCKED and
+remaining actionable findings STOP_REVISE. Do not patch when no fresh-review
+slot remains.
 
 Follow the authoritative conversational-independence policy in
 [AGENTS.md](AGENTS.md). Freeze exact HEAD/base/merge-base and clean source.
@@ -245,9 +270,9 @@ reasoning or a desired verdict. Parent makes no edits/branch switches while it
 runs. The unchanged structured JSON result is the native handoff, not owner
 copy/paste or a platform review comment. The reviewer definition owns its
 inherited model binding, deny-by-default permissions and exact-subject contract,
-with Console URL, offline Node validation and technical self-remediation
-guidance. Its permissions and stable JSON result schema remain unchanged. A
-changed HEAD/base invalidates approval.
+with Console URL, optional targeted Node validation and technical
+self-remediation guidance. Its permissions and stable JSON result schema remain
+unchanged. A changed HEAD/base invalidates approval.
 
 Only explicit `/loop` may integrate an open/unmerged develop PR after fresh
 issue/gate/label/authority and exact approval/currentness/check revalidation.
@@ -289,19 +314,20 @@ workaround; report the exact capability, not an artificial owner question.
 
 Default technical remediation is capped at three attempts per distinct obstacle
 across reentry with a recorded finite time limit. Each retry changes a diagnosed
-condition. Failed/COMMENT whole-PR dispatches still consume the next of 10
-review ordinals. Prefer explicit sanitized synthetic environments, approved
-locked tool repair, temporary exact-object checkouts, or ephemeral containers as
-needed, not Docker automatically. Containers do not authorize persistent
-services, broader network/secret access or product dependency adoption. Do not
-expose credential directories or real inherited secrets; environment-inheritance
-tests inherit synthetic values. Reviewer permissions remain deny-by-default.
+condition. Failed/COMMENT whole-PR dispatches still consume the next ordinal
+within the effective ceiling. Prefer explicit sanitized synthetic environments,
+approved locked tool repair, temporary exact-object checkouts, or ephemeral
+containers as needed, not Docker automatically. Containers do not authorize
+persistent services, broader network/secret access or product dependency
+adoption. Do not expose credential directories or real inherited secrets;
+environment-inheritance tests inherit synthetic values. Reviewer permissions
+remain deny-by-default.
 
 Distinguish defects from infrastructure failure and judgment uncertainty. Use
 another available authorized fresh independent reviewer/tool path automatically
 within budget, with unchanged whole-PR/JSON/exact-SHA requirements.
-Independently inspect public pinned source claims via alternative reads or
-isolated fetch/clone; an implementer's report cannot replace this proof. No
-owner relay, self-approval, silent model fallback, skipped validation or
-broadened scope. Text tests guard these instructions, not actual runtime
-isolation or automatic failover.
+Independently inspect public pinned source claims when material to the PR, using
+alternative reads or isolated fetch/clone if needed; an implementer's report
+cannot replace that proof. No owner relay, self-approval, silent model fallback,
+skipped validation or broadened scope. Text tests guard these instructions, not
+actual runtime isolation or automatic failover.

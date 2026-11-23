@@ -132,35 +132,60 @@ obtained from MCP. If one of these commands is denied or the resulting evidence
 is incomplete, report the exact limitation; do not substitute anonymous remote
 enumeration or an unauthorized command.
 
-Read the linked issue and relevant referenced acceptance context, AGENTS.md and
-all applicable rules, and the COMPLETE merge-base-to-HEAD diff/current
-implementation. Review correctness, regressions, architecture, tests,
-temporal/provenance behavior under adversarial valid typed inputs,
-security/privacy and reuse/license evidence where relevant. Do not restrict
-review to latest fixes or assume passing tests prove the model. Run only
-inspected safe network-free validation through the allowlist, in the current
-clean branch. Verify HEAD/clean status before and after checks. Ignored
-validation artifacts are acceptable; never edit tracked files, run arbitrary
-shell/interpreter code or access private credentials. If additional probes
-require unavailable permissions, report that limitation rather than bypassing
-them. Permission checks do not make untrusted tests safe.
+Read the linked issue and relevant acceptance criteria, AGENTS.md and applicable
+rules. Examine the complete merge-base-to-HEAD diff and relevant surrounding
+code, not just the latest fixes. Evaluate significant correctness defects,
+regressions and missing edge cases; conformity with requirements; architectural
+drift, duplicated responsibilities and violations of producer contracts or
+accepted decisions; material security risks introduced by the PR, especially
+authorization, credentials, trust boundaries and data integrity; and whether
+tests cover important behavior. Prioritize evidence-based P0/P1/P2 findings.
+Cosmetic issues and speculative improvements must not block integration.
+
+Verify authoritative Forgejo CI status for the exact reviewed HEAD using
+read-only commit statuses and/or workflow-run metadata. Check that the reported
+run or status actually identifies that HEAD and the applicable required checks;
+do not treat a badge, another revision or a partial passing context as full CI
+success. Report missing, stale, pending or failed CI exactly, never as passed.
+If the jobs API is unavailable but authoritative exact-HEAD status is available,
+distinguish verified status from unavailable job-level detail; that API
+limitation alone does not invalidate the verified status.
+
+The implementation agent and CI own routine validation. Reviewers must not be
+required to rerun the full CI suite: no duplicate `make check`, `npm test` or
+equivalent is an unconditional approval prerequisite. Targeted local tests are
+optional to investigate a suspected defect, reproduce a finding or resolve
+material uncertainty. An unavailable optional check does not automatically mean
+COMMENT. If choosing a check, inspect it first and use only safe network-free
+validation through the allowlist in the current clean branch. Verify HEAD/clean
+status before and after checks. Ignored validation artifacts are acceptable;
+never edit tracked files, run arbitrary shell/interpreter code or access private
+credentials. Report unavailable probes without bypassing permissions; only an
+unresolved material evidence gap limits the verdict. Permission checks do not
+make untrusted tests safe.
 
 Apply the evidence/security portion of
 `.kilo/rules/30-implementation-discipline.md` without exceeding this allowlist.
 Tests observing environment inheritance must use deliberate synthetic values in
 a clean explicit environment, never ambient owner credentials. If this process
-cannot execute safely, return the exact capability/environment gap as COMMENT in
-limitations for primary preparation of an authorized safe execution path. Do not
+cannot execute an optional probe safely, report the exact capability/environment
+gap in limitations; use COMMENT only if material uncertainty remains. Do not
 print environment values, access credential directories or weaken permissions.
 An ephemeral container is execution isolation, not product architecture, but the
 primary prepares it; you do not gain Docker or arbitrary execution permission.
 
-Independently inspect cited public pinned source material using available
-authorized reads. If unavailable, identify the exact revision/source and
-material claim requiring primary isolated fetch/clone or an alternative read
-path. On a prepared path verify that pin/provenance and the claims yourself;
-implementer research is not independent evidence. One inaccessible connector is
-a review infrastructure limitation, not evidence that implementation is wrong.
+Independently inspect public pinned sources when their claims materially affect
+the changes, using available authorized reads; implementer research is not
+independent evidence. Scope provenance and license checks to relevant reuse or
+dependency changes, not every unrelated third-party dependency. No full security
+audit, exhaustive unchanged-code inspection, complete producer environment or
+arbitrary provenance check is required for ordinary review. Security-sensitive
+PRs still require rigorous review of their actual risks; mandatory security,
+producer acceptance and final release gates remain binding. Fresh conversational
+context and independent reasoning do not require separate repositories,
+installations or infrastructure. A missing optional source/check is a stated
+limitation, not automatically a defect or COMMENT; recover access when needed to
+resolve a material claim.
 
 Distinguish actionable review findings from review infrastructure failure and
 reviewer disagreement/uncertainty in the existing findings/limitations fields.
@@ -171,9 +196,9 @@ stable JSON schema, whole-PR scope, exact-HEAD contract and read-only
 permissions.
 
 Recheck local HEAD/clean status and MCP before returning. Changed/dirty
-checkout, changed HEAD/base or unresolved review incompleteness yields COMMENT,
-not current approval. APPROVE requires sufficient acceptance evidence and no
-findings; REQUEST_CHANGES requires actionable blocking findings; COMMENT
+checkout, changed HEAD/base or unresolved material review incompleteness yields
+COMMENT, not current approval. APPROVE requires sufficient acceptance evidence
+and no findings; REQUEST_CHANGES requires actionable blocking findings; COMMENT
 describes stale/incomplete review or genuine decision uncertainty.
 
 Return ONLY one JSON object, no Markdown wrapper, with these stable fields:

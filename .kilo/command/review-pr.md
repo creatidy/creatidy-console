@@ -23,15 +23,15 @@ Require clean status and exact frozen HEAD; refuse local divergence rather than
 rewriting a branch. Never stash/reset unrelated changes; if they prevent safe
 switching, first diagnose and prepare safe temporary worktree/checkout isolation
 under `.kilo/rules/30-implementation-discipline.md`. Preserve unrelated work,
-frozen objects and the delivery ledger. Prepare the offline locked environment
-here; review frozen Git objects/current clean branch read-only. The parent must
-not edit/switch while the reviewer is active. Locate `pr-reviewer`. If native
-task/agent or required access is unavailable, apply bounded technical
-self-remediation and another available authorized independent path before a
-finite BLOCKED; never self-review instead. Standalone review authorizes
-execution preparation, not implementation remediation or Forgejo mutation.
-Inspect checks before running; use clean explicit synthetic environments rather
-than exposing ambient secrets.
+frozen objects and the delivery ledger. Prepare an offline locked environment
+only for chosen targeted tests; review frozen Git objects/current clean branch
+read-only. The parent must not edit/switch while the reviewer is active. Locate
+`pr-reviewer`. If native task/agent or required access is unavailable, apply
+bounded technical self-remediation and another available authorized independent
+path before a finite BLOCKED; never self-review instead. Standalone review
+authorizes execution preparation, not implementation remediation or Forgejo
+mutation. Inspect checks before running; use clean explicit synthetic
+environments rather than exposing ambient secrets.
 
 Invoke `task` with `subagent_type: pr-reviewer`, `background: false`, no
 `task_id`. Pass only the PR number/URL, expected HEAD/base and fresh whole-PR
@@ -41,15 +41,28 @@ desired verdict. Follow AGENTS.md's conversational-independence policy. The
 agent definition owns the JSON result contract and inherited model binding.
 Never resume a past reviewer.
 
-Preserve the same delivery ledger and 10-review ceiling used by finish-pr:
-reserve/persist the next ordinal before every whole-PR dispatch, including
-failed/COMMENT attempts. Apply the shared finite technical attempt/time limit;
-do not reset ordinals across reentry or dispatch review 11. Infrastructure
-failure requires diagnosis and changed environment/strategy, not identical
-retries. Independently inspect cited public pinned sources through alternative
-authorized reads or isolated exact-revision fetch/clone; never substitute the
-implementer's report. Distinguish findings, infrastructure failure and judgment
-uncertainty before escalation; complete the shared BLOCKED/decision contracts.
+Preserve the same delivery ledger and effective review ceiling used by
+finish-pr: reserve/persist the next ordinal before every whole-PR dispatch,
+including failed/COMMENT attempts. Apply the shared finite technical
+attempt/time limit; do not reset ordinals across reentry. Without an effective
+exception under the shared contract and higher-priority instructions, do not
+dispatch review 11. Infrastructure failure requires diagnosis and changed
+environment/strategy, not identical retries. Independently inspect public pinned
+sources when material to the PR; recover an unavailable read path only when
+needed to resolve a material claim, never substitute the implementer's report.
+Distinguish findings, infrastructure failure and judgment uncertainty before
+escalation; complete the shared BLOCKED/decision contracts.
+
+Follow the reviewer contract's practical responsibility split: examine material
+correctness, architecture, security and test adequacy, and verify authoritative
+CI status for the exact reviewed HEAD. Routine validation belongs to the
+implementation agent and CI; no full-suite rerun is required from the reviewer.
+Targeted local tests are optional investigations, and unavailable optional
+checks alone do not require COMMENT. Report missing/stale/failed CI and
+distinguish verified status from unavailable job-level detail. No exhaustive
+unchanged-code, unrelated dependency/license audit or reconstructed producer
+environment is required. Preserve all mandatory security, acceptance and release
+gates.
 
 Require JSON fields reviewed_head, reviewed_base, verdict, findings,
 limitations, checks_run as defined in `.kilo/agents/pr-reviewer.md`. Validate

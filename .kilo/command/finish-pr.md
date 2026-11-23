@@ -13,7 +13,9 @@ remediation commits/pushes; no additional issue, replacement PR or merge. An
 explicit owner `/loop` may reuse this procedure in its sole primary context;
 selection/merge/closure authority lives only in loop.md, never in `/finish-pr`.
 
-Delivery budget: at most 10 whole-PR review invocations per issue delivery,
+Delivery budget: at most 10 whole-PR review invocations per issue delivery by
+default, unless a bounded owner exception is effective under
+`.kilo/rules/30-implementation-discipline.md` and higher-priority instructions,
 INCLUDING the initial review, COMMENT, invalidated reviews and corrected
 retries. Before the first review verify `.task_progress.md` is Git-locally
 excluded, then append a delivery ledger keyed by issue/PR (and `/loop`
@@ -47,8 +49,9 @@ decision contract; equivalent review execution choices are autonomous.
    divergence or conflicting work require diagnosis and safe isolation before a
    precise exhausted blocker or genuine owner decision.
 2. Require the current PR branch to be clean and match MCP HEAD. Freeze exact
-   HEAD, base and merge base; run required `make check`, prepare its offline
-   locked environment and inspect reviewer permissions. Review frozen
+   HEAD, base and merge base; the implementation agent runs required
+   `make check`. Prepare an offline locked environment only for chosen targeted
+   reviewer tests and inspect reviewer permissions. Review frozen
    objects/current clean branch in this prepared checkout. The parent must not
    edit/switch branches while the reviewer is active. Missing native task/agent
    requires bounded diagnosis and an available authorized independent path,
@@ -59,10 +62,13 @@ decision contract; equivalent review execution choices are autonomous.
    HEAD/base and whole-PR review instructions with this checkout path and
    neutral execution/evidence locations if isolation is needed. Do not supply
    past findings, implementation reasoning or a requested outcome. The agent
-   owns the result contract/model. Parse its JSON and require the exact frozen
-   SHAs and valid field types/verdict. Consume returned findings directly.
-   Recheck local HEAD/clean status; a changed or dirty checkout invalidates
-   review.
+   owns the result contract/model. It verifies authoritative exact-HEAD CI
+   status and test adequacy; it is not required to rerun the full CI suite.
+   Targeted tests are optional for material investigations; unavailable optional
+   checks alone do not require COMMENT. Parse its JSON and require the exact
+   frozen SHAs and valid field types/verdict. Consume returned findings
+   directly. Recheck local HEAD/clean status; a changed or dirty checkout
+   invalidates review.
 4. Re-fetch PR metadata and canonical develop. APPROVE with empty findings,
    matching current HEAD/base SHAs, clean checkout, successful required
    validation and still open/unmerged develop target yields READY_TO_MERGE /
@@ -70,17 +76,17 @@ decision contract; equivalent review execution choices are autonomous.
    change, malformed result or infrastructure failure requires diagnosis and
    changed conditions before another counted fresh whole-PR review. Re-establish
    currentness safely for external changes; never race another writer. Use the
-   shared technical attempt/time limit and 10-review ceiling, not an identical
-   retry. BLOCKED only when no authorized path/budget remains. Never retry on a
-   new session/model alone.
+   shared technical attempt/time limit and effective review ceiling, not an
+   identical retry. BLOCKED only when no authorized path/budget remains. Never
+   retry on a new session/model alone.
 5. REQUEST_CHANGES: first check findings against accepted scope and authority.
    Genuine incompatible acceptance, architecture or material scope decisions
    yield OWNER_DECISION_NEEDED with concrete alternatives. Otherwise reproduce
    each actionable finding. Before patching check the remaining delivery budget;
-   at 10 return STOP_REVISE without patches that cannot receive a fresh review.
-   Remediate all in scope and add regression tests. Classify each as direct
-   incomplete remediation or genuinely new semantic/ architectural defect;
-   record that distinction and the reviewed HEAD/verdict.
+   at the effective ceiling return STOP_REVISE without patches that cannot
+   receive a fresh review. Remediate all in scope and add regression tests.
+   Classify each as direct incomplete remediation or genuinely new semantic/
+   architectural defect; record that distinction and the reviewed HEAD/verdict.
 6. Run focused validation and full `make check`; inspect status, intended diff,
    full base delta, whitespace and recent commit style. Verify configured and
    effective author/committer are Adrian Tkacz <adrian.tkacz@creatidy.com>.
@@ -88,14 +94,14 @@ decision contract; equivalent review execution choices are autonomous.
    through canonical Git. Never amend, squash, force-push or rewrite published
    history. Recheck remote/MCP head and return to step 2 with a NEW reviewer
    task.
-7. Never dispatch review 11. At the 10-review bound an exact valid APPROVE may
-   yield READY_TO_MERGE; genuine decisions yield OWNER_DECISION_NEEDED and
-   exhausted infrastructure paths or review budget yield BLOCKED. Remaining
-   actionable findings yield STOP_REVISE; summarize recurring patterns,
-   especially substantial new semantic/architectural defects in
-   producer/consumer contracts. Never reset the issue delivery's review count or
-   patch indefinitely. The ceiling is not a target: stop as soon as an owner
-   decision is clearly required.
+7. Without an effective exception, never dispatch review 11. At the effective
+   review ceiling an exact valid APPROVE may yield READY_TO_MERGE; genuine
+   decisions yield OWNER_DECISION_NEEDED and exhausted infrastructure paths or
+   review budget yield BLOCKED. Remaining actionable findings yield STOP_REVISE;
+   summarize recurring patterns, especially substantial new
+   semantic/architectural defects in producer/consumer contracts. Never reset
+   the issue delivery's review count or patch indefinitely. The ceiling is not a
+   target: stop as soon as an owner decision is clearly required.
 8. COMMENT or failed dispatch: distinguish review finding, review infrastructure
    failure and reviewer disagreement/uncertainty. Infrastructure failure is not
    an implementation defect. Diagnose, change environment/strategy and

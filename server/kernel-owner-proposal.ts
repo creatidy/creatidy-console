@@ -34,6 +34,36 @@ function integer(value: unknown, minimum: bigint): bigint {
   throw new Error("Invalid proposal integer");
 }
 
+export function kernelJsonString(value: string): string {
+  return JSON.stringify(value).replace(
+    /[\u007f-\uffff]/g,
+    (character) =>
+      `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+}
+
+function canonicalProposal(value: unknown): string {
+  if (value === null || typeof value === "boolean") return String(value);
+  if (typeof value === "string") return kernelJsonString(value);
+  if (typeof value === "bigint") return value.toString();
+  if (typeof value === "number" && Number.isSafeInteger(value))
+    return String(value);
+  if (Array.isArray(value))
+    return `[${value.map(canonicalProposal).join(",")}]`;
+  if (value && typeof value === "object") {
+    const item = value as Record<string, unknown>;
+    const keys = Object.keys(item);
+    // Every accepted v1 proposal object has fixed ASCII field names.
+    if (keys.some((key) => !/^[\x20-\x7e]+$/.test(key)))
+      throw new Error("Unsupported proposal field");
+    return `{${keys
+      .sort()
+      .map((key) => `${canonicalProposal(key)}:${canonicalProposal(item[key])}`)
+      .join(",")}}`;
+  }
+  throw new Error("Unsupported proposal value");
+}
+
 function subject(value: unknown) {
   const item = record(value, [
     "origin",
@@ -117,7 +147,27 @@ function declaration(value: unknown) {
   }
 }
 
-function validateProposal(value: unknown, scope: string) {
+export class UnsupportedOwnerPayload extends Error {}
+export class UnsupportedApprovalScope extends UnsupportedOwnerPayload {}
+
+function objectList(value: unknown, min = 0) {
+  if (
+    !Array.isArray(value) ||
+    value.length < min ||
+    value.some(
+      (item) => !item || typeof item !== "object" || Array.isArray(item),
+    )
+  )
+    throw new Error("Invalid qualified list");
+  return value as Record<string, unknown>[];
+}
+
+function validateProposal(
+  value: unknown,
+  scope: string,
+  allowQualified = false,
+) {
+  const version = (value as Record<string, unknown> | null)?.version;
   const proposal = record(value, [
     "version",
     "kind",
@@ -125,22 +175,55 @@ function validateProposal(value: unknown, scope: string) {
     "objective",
     "drafts",
     "dependencies",
+    ...(version === 2 || version === 3 ? ["qualified_cuts"] : []),
+    ...(version === 3 ? ["qualified_drafts"] : []),
   ]);
   if (
-    proposal.version !== 1 ||
+    (version !== 1 && version !== 2 && version !== 3) ||
     proposal.kind !== "ordinary-program-proposal" ||
     proposal.program !== scope
   )
-    throw new Error("Unsupported proposal subject");
+    throw new Error("Invalid proposal subject");
   string(proposal.objective);
   const { drafts, dependencies } = proposal;
   if (
     !Array.isArray(drafts) ||
-    !drafts.length ||
+    (version !== 3 && !drafts.length) ||
     !Array.isArray(dependencies) ||
     drafts.length !== dependencies.length
   )
     throw new Error("Invalid proposal entries");
+  if (version !== 1) {
+    const cut = (item: Record<string, unknown>) => {
+      if (
+        item.kind !== "ordinary-qualified-dependencies" ||
+        item.version !== 1 ||
+        typeof item.subject !== "string" ||
+        !Array.isArray(item.edges) ||
+        !Array.isArray(item.required) ||
+        !Array.isArray(item.classifications)
+      )
+        throw new Error("Invalid qualified cut");
+    };
+    for (const item of objectList(
+      proposal.qualified_cuts,
+      version === 2 ? 1 : 0,
+    ))
+      cut(item);
+    if (version === 3)
+      for (const item of objectList(proposal.qualified_drafts, 1)) {
+        if (
+          item.kind !== "ordinary-qualified-draft" ||
+          (item.version !== 1 && item.version !== 2) ||
+          typeof item.task_id !== "string" ||
+          typeof item.declaration !== "string" ||
+          !Array.isArray(item.ci_subjects) ||
+          (item.version === 2 && typeof item.ci_profile !== "string")
+        )
+          throw new Error("Invalid qualified draft");
+        cut(objectList([item.cut])[0]!);
+      }
+  }
   const ids = new Set<string>();
   for (let i = 0; i < drafts.length; i++) {
     const draft = record(drafts[i], [
@@ -230,15 +313,13 @@ function validateProposal(value: unknown, scope: string) {
       edges.add(key);
     }
   }
+  if (version !== 1 && !allowQualified)
+    throw new UnsupportedOwnerPayload("Unsupported qualified proposal");
   return proposal;
 }
 
 // Accept complete response frames, never an actual channel or an authorization.
-export function assembleLocalOwnerProposal(
-  frames: readonly Uint8Array[],
-  scope: string,
-) {
-  string(scope);
+function assembleChunks(frames: readonly Uint8Array[]) {
   if (
     !Array.isArray(frames) ||
     !frames.length ||
@@ -319,6 +400,291 @@ export function assembleLocalOwnerProposal(
     fatal: true,
     ignoreBOM: true,
   }).decode(raw);
-  const proposal = validateProposal(parseOwnerJson(text), scope);
-  return { digest, proposal, text };
+  return { digest, text, value: parseOwnerJson(text) };
+}
+
+export function assembleLocalOwnerProposal(
+  frames: readonly Uint8Array[],
+  scope: string,
+) {
+  string(scope);
+  const { digest, text, value } = assembleChunks(frames);
+  return { digest, proposal: validateProposal(value, scope), text };
+}
+
+// The complete producer-supplied text is evidence, not an authorization.
+export function assembleLocalOwnerApprovalScope(
+  frames: readonly Uint8Array[],
+  scope: string,
+) {
+  string(scope);
+  const { digest, text, value } = assembleChunks(frames);
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new Error("Invalid approval scope");
+  const item = value as Record<string, unknown>;
+  if (
+    item.kind === "ordinary-approval-scope" &&
+    typeof item.version === "number" &&
+    Number.isSafeInteger(item.version) &&
+    item.version !== 1
+  )
+    throw new UnsupportedApprovalScope("Unsupported approval scope version");
+  const fields = [
+    "kind",
+    "version",
+    "owner",
+    "proposal",
+    "policy",
+    "verification",
+    "execution_profile",
+    "execution_reference",
+  ];
+  const proposal = validateProposal(item.proposal, scope, true);
+  const hasWorkBindings = Object.hasOwn(item, "qualified_work_bindings");
+  const hasScmBindings = Object.hasOwn(item, "qualified_scm_bindings");
+  if (
+    (proposal.version !== 1 && !hasWorkBindings) ||
+    (proposal.version === 3 && !hasScmBindings) ||
+    (hasScmBindings && !hasWorkBindings)
+  )
+    throw new Error("Invalid qualified approval scope");
+  record(item, [
+    ...fields,
+    ...(hasWorkBindings ? ["qualified_work_bindings"] : []),
+    ...(hasScmBindings ? ["qualified_scm_bindings"] : []),
+  ]);
+  if (item.kind !== "ordinary-approval-scope" || item.version !== 1)
+    throw new Error("Unsupported approval scope");
+  const owner = string(item.owner);
+  const policy = record(item.policy, [
+    "reference",
+    "budget",
+    "authority",
+    "paths",
+    "network",
+    "effects",
+    "recipes",
+    "evidence_producers",
+    "freshness_seconds",
+    "repair_baseline_reference",
+    "work_budget",
+    "project_budget",
+    "project_id",
+  ]);
+  const reference = record(policy.reference, [
+    "policy_id",
+    "version",
+    "digest",
+  ]);
+  for (const field of ["policy_id", "version", "digest"])
+    string(reference[field]);
+  const budget = record(policy.budget, ["max_attempts", "max_active_attempts"]);
+  integer(budget.max_attempts, 0n);
+  integer(budget.max_active_attempts, 0n);
+  const authority = record(policy.authority, [
+    "owner_id",
+    "allowed_actions",
+    "max_attempts",
+    "trusted_satisfaction_issuers",
+    "delegated_actor_ids",
+  ]);
+  if (string(authority.owner_id) !== owner)
+    throw new Error("Invalid owner binding");
+  integer(authority.max_attempts, 0n);
+  function strings(value: unknown, nonempty = false): string[] {
+    if (!Array.isArray(value) || (nonempty && !value.length))
+      throw new Error("Invalid scope list");
+    const result = value.map(string);
+    if (new Set(result).size !== result.length)
+      throw new Error("Invalid scope list");
+    return result;
+  }
+  const actions = strings(authority.allowed_actions);
+  const supportedActions = [
+    "activate_program",
+    "pause_program",
+    "resume_program",
+    "cancel_program",
+    "cancel_work_unit",
+    "prepare_attempt",
+    "start_attempt",
+    "finish_attempt",
+    "fail_attempt",
+    "cancel_attempt",
+    "satisfy_work_unit",
+    "amend_spec",
+  ];
+  if (actions.some((action) => !supportedActions.includes(action)))
+    throw new Error("Unsupported authority action");
+  const issuers = strings(authority.trusted_satisfaction_issuers);
+  if (
+    strings(authority.delegated_actor_ids).some((actor) =>
+      issuers.includes(actor),
+    )
+  )
+    throw new Error("Invalid authority binding");
+  for (const field of [
+    "paths",
+    "network",
+    "effects",
+    "recipes",
+    "evidence_producers",
+  ])
+    strings(
+      policy[field],
+      field === "recipes" || field === "evidence_producers",
+    );
+  integer(policy.freshness_seconds, 1n);
+  if (policy.repair_baseline_reference !== null)
+    string(policy.repair_baseline_reference);
+  string(policy.project_id);
+  const categories = [
+    "attempt",
+    "review",
+    "remediation",
+    "tool",
+    "retry",
+    "helper",
+    "verification",
+    "auxiliary",
+  ];
+  for (const field of ["work_budget", "project_budget"]) {
+    const value = record(policy[field], [
+      "version",
+      "counts",
+      "max_active",
+      "retained_bytes",
+      "resources",
+      "strict_inference",
+    ]);
+    if (
+      value.version !== 1 ||
+      typeof value.strict_inference !== "boolean" ||
+      !Array.isArray(value.resources)
+    )
+      throw new Error("Unsupported budget");
+    const counts = record(value.counts, categories);
+    for (const category of categories) integer(counts[category], 0n);
+    // Kernel's WorkBudgetPolicy requires both capacity limits to be positive.
+    integer(value.max_active, 1n);
+    integer(value.retained_bytes, 1n);
+    const seen = new Set<string>();
+    for (const resource of value.resources) {
+      const r = record(resource, ["metric", "unit", "quantity"]);
+      const metric = string(r.metric),
+        unit = string(r.unit),
+        quantity = string(r.quantity);
+      if (
+        ![
+          "money",
+          "tokens",
+          "quota",
+          "compute",
+          "elapsed",
+          "attention",
+        ].includes(metric) ||
+        (metric === "money" && !/^[A-Z]{3}$/.test(unit)) ||
+        !/^(?:\+?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)$/.test(quantity) ||
+        !/[1-9]/.test(quantity.split(/[eE]/)[0]!) ||
+        seen.has(JSON.stringify([metric, unit]))
+      )
+        throw new Error("Invalid resource ceiling");
+      seen.add(JSON.stringify([metric, unit]));
+    }
+  }
+  const verification = record(item.verification, [
+    "reference",
+    "checks",
+    "reviewer_required",
+  ]);
+  const verificationReference = record(verification.reference, [
+    "policy_id",
+    "version",
+    "digest",
+  ]);
+  if (
+    !["policy_id", "version", "digest"].every(
+      (field) => verificationReference[field] === reference[field],
+    )
+  )
+    throw new Error("Invalid verification binding");
+  const checks = strings(verification.checks, true);
+  if (
+    verification.reviewer_required !== true ||
+    !["paths", "structural", "commands"].every((check) =>
+      checks.includes(check),
+    ) ||
+    checks.includes("independent_review")
+  )
+    throw new Error("Invalid verification");
+  const profile = record(item.execution_profile, [
+    "harness",
+    "provider",
+    "model",
+    "effort",
+    "trust",
+  ]);
+  if (
+    typeof profile.harness !== "string" ||
+    !["kilo-pull", "codex", "kilo-pull+codex"].includes(profile.harness) ||
+    profile.trust !== "trusted_development"
+  )
+    throw new Error("Invalid execution profile");
+  for (const field of ["provider", "model", "effort"])
+    if (profile[field] !== null) string(profile[field]);
+  if (
+    !/^basic-harness-policy:[0-9a-f]{64}$/.test(
+      string(item.execution_reference),
+    )
+  )
+    throw new Error("Invalid execution reference");
+  const profileText = JSON.stringify({
+    effort: profile.effort,
+    harness: profile.harness,
+    model: profile.model,
+    provider: profile.provider,
+    trust: profile.trust,
+  }).replace(
+    /[\u007f-\uffff]/g,
+    (character) =>
+      `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+  for (const field of ["qualified_work_bindings", "qualified_scm_bindings"]) {
+    if (!Object.hasOwn(item, field)) continue;
+    for (const binding of objectList(item[field])) {
+      const keys = [
+        "family",
+        "implementation",
+        "version",
+        "origin",
+        "tenant",
+        "namespace",
+        "api_version",
+        "rights",
+      ];
+      record(binding, keys);
+      if (
+        binding.family !==
+        (field === "qualified_work_bindings" ? "work" : "scm")
+      )
+        throw new Error("Invalid qualified approval binding");
+      for (const key of keys) string(binding[key]);
+    }
+  }
+  if (hasWorkBindings || hasScmBindings)
+    throw new UnsupportedApprovalScope("Unsupported qualified approval scope");
+  // Kernel hashes the original profile bytes, which are not exposed in this
+  // scope. A mismatch with the canonical candidate cannot establish tampering
+  // or authorize approval. The received scope digest was verified separately.
+  if (
+    item.execution_reference !==
+    `basic-harness-policy:${createHash("sha256").update(profileText).digest("hex")}`
+  )
+    throw new UnsupportedApprovalScope(
+      "Unsupported execution profile encoding",
+    );
+  const proposalDigest = createHash("sha256")
+    .update(canonicalProposal(item.proposal))
+    .digest("hex");
+  return { digest, proposalDigest, text, owner };
 }

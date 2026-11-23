@@ -30,16 +30,44 @@ try {
     const { createLocalOwnerTransport } =
       await import("./kernel-owner-transport.ts");
     const scope = process.env.CONSOLE_KERNEL_OWNER_SCOPE ?? "";
-    const socket = await receiveInheritedOwnerChannel(fd, {
-      scope,
+    const pairing = {
       producer: process.env.CONSOLE_KERNEL_OWNER_PRODUCER ?? "",
       recipient: process.env.CONSOLE_KERNEL_OWNER_RECIPIENT ?? "",
+    };
+    const { socket, operations } = await receiveInheritedOwnerChannel(fd, {
+      scope,
+      ...pairing,
     });
-    const transport = createLocalOwnerTransport(socket, scope);
+    const transport = createLocalOwnerTransport(
+      socket,
+      scope,
+      5000,
+      operations,
+      pairing,
+    );
     kernelOwner = {
       scope,
+      pairing,
+      proposalSupported: transport.proposalSupported,
+      approvalScopeSupported: transport.approvalScopeSupported,
+      ...(transport.historyVersion
+        ? { historyVersion: transport.historyVersion }
+        : {}),
+      get approvalSupported() {
+        return transport.approvalSupported;
+      },
       readProposal: transport.readProposal,
-      readSnapshot: transport.readSnapshot,
+      ...(transport.snapshotSupported
+        ? { readSnapshot: transport.readSnapshot }
+        : {}),
+      readApprovalScope: transport.readApprovalScope,
+      readRevision: transport.readRevision,
+      canSend: transport.canSend,
+      sendCommand: transport.sendCommand,
+      canReplay: transport.canReplay,
+      replayCommand: transport.replayCommand,
+      canReadDisposition: transport.canReadDisposition,
+      readDisposition: transport.readDisposition,
       close: transport.close,
     };
   } else if (process.env.CONSOLE_KERNEL_OWNER !== undefined) {
@@ -57,8 +85,15 @@ try {
   const origin = process.env.CONSOLE_ORIGIN ?? "http://127.0.0.1:4173";
   const url = new URL(origin);
   const bind = process.env.CONSOLE_BIND_HOST ?? "127.0.0.1";
-  if (url.protocol === "http:" && !["127.0.0.1", "::1"].includes(bind)) {
+  const loopback = ["127.0.0.1", "::1"].includes(bind);
+  if (url.protocol === "http:" && !loopback) {
     throw new Error("HTTP binding must be loopback");
+  }
+  if (
+    (kernelOwner?.approvalSupported || kernelOwner?.historyVersion) &&
+    (!loopback || !["127.0.0.1", "[::1]", "localhost"].includes(url.hostname))
+  ) {
+    throw new Error("Kernel owner approval and disposition require loopback");
   }
   const stateDirectory =
     process.env.CONSOLE_STATE_DIR ??

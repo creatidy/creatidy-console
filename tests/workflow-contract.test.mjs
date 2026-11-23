@@ -506,7 +506,7 @@ describe("ported Model Intelligence workflow contract", () => {
       "Before EVERY task dispatch reserve/persist the next review ordinal",
       "Reinvoking `/finish-pr`, changing phase, reviewer task, model or session MUST reuse the same delivery counter",
       "attempt bounded recovery from durable evidence; unresolved recovery is BLOCKED",
-      "Never dispatch review 11",
+      "Without an effective exception, never dispatch review 11",
       "without patches that cannot receive a fresh review",
       "not a target: stop as soon as an owner decision is clearly required",
     ])
@@ -528,6 +528,44 @@ describe("ported Model Intelligence workflow contract", () => {
       "canonical evidence, never from the ledger",
     ])
       expect(progress).toContain(requirement);
+  });
+
+  test("review exceptions remain explicit, bounded and subordinate", () => {
+    const policy = text(".kilo/rules/30-implementation-discipline.md");
+    for (const requirement of [
+      "The default is 10",
+      "controlling higher-priority execution instructions permit it",
+      "owner explicitly authorizes the identified issue and PR",
+      "increased maximum and reason",
+      "resumption of a stopped delivery",
+      "preserve all earlier ordinals and verdicts; never reset them",
+      "An unmerged policy PR, repository wording or a new session alone cannot override controlling instructions",
+      "no patch without a fresh-review slot under the effective ceiling",
+      "Independent review, validation, security and merge requirements are unchanged",
+      "For Console issue #34 / PR #39",
+      "PR comment #22232",
+      "issue #40 comment #22267",
+      "Unicode validation defect found at the review bound",
+      "Ordinals 1-10 remain counted",
+      "only 11 and 12 could follow",
+      "after this policy amendment is integrated into canonical `develop`",
+      "That historical restriction is not a standing prohibition",
+      "Each later session must verify its own applicable higher-priority execution instructions",
+    ])
+      expect(policy).toContain(requirement);
+    expect(policy).not.toContain(
+      "The current execution instructions prohibit review 11",
+    );
+    for (const path of [
+      "AGENTS.md",
+      ".kilo/rules/10-task-system.md",
+      ".kilo/command/finish-pr.md",
+      ".kilo/command/loop.md",
+      ".kilo/command/review-pr.md",
+      "CONTRIBUTING.md",
+    ]) {
+      expect(text(path)).toMatch(/effective|controlling/u);
+    }
   });
 
   test("exact approval and loop-only PR merge", () => {
@@ -681,7 +719,52 @@ describe("ported Model Intelligence workflow contract", () => {
       expect(shared).toContain(requirement);
   });
 
-  test("secret-safe inheritance and independent public evidence are mandatory", () => {
+  test("practical review separates material inspection from routine CI validation", () => {
+    const reviewer = text(".kilo/agents/pr-reviewer.md");
+    for (const requirement of [
+      "relevant acceptance criteria",
+      "complete merge-base-to-HEAD diff and relevant surrounding code",
+      "significant correctness defects, regressions and missing edge cases",
+      "architectural drift, duplicated responsibilities",
+      "violations of producer contracts or accepted decisions",
+      "authorization, credentials, trust boundaries and data integrity",
+      "tests cover important behavior",
+      "Prioritize evidence-based P0/P1/P2 findings",
+      "Cosmetic issues and speculative improvements must not block integration",
+      "Verify authoritative Forgejo CI status for the exact reviewed HEAD",
+      "applicable required checks",
+      "Report missing, stale, pending or failed CI exactly, never as passed",
+      "distinguish verified status from unavailable job-level detail",
+      "The implementation agent and CI own routine validation",
+      "Reviewers must not be required to rerun the full CI suite",
+      "Targeted local tests are optional",
+      "An unavailable optional check does not automatically mean COMMENT",
+      "No full security audit, exhaustive unchanged-code inspection, complete producer environment",
+      "mandatory security, producer acceptance and final release gates remain binding",
+      "do not require separate repositories, installations or infrastructure",
+    ]) {
+      expect(reviewer).toContain(requirement);
+    }
+    const validation = text(".kilo/rules/validation.md");
+    expect(validation).toContain(
+      "the implementation agent still runs required local `make check`",
+    );
+    expect(validation).toContain("Reviewer full-suite reruns are not required");
+    for (const path of [
+      ".kilo/command/finish-pr.md",
+      ".kilo/command/review-pr.md",
+    ]) {
+      expect(text(path)).toContain("optional");
+      expect(text(path)).toContain(
+        "unavailable optional checks alone do not require COMMENT",
+      );
+    }
+    expect(reviewer).not.toContain(
+      "cannot execute safely, return the exact capability/environment gap as COMMENT",
+    );
+  });
+
+  test("secret-safe inheritance and material independent public evidence are mandatory", () => {
     const shared = text(".kilo/rules/30-implementation-discipline.md");
     for (const requirement of [
       "inherit synthetic test values, not the owner's ambient credentials",

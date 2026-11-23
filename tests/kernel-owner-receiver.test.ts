@@ -24,15 +24,19 @@ const appRoot = join(temporary, "app");
 const startupAddon = join(appRoot, ".cache/native/owner-receiver.node");
 const env = { PATH: process.env.PATH, HOME: temporary, TMPDIR: temporary };
 
-function frame(scope = "program-1") {
+function frame(scope = "program-1", operations?: unknown) {
   const payload = Buffer.from(
     JSON.stringify({
-      contract: "creatidy-kernel-owner-descriptor-v1",
+      contract:
+        operations === undefined
+          ? "creatidy-kernel-owner-descriptor-v1"
+          : "creatidy-kernel-owner-descriptor-v2",
       wire_version: 1,
       role: "owner",
       scope,
       producer: "kernel-1",
       recipient: "console-1",
+      ...(operations === undefined ? {} : { operations }),
     }),
   );
   const header = Buffer.alloc(4);
@@ -123,6 +127,41 @@ describe.skipIf(process.platform !== "linux")("native owner receiver", () => {
       '{"before":false,"cloexec":true,"child":0}',
     );
     expect(output.stdout).toContain("validated");
+  });
+
+  it("accepts declared v2 operation sets and closes invalid declarations without sending", async () => {
+    for (const [operations, expectedCode] of [
+      [["snapshot", "record", "events"], 0],
+      [["snapshot", "record", "events", "proposal", "proposal-chunk"], 0],
+      [
+        [
+          "snapshot",
+          "record",
+          "events",
+          "proposal",
+          "proposal-chunk",
+          "approval-scope",
+          "approval-scope-chunk",
+          "approve",
+        ],
+        0,
+      ],
+      [["snapshot", "record", "events", "approve"], 1],
+    ] as const) {
+      const process = child();
+      const result = collect(process);
+      const channel = process.stdio[3];
+      if (!channel || !("write" in channel)) throw new Error("Missing channel");
+      let received = 0;
+      channel.on("data", (data: Buffer) => {
+        received += data.length;
+      });
+      channel.write(frame("program-1", operations));
+      const output = await result;
+      expect(output.code, output.stderr).toBe(expectedCode);
+      expect(received).toBe(0);
+      if (expectedCode) expect(output.stdout).toContain('"closed":true');
+    }
   });
 
   it("closes a non-socket descriptor on refusal", async () => {
@@ -217,7 +256,7 @@ describe.skipIf(process.platform !== "linux")("native owner receiver", () => {
   });
 
   it("runs the opt-in startup greeting gate and sends no channel data", async () => {
-    const launch = (scope: string) =>
+    const launch = (scope: string, remote: boolean) =>
       spawn(process.execPath, ["server/main.ts", "3"], {
         cwd: appRoot,
         env: {
@@ -226,15 +265,27 @@ describe.skipIf(process.platform !== "linux")("native owner receiver", () => {
           CONSOLE_KERNEL_OWNER_SCOPE: scope,
           CONSOLE_KERNEL_OWNER_PRODUCER: "kernel-1",
           CONSOLE_KERNEL_OWNER_RECIPIENT: "console-1",
-          CONSOLE_ORIGIN: "invalid",
+          CONSOLE_ORIGIN: remote ? "https://console.example.test" : "invalid",
+          ...(remote
+            ? {
+                CONSOLE_BIND_HOST: "0.0.0.0",
+                CONSOLE_TLS_KEY: join(temporary, "unused-key"),
+                CONSOLE_TLS_CERT: join(temporary, "unused-cert"),
+              }
+            : {}),
         },
         stdio: ["ignore", "pipe", "pipe", "pipe"],
       });
-    for (const [scope, error] of [
-      ["program-1", "Invalid URL"],
-      ["other", "Invalid owner greeting"],
-    ]) {
-      const process = launch(scope!);
+    for (const [scope, remote, error] of [
+      ["program-1", false, "Invalid URL"],
+      ["other", false, "Invalid owner greeting"],
+      [
+        "program-1",
+        true,
+        "Kernel owner approval and disposition require loopback",
+      ],
+    ] as const) {
+      const process = launch(scope, remote);
       const result = collect(process);
       const channel = process.stdio[3];
       if (!channel || !("write" in channel))
@@ -243,7 +294,17 @@ describe.skipIf(process.platform !== "linux")("native owner receiver", () => {
       channel.on("data", (data: Buffer) => {
         received += data.length;
       });
-      channel.write(frame());
+      channel.write(
+        remote
+          ? frame(scope, [
+              "snapshot",
+              "record",
+              "events",
+              "approval-disposition",
+              "approval-disposition-v2",
+            ])
+          : frame(),
+      );
       const output = await result;
       expect(output.code).not.toBe(0);
       expect(output.stderr).toContain(error);
@@ -424,6 +485,20 @@ describe.skipIf(process.platform !== "linux")("native owner receiver", () => {
         digest,
         text,
       });
+      expect(requests).toEqual([
+        {
+          version: 1,
+          action: "proposal-chunk",
+          offset: 0,
+          proposal_digest: null,
+        },
+      ]);
+      const unsupported = await fetch(`${origin}/api/kernel/owner-review`, {
+        method: "POST",
+        headers: { ...headers, cookie },
+        body: JSON.stringify({ expires_at: "2000000000" }),
+      });
+      expect(unsupported.status).toBe(503);
       expect(requests).toEqual([
         {
           version: 1,
