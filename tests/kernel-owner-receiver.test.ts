@@ -312,6 +312,48 @@ describe.skipIf(process.platform !== "linux")("native owner receiver", () => {
     }
   });
 
+  it.each([
+    ["v1", undefined],
+    ["v2", ["snapshot", "record", "events"]],
+  ] as const)(
+    "refuses remote snapshot exposure from a read-only %s descriptor",
+    async (_version, operations) => {
+      for (const [bind, origin] of [
+        ["0.0.0.0", "https://127.0.0.1"],
+        ["127.0.0.1", "https://console.example.test"],
+      ] as const) {
+        const child = spawn(process.execPath, ["server/main.ts", "3"], {
+          cwd: appRoot,
+          env: {
+            ...env,
+            CONSOLE_KERNEL_OWNER: "1",
+            CONSOLE_KERNEL_OWNER_SCOPE: "program-1",
+            CONSOLE_KERNEL_OWNER_PRODUCER: "kernel-1",
+            CONSOLE_KERNEL_OWNER_RECIPIENT: "console-1",
+            CONSOLE_ORIGIN: origin,
+            CONSOLE_BIND_HOST: bind,
+            CONSOLE_TLS_KEY: join(temporary, "unused-key"),
+            CONSOLE_TLS_CERT: join(temporary, "unused-cert"),
+          },
+          stdio: ["ignore", "pipe", "pipe", "pipe"],
+        });
+        const result = collect(child);
+        const channel = child.stdio[3];
+        if (!channel || !("write" in channel))
+          throw new Error("Missing channel");
+        let sent = 0;
+        channel.on("data", (data: Buffer) => {
+          sent += data.length;
+        });
+        channel.write(frame("program-1", operations));
+        const output = await result;
+        expect(output.code).toBe(1);
+        expect(output.stderr).toContain("Kernel snapshots require loopback");
+        expect(sent).toBe(0);
+      }
+    },
+  );
+
   it("retains the inherited socket in the real entry point for authenticated reads", async () => {
     const dir = join(temporary, "startup-state");
     const assets = join(temporary, "startup-assets");

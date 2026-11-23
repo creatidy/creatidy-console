@@ -177,7 +177,7 @@ async function pair(
   });
   return { client, requests };
 }
-function proposal(size: number) {
+function proposal(size: number, scope = "program") {
   const subject = {
     origin: "https://example.test",
     repository: "a/b",
@@ -203,7 +203,7 @@ function proposal(size: number) {
     JSON.stringify({
       version: 1,
       kind: "ordinary-program-proposal",
-      program: "program",
+      program: scope,
       objective: "x".repeat(size),
       drafts: [
         {
@@ -375,6 +375,51 @@ it.each([
     expect((await channel.readSnapshot()).scope).toBe(scope);
     expect((await channel.readSnapshot()).history).toBe("continuous");
     expect(requests[2]?.after).toEqual(item.position);
+    channel.close();
+  },
+);
+
+it.each([false, true])(
+  "bounds populated progress at the maximum inline scope (gap: %s)",
+  async (gap) => {
+    const scope = "s".repeat(4094);
+    const producer = "a".repeat(32);
+    const item = {
+      ...snapshot(),
+      scope,
+      position: { producer, scope, sequence: 3 },
+    };
+    const raw = proposal(10, scope);
+    const digest = createHash("sha256").update(raw).digest("hex");
+    const events = Array.from({ length: 256 }, (_, i) => ({
+      position: { producer, scope, sequence: i + 4 },
+      kind: gap ? "resync-required" : "snapshot-changed",
+      revision: 4,
+    }));
+    const batch = (limit: number) =>
+      response({
+        events: events.slice(0, limit),
+        position: { producer, scope, sequence: gap ? 259 : 3 + limit },
+        gap,
+      });
+    expect(batch(256).readUInt32BE()).toBeGreaterThan(1024 * 1024);
+    const { client, requests } = await pair((socket, request) => {
+      if (request.action === "snapshot") socket.write(response(item));
+      else if (request.action === "events") {
+        const frame = batch(request.limit as number);
+        if (frame.readUInt32BE() > 1024 * 1024) socket.destroy();
+        else socket.write(frame);
+      } else socket.write(response(chunk(raw, 0, digest)));
+    });
+    const channel = createLocalOwnerTransport(client, scope);
+    expect((await channel.readSnapshot()).history).toBe("initial");
+    item.position.sequence = 259;
+    expect((await channel.readSnapshot()).history).toBe(
+      gap ? "gap" : "unknown",
+    );
+    expect(requests[2]?.limit).toBeLessThan(256);
+    expect((await channel.readProposal()).text).toBe(raw.toString());
+    expect(client.destroyed).toBe(false);
     channel.close();
   },
 );

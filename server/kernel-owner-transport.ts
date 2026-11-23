@@ -155,6 +155,14 @@ export function createLocalOwnerTransport(
   const encodedScope = kernelJsonString(scope);
   const cursorScope =
     encodedScope.length > 4096 ? `sha256:${ownerIdentityDigest(scope)}` : scope;
+  // Every event repeats the cursor. Reserve 512 bytes per event for its fixed
+  // fields and int64 positions/revisions, plus 8 KiB for the batch envelope.
+  const eventLimit = Math.min(
+    256,
+    Math.floor(
+      (RESPONSE_LIMIT - 8192) / (kernelJsonString(cursorScope).length + 512),
+    ),
+  );
   const close = () => {
     closed = true;
     socket.destroy();
@@ -716,7 +724,7 @@ export function createLocalOwnerTransport(
         if (lastPosition) {
           // Sequence is an int64; validated decimal text avoids JS rounding.
           const eventBody = Buffer.from(
-            `{"version":1,"action":"events","after":{"producer":${JSON.stringify(lastPosition.producer)},"scope":${JSON.stringify(lastPosition.scope)},"sequence":${lastPosition.sequence}},"limit":256}`,
+            `{"version":1,"action":"events","after":{"producer":${JSON.stringify(lastPosition.producer)},"scope":${JSON.stringify(lastPosition.scope)},"sequence":${lastPosition.sequence}},"limit":${eventLimit}}`,
           );
           const eventFrame = Buffer.alloc(eventBody.length + 4);
           eventFrame.writeUInt32BE(eventBody.length);
@@ -729,7 +737,7 @@ export function createLocalOwnerTransport(
             envelope.version !== 1 ||
             envelope.ok !== true ||
             !Array.isArray(batch.events) ||
-            batch.events.length > 256 ||
+            batch.events.length > eventLimit ||
             typeof batch.gap !== "boolean" ||
             typeof end.producer !== "string" ||
             !/^[0-9a-f]{32}$/.test(end.producer) ||

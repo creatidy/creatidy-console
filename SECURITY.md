@@ -65,11 +65,12 @@ installation and #12 conformance remain separate. No Kernel HTTP server,
 arbitrary dispatcher, browser-selected principal, active SQLite peer or new
 authentication system follows from this decision.
 
-Snapshot reads expose bounded work-unit, attempt, decision and correlation
-records and collection coverage, not full commands or complete history;
-oversized records are omitted. Opaque runtime handle values are not sent to the
-browser, and neither their presence nor absence proves effect settlement. Reads
-use the same supervisor provision and do not independently authenticate producer
+Snapshot reads require both a loopback listener and a loopback Console browser
+origin. They expose bounded work-unit, attempt, decision and correlation records
+and collection coverage, not full commands or complete history; oversized
+records are omitted. Opaque runtime handle values are not sent to the browser,
+and neither their presence nor absence proves effect settlement. Reads use the
+same supervisor provision and do not independently authenticate producer
 identity. Progress continuity is a bounded in-memory hint between observations;
 a snapshot cannot restore missing history, and a Console restart forgets the
 preceding observation.

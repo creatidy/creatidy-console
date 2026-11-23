@@ -1033,8 +1033,43 @@ it.skipIf(!existsSync(chrome))(
       await page
         .getByText("Last-known data follows; it may be stale.")
         .waitFor();
-      upstreamMode = "denied";
+      const beforeTimeouts = calls;
+      await page.evaluate(() => {
+        const original = window.fetch;
+        window.routerTimeouts = 0;
+        window.restoreRouterFetch = () => {
+          window.fetch = original;
+        };
+        window.fetch = (input, options) => {
+          if (input !== "/api/router/refresh") return original(input, options);
+          window.routerTimeouts++;
+          return new Promise((_, reject) => {
+            options.signal.addEventListener(
+              "abort",
+              () => reject(options.signal.reason),
+              { once: true },
+            );
+          });
+        };
+      });
       await page.getByRole("button", { name: "Refresh Router" }).click();
+      await page.waitForFunction(() => window.routerTimeouts === 1);
+      await page.clock.fastForward(10001);
+      await page
+        .getByText("Last-known data follows; it may be stale.")
+        .waitFor({ timeout: 3000 });
+      await page.getByText("m".repeat(64), { exact: false }).waitFor();
+      expect(calls).toBe(beforeTimeouts);
+      await page.getByRole("button", { name: "Refresh Router" }).click();
+      await page.waitForFunction(() => window.routerTimeouts === 2);
+      upstreamMode = "denied";
+      const denied = await page.request.post(`${origin}/api/router/refresh`, {
+        headers: { origin },
+        data: {},
+      });
+      expect((await denied.json()).status).toBe("denied");
+      const deniedCalls = calls;
+      await page.clock.fastForward(10001);
       await page
         .getByText(
           "Observer access was denied or revoked. Cached facts were cleared.",
@@ -1043,6 +1078,8 @@ it.skipIf(!existsSync(chrome))(
       expect(await page.getByText("resource-a", { exact: false }).count()).toBe(
         0,
       );
+      expect(calls).toBe(deniedCalls);
+      await page.evaluate(() => window.restoreRouterFetch());
       upstreamMode = "unsupported";
       await page.getByRole("button", { name: "Refresh Router" }).click();
       await page
