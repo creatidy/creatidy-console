@@ -549,9 +549,13 @@ describe("ported Model Intelligence workflow contract", () => {
       "Ordinals 1-10 remain counted",
       "only 11 and 12 could follow",
       "after this policy amendment is integrated into canonical `develop`",
-      "The current execution instructions prohibit review 11",
+      "That historical restriction is not a standing prohibition",
+      "Each later session must verify its own applicable higher-priority execution instructions",
     ])
       expect(policy).toContain(requirement);
+    expect(policy).not.toContain(
+      "The current execution instructions prohibit review 11",
+    );
     for (const path of [
       "AGENTS.md",
       ".kilo/rules/10-task-system.md",

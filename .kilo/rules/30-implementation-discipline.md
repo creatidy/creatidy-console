@@ -129,9 +129,11 @@ The reason is the actionable Unicode validation defect found at the review bound
 with no remaining fresh review slot. Ordinals 1-10 remain counted; only 11 and
 12 could follow. The requested exception can become effective only after this
 policy amendment is integrated into canonical `develop` and controlling
-instructions permit it. The current execution instructions prohibit review 11;
-this record is not permission to dispatch it or patch PR #39 in the current
-session.
+instructions permit it. In the pre-integration session documented above,
+higher-priority instructions prohibited review 11 and patching PR #39 without a
+fresh-review slot. That historical restriction is not a standing prohibition.
+Each later session must verify its own applicable higher-priority execution
+instructions before patching PR #39 or dispatching another review.
 
 Choose the smallest suitable existing mechanism, not Docker automatically:
 
