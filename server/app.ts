@@ -329,6 +329,7 @@ export async function createApp(options: AppOptions) {
     return {
       configured: Boolean(owner()),
       authenticated: signedIn,
+      ...(signedIn ? { kernelSnapshotStatus: snapshotStatus() } : {}),
       ...(miInspectionOrigin ? { miInspectionOrigin } : {}),
     };
   });

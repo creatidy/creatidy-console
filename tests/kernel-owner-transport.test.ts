@@ -310,6 +310,7 @@ it("reads a bounded snapshot without exposing command data", async () => {
     epoch: "a".repeat(32),
     sequence: "3",
     revision: "4",
+    specDigest: "b".repeat(64),
     startPage: 0,
     nextPage: null,
     status: "active",

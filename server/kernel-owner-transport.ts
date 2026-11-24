@@ -859,6 +859,7 @@ export function createLocalOwnerTransport(
           epoch: identity.epoch,
           sequence: identity.sequence,
           revision: identity.revision,
+          specDigest: identity.specDigest,
           status: identity.status,
           startPage,
           nextPage,

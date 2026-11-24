@@ -151,6 +151,11 @@ it.skipIf(!existsSync(chrome))(
       ]);
       expect(loginResponse.status()).toBe(200);
       await page.getByRole("heading", { name: "Your console" }).waitFor();
+      await page.getByRole("heading", { name: "Operator overview" }).waitFor();
+      await page
+        .getByText(/No supported local Kernel snapshot capability/)
+        .waitFor();
+      await page.getByText("No offline file inspected.").waitFor();
       const remote = await browser.newPage();
       const remoteOrigin = "https://console.example.invalid";
       const remoteUploads = [];
@@ -228,7 +233,10 @@ it.skipIf(!existsSync(chrome))(
         .getByText(/Selected files are sent to the authenticated local Console/)
         .waitFor();
       expect(
-        await page.locator("#mi-snapshot-heading + p code").textContent(),
+        await page
+          .locator('section[aria-labelledby="mi-snapshot-heading"] p code')
+          .first()
+          .textContent(),
       ).toBe(origin);
       await page
         .getByRole("heading", { name: "Kernel owner actions" })
@@ -653,6 +661,7 @@ it.skipIf(!existsSync(chrome))(
               epoch: "a".repeat(32),
               sequence: "3",
               revision: "4",
+              specDigest: "b".repeat(64),
               startPage: pageNumber,
               nextPage: { 0: 3, 3: 8, 8: 10 }[pageNumber] ?? null,
               status: "active",
@@ -660,10 +669,46 @@ it.skipIf(!existsSync(chrome))(
               counts: {
                 work_units: { sampled: pageNumber ? 1 : 24, total: 25 },
               },
-              workUnits: [[hostile, "pending", null, null], null],
-              attempts: [],
-              decisions: [],
-              correlations: [],
+              workUnits: [
+                [hostile, "pending", "Attempt-A", "satisfaction-id"],
+                null,
+              ],
+              attempts: [
+                ["Attempt-A", hostile, "prepared", "synthetic-actor"],
+                ["Attempt-B", "out-of-window", "prepared", "synthetic-actor"],
+              ],
+              decisions: [
+                {
+                  source: "product-review",
+                  status: "owner_decision_needed",
+                  applicability: "pending",
+                  attempt: "Attempt-A",
+                  decisionId: "exact-decision",
+                },
+                {
+                  source: "product-review-operation",
+                  status: "review_unknown",
+                  applicability: "pending",
+                  attempt: "attempt-a",
+                  decisionId: "unmatched-decision",
+                },
+                {
+                  source: "product-review",
+                  status: "owner_decision_needed",
+                  applicability: "historical",
+                  attempt: "Attempt-A",
+                  decisionId: "historical-decision",
+                },
+              ],
+              correlations: [
+                {
+                  attempt: "Attempt-A",
+                  workspaceReference: "file:///synthetic/local",
+                  candidateHead: "c".repeat(40),
+                  candidateScope: "candidate-scope",
+                  runtimeHandlePresent: true,
+                },
+              ],
               commandCoverage: { sampled: 0, total: 0, complete: true },
             },
           },
@@ -671,6 +716,36 @@ it.skipIf(!existsSync(chrome))(
       });
       expect(snapshotReads).toBe(0);
       await page.getByRole("button", { name: "Read snapshot" }).click();
+      await page.getByText(/Pending owner-decision records: 1\./).waitFor();
+      await page
+        .getByText(/Pending review records with an unknown outcome: 1\./)
+        .waitFor();
+      const lineage = page.getByText(
+        "Inspect Kernel lineage and recorded evidence",
+      );
+      const workUnitCoverage = page.getByText(
+        "work_units: 25 total; 24 sampled",
+      );
+      expect(await workUnitCoverage.isVisible()).toBe(false);
+      await lineage.press("Enter");
+      await page.getByText("exact-decision", { exact: true }).waitFor();
+      const linkedUnit = page
+        .getByRole("listitem")
+        .filter({ hasText: /^Work unit / });
+      expect(await linkedUnit.textContent()).toContain("exact-decision");
+      expect(await linkedUnit.textContent()).toContain("satisfaction-id");
+      expect(await linkedUnit.textContent()).not.toContain(
+        "unmatched-decision",
+      );
+      expect(await linkedUnit.textContent()).not.toContain("out-of-window");
+      await page.getByText("unmatched-decision", { exact: true }).waitFor();
+      await page.getByText(/Oversized records omitted: 1 work units/).waitFor();
+      expect(await page.locator('a[href^="file:"]').count()).toBe(0);
+      expect(
+        await page
+          .locator('section[aria-labelledby="kernel-snapshot-heading"] img')
+          .count(),
+      ).toBe(0);
       await page.getByText("work_units: 25 total; 24 sampled").waitFor();
       expect
         .soft(
@@ -682,6 +757,7 @@ it.skipIf(!existsSync(chrome))(
       expect(snapshotReads).toBe(1);
       expect(await page.evaluate(() => window.ownerInjected)).toBeUndefined();
       await page.getByRole("button", { name: "Next pages" }).click();
+      await lineage.press("Enter");
       await page.getByText("work_units: 25 total; 1 sampled").waitFor();
       await page
         .getByText("Showing up to eight pages starting at producer page 3.")
@@ -772,6 +848,7 @@ it.skipIf(!existsSync(chrome))(
       ).toBe(true);
       expect(await page.getByText("Sampled work units").count()).toBe(0);
       await page.getByRole("button", { name: "Read snapshot" }).click();
+      await lineage.press("Enter");
       await page.getByText("work_units: 25 total; 24 sampled").waitFor();
       await page.evaluate(async () => {
         window.releaseOldKernelCheck();
@@ -1232,6 +1309,12 @@ it.skipIf(!existsSync(chrome))(
         };
       });
       await page.getByRole("button", { name: "Refresh Router" }).click();
+      const routerObservation = page.getByText("Inspect Router observations");
+      await routerObservation.waitFor();
+      expect(
+        await page.getByText("m".repeat(64), { exact: false }).isVisible(),
+      ).toBe(false);
+      await routerObservation.press("Enter");
       await page.getByText("m".repeat(64), { exact: false }).waitFor();
       expect
         .soft(await page.getByText(/Last-known data follows/).count())
@@ -1458,6 +1541,7 @@ it.skipIf(!existsSync(chrome))(
         .getByLabel("Owner password", { exact: true })
         .fill("synthetic-owner-password");
       await page.getByRole("button", { name: "Sign in" }).click();
+      await routerObservation.press("Enter");
       await page.getByText("m".repeat(64), { exact: false }).waitFor();
       upstreamMode = "disconnected";
       await page.getByRole("button", { name: "Refresh Router" }).click();

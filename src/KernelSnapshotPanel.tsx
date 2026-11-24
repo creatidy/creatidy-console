@@ -1,39 +1,28 @@
 import { useEffect, useRef, useState } from "react";
-import type {
-  KernelCorrelation,
-  KernelDecision,
-} from "../server/kernel-owner-transport";
+import KernelLineage, { type Snapshot } from "./KernelLineage";
 
-type Snapshot = {
-  scope: string;
-  epoch: string;
-  sequence: string;
-  revision: string | null;
-  startPage: number;
-  nextPage: number | null;
-  status: string;
-  history: "initial" | "continuous" | "gap" | "unknown";
-  counts: Record<string, { sampled: number; total: number }>;
-  workUnits: ((string | null)[] | null)[];
-  attempts: ((string | null)[] | null)[];
-  decisions: (KernelDecision | null)[];
-  correlations: (KernelCorrelation | null)[];
-  commandCoverage: { sampled: number; total: number; complete: boolean };
-};
 type Window = Pick<Snapshot, "epoch" | "sequence" | "startPage" | "nextPage">;
 const disconnectedMessage = "The configured Kernel snapshot channel is closed.";
 
 export default function KernelSnapshotPanel({
   expired,
+  initialStatus,
 }: {
   expired: () => void;
+  initialStatus: "ready" | "unavailable" | "disconnected" | undefined;
 }) {
   const [snapshot, setSnapshot] = useState<Snapshot>();
   const [window, setWindow] = useState<Window>();
   const [previousWindows, setPreviousWindows] = useState<number[]>([]);
   const [visible, setVisible] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState("No snapshot requested.");
+  const [message, setMessage] = useState(
+    initialStatus === "unavailable"
+      ? "Optional. No supported local Kernel snapshot capability is configured for this connection."
+      : initialStatus === "disconnected"
+        ? disconnectedMessage
+        : "No snapshot requested. Read the local snapshot to inspect recorded work.",
+  );
   const generation = useRef(0);
   const active = useRef<AbortController | null>(null);
   const hasSnapshot = useRef(false);
@@ -259,124 +248,7 @@ export default function KernelSnapshotPanel({
       >
         Next pages
       </button>
-      {snapshot && visible && (
-        <>
-          <p>Scope: {snapshot.scope}</p>
-          <p>
-            Status: {snapshot.status}; program revision:{" "}
-            {snapshot.revision ?? "unavailable"}
-          </p>
-          <p>
-            Projection epoch: {snapshot.epoch}; sequence: {snapshot.sequence}.
-            This epoch is not a verified producer identity.
-          </p>
-          <p>
-            Counts are producer-reported snapshot coverage, not a complete event
-            history. Other collections and full command records are not
-            displayed.
-          </p>
-          <p>
-            Progress continuity for this descriptor: {snapshot.history}.
-            Progress is a bounded hint, not durable history; earlier gaps and
-            unknown intervals remain visible after later reads.
-          </p>
-          <ul>
-            {Object.entries(snapshot.counts).map(([name, count]) => (
-              <li key={name}>
-                {name}: {count.total} total; {count.sampled} sampled
-              </li>
-            ))}
-          </ul>
-          <p>
-            Showing up to eight pages starting at producer page{" "}
-            {snapshot.startPage}.
-          </p>
-          <h3>Sampled work units</h3>
-          <ul>
-            {snapshot.workUnits.map((row, index) => (
-              <li key={index}>
-                {row
-                  ? `${row[0]}: ${row[1]}; active attempt: ${row[2] ?? "unavailable"}; satisfaction: ${row[3] ?? "unavailable"}`
-                  : "Oversized record omitted."}
-              </li>
-            ))}
-          </ul>
-          <h3>Sampled attempts</h3>
-          <ul>
-            {snapshot.attempts.map((row, index) => (
-              <li key={index}>
-                {row
-                  ? `${row[0]}: ${row[2]}; work unit: ${row[1]}; actor: ${row[3]}`
-                  : "Oversized record omitted."}
-              </li>
-            ))}
-          </ul>
-          <h3>Recorded decisions</h3>
-          <p>
-            Kernel sampled {snapshot.commandCoverage.sampled} of{" "}
-            {snapshot.commandCoverage.total} command records. Decision records
-            are producer facts, not an action queue; a pending record does not
-            by itself require owner action.
-          </p>
-          <ul>
-            {snapshot.decisions.map((decision, index) => (
-              <li key={index}>
-                {decision ? (
-                  <>
-                    Source: {decision.source}; status:{" "}
-                    {decision.status || "(empty string)"}; applicability:{" "}
-                    {decision.applicability}; attempt:{" "}
-                    {decision.attempt ?? "unavailable"}.
-                    {decision.commandId !== undefined && (
-                      <> Command: {decision.commandId}.</>
-                    )}
-                    {decision.decisionId !== undefined && (
-                      <> Decision: {decision.decisionId}.</>
-                    )}
-                    {decision.reviewOperationId !== undefined && (
-                      <> Review operation: {decision.reviewOperationId}.</>
-                    )}
-                  </>
-                ) : (
-                  "Oversized decision omitted."
-                )}
-              </li>
-            ))}
-          </ul>
-          <h3>Kernel correlation facts</h3>
-          <p>
-            These are Kernel-provided references, not verified cross-product
-            joins or evidence that external effects settled. Opaque runtime
-            handles are not displayed.
-          </p>
-          <ul>
-            {snapshot.correlations.map((row, index) => (
-              <li key={index}>
-                {row ? (
-                  <>
-                    Attempt: {row.attempt}; workspace:{" "}
-                    {row.workspaceReference ?? "unavailable"}; candidate head:{" "}
-                    {row.candidateHead === ""
-                      ? "(empty string)"
-                      : (row.candidateHead ?? "unavailable")}
-                    ; candidate scope:{" "}
-                    {row.candidateScope === ""
-                      ? "(empty string)"
-                      : (row.candidateScope ?? "unavailable")}
-                    ; runtime handle:{" "}
-                    {row.runtimeHandlePresent
-                      ? "present, hidden"
-                      : "unavailable"}
-                    .
-                  </>
-                ) : (
-                  "Oversized correlation omitted."
-                )}
-              </li>
-            ))}
-          </ul>
-        </>
-      )}
+      {snapshot && <KernelLineage snapshot={snapshot} visible={visible} />}
     </section>
   );
 }
