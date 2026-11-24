@@ -182,22 +182,24 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
     };
   }, []);
 
+  const canRefresh =
+    view !== null &&
+    view.status !== "unconfigured" &&
+    view.status !== "configuration_error";
   return (
     <section aria-labelledby="router-heading">
       <h2 id="router-heading">Router observer</h2>
       {error && <p role="alert">{error}</p>}
       <button
         type="button"
-        disabled={
-          pending ||
-          view?.status === "unconfigured" ||
-          view?.status === "configuration_error"
-        }
-        onClick={() => void load(view !== null)}
+        aria-disabled={pending}
+        onClick={() => {
+          if (!pending) void load(canRefresh);
+        }}
       >
         {pending
           ? "Refreshing Router"
-          : view
+          : canRefresh
             ? "Refresh Router"
             : "Retry Router status"}
       </button>

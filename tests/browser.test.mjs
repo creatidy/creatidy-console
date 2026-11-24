@@ -616,10 +616,15 @@ it.skipIf(!existsSync(chrome))(
         '<img src=x onerror="window.ownerInjected=1">' + "x".repeat(2048);
       let snapshotReads = 0;
       const visitedPages = [];
+      let busyLaterPage = true;
       await page.route("**/api/kernel/snapshot", (route) => {
         snapshotReads++;
         const pageNumber = route.request().postDataJSON()?.page ?? 0;
         visitedPages.push(pageNumber);
+        if (pageNumber === 10 && busyLaterPage) {
+          busyLaterPage = false;
+          return route.fulfill({ json: { status: "busy" } });
+        }
         return route.fulfill({
           json: {
             status: "observed",
@@ -655,22 +660,37 @@ it.skipIf(!existsSync(chrome))(
         .getByText("Showing up to eight pages starting at producer page 3.")
         .waitFor();
       expect(snapshotReads).toBe(2);
-      for (const [button, pageNumber] of [
-        ["Next pages", 8],
-        ["Next pages", 10],
-        ["Previous pages", 8],
+      for (const [button, pageNumber, busy] of [
+        ["Next pages", 8, false],
+        ["Next pages", 10, true],
+        ["Next pages", 10, false],
+        ["Previous pages", 8, false],
       ]) {
         const sampled = page.waitForResponse(
           (response) => response.url().endsWith("/api/kernel/snapshot"),
           { timeout: 3000 },
         );
-        await page.getByRole("button", { name: button }).click();
+        const control = page.getByRole("button", { name: button });
+        await control.focus();
+        await control.press("Enter");
         await sampled;
         expect.soft(visitedPages.at(-1)).toBe(pageNumber);
-        await page
-          .getByText(/Showing up to eight pages starting at producer page/)
-          .waitFor();
+        if (busy) {
+          await page
+            .getByText(/Another snapshot read is in progress/)
+            .waitFor();
+        } else
+          await page
+            .getByText(/Showing up to eight pages starting at producer page/)
+            .waitFor();
+        expect
+          .soft(await page.evaluate(() => document.activeElement?.textContent))
+          .toBe(button);
       }
+      const previousPages = page.getByRole("button", {
+        name: "Previous pages",
+      });
+      await previousPages.focus();
       await page.evaluate(() => {
         const original = window.fetch.bind(window);
         let hold = true;
@@ -694,6 +714,10 @@ it.skipIf(!existsSync(chrome))(
       await page.waitForFunction(
         () => typeof window.releaseOldKernelCheck === "function",
       );
+      expect(
+        await previousPages.evaluate((node) => document.activeElement === node),
+      ).toBe(true);
+      expect(await page.getByText("Sampled work units").count()).toBe(0);
       await page.getByRole("button", { name: "Read snapshot" }).click();
       await page.getByText("work_units: 25 total; 24 sampled").waitFor();
       await page.evaluate(async () => {
@@ -1398,12 +1422,16 @@ it.skipIf(!existsSync(chrome))(
       );
       expect(calls).toBe(beforeInvalid);
       writeFileSync(configPath, validConfig);
-      await page.reload();
+      const retryConfig = page.getByRole("button", {
+        name: "Retry Router status",
+      });
+      await retryConfig.click();
       await page
         .getByText(
           "Configured, but not yet observed. Refresh to request a snapshot.",
         )
         .waitFor();
+      expect(calls).toBe(beforeInvalid);
       upstreamMode = "unsupported";
       await page.getByRole("button", { name: "Refresh Router" }).click();
       await page

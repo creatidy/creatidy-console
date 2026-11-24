@@ -20,6 +20,7 @@ type Snapshot = {
   correlations: (KernelCorrelation | null)[];
   commandCoverage: { sampled: number; total: number; complete: boolean };
 };
+type Window = Pick<Snapshot, "epoch" | "sequence" | "startPage" | "nextPage">;
 
 export default function KernelSnapshotPanel({
   expired,
@@ -27,6 +28,7 @@ export default function KernelSnapshotPanel({
   expired: () => void;
 }) {
   const [snapshot, setSnapshot] = useState<Snapshot>();
+  const [window, setWindow] = useState<Window>();
   const [previousWindows, setPreviousWindows] = useState<number[]>([]);
   const [visible, setVisible] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -39,8 +41,10 @@ export default function KernelSnapshotPanel({
     const hide = () => {
       generation.current++;
       active.current?.abort();
+      active.current = null;
       hasSnapshot.current = false;
       setSnapshot(undefined);
+      setWindow(undefined);
       setPreviousWindows([]);
       setVisible(false);
       setLoading(false);
@@ -53,10 +57,15 @@ export default function KernelSnapshotPanel({
     };
     document.addEventListener("visibilitychange", visibility);
     const timer = setInterval(async () => {
-      if (document.visibilityState !== "visible" || !hasSnapshot.current)
+      if (
+        document.visibilityState !== "visible" ||
+        !hasSnapshot.current ||
+        active.current
+      )
         return;
       const current = generation.current;
       const controller = new AbortController();
+      active.current = controller;
       const deadline = setTimeout(() => controller.abort(), 5000);
       setVisible(false);
       try {
@@ -83,6 +92,7 @@ export default function KernelSnapshotPanel({
         if (current === generation.current) hide();
       } finally {
         clearTimeout(deadline);
+        if (active.current === controller) active.current = null;
       }
     }, 10000);
     return () => {
@@ -93,10 +103,11 @@ export default function KernelSnapshotPanel({
   }, []);
 
   async function refresh(page?: number, backwards = false) {
+    if (loading || document.visibilityState !== "visible") return;
     const selection =
-      page === undefined || !snapshot
+      page === undefined || !window
         ? {}
-        : { page, epoch: snapshot.epoch, sequence: snapshot.sequence };
+        : { page, epoch: window.epoch, sequence: window.sequence };
     generation.current++;
     active.current?.abort();
     const current = generation.current;
@@ -105,7 +116,11 @@ export default function KernelSnapshotPanel({
     const deadline = setTimeout(() => controller.abort(), 10000);
     hasSnapshot.current = false;
     setSnapshot(undefined);
-    if (page === undefined) setPreviousWindows([]);
+    function resetWindow() {
+      setWindow(undefined);
+      setPreviousWindows([]);
+    }
+    if (page === undefined) resetWindow();
     setVisible(false);
     setMessage("Reading a bounded snapshot.");
     setLoading(true);
@@ -127,7 +142,7 @@ export default function KernelSnapshotPanel({
       )
         return;
       if (result.status !== "observed") {
-        if (result.status === "resync-required") setPreviousWindows([]);
+        if (result.status !== "busy") resetWindow();
         setMessage(
           result.status === "resync-required"
             ? "The snapshot changed during the read. Request a fresh snapshot; the missed interval remains unknown."
@@ -156,28 +171,39 @@ export default function KernelSnapshotPanel({
       const next = result.snapshot as Snapshot;
       if (
         page !== undefined &&
-        snapshot &&
-        next.epoch === snapshot.epoch &&
-        next.sequence === snapshot.sequence
+        window &&
+        next.epoch === window.epoch &&
+        next.sequence === window.sequence
       ) {
         setPreviousWindows((windows) =>
           backwards
             ? windows.slice(0, -1)
-            : [...windows.slice(-255), snapshot.startPage],
+            : [...windows.slice(-255), window.startPage],
         );
       } else {
         setPreviousWindows([]);
       }
       setSnapshot(next);
+      setWindow({
+        epoch: next.epoch,
+        sequence: next.sequence,
+        startPage: next.startPage,
+        nextPage: next.nextPage,
+      });
       hasSnapshot.current = true;
       setVisible(true);
       setMessage("Snapshot observed. It may have changed since this read.");
     } catch {
-      if (current === generation.current)
+      if (current === generation.current) {
+        resetWindow();
         setMessage("Kernel snapshot unavailable.");
+      }
     } finally {
       clearTimeout(deadline);
-      if (current === generation.current) setLoading(false);
+      if (current === generation.current) {
+        active.current = null;
+        setLoading(false);
+      }
     }
   }
 
@@ -187,6 +213,25 @@ export default function KernelSnapshotPanel({
       <p role="status">{message}</p>
       <button type="button" disabled={loading} onClick={() => void refresh()}>
         Read snapshot
+      </button>
+      <button
+        type="button"
+        aria-disabled={loading || previousWindows.length === 0}
+        onClick={() => {
+          const previous = previousWindows.at(-1);
+          if (previous !== undefined) void refresh(previous, true);
+        }}
+      >
+        Previous pages
+      </button>
+      <button
+        type="button"
+        aria-disabled={loading || window?.nextPage == null}
+        onClick={() => {
+          if (window?.nextPage != null) void refresh(window.nextPage);
+        }}
+      >
+        Next pages
       </button>
       {snapshot && visible && (
         <>
@@ -220,25 +265,6 @@ export default function KernelSnapshotPanel({
             Showing up to eight pages starting at producer page{" "}
             {snapshot.startPage}.
           </p>
-          <button
-            type="button"
-            onClick={() => {
-              const previous = previousWindows.at(-1);
-              if (previous !== undefined) void refresh(previous, true);
-            }}
-            disabled={loading || previousWindows.length === 0}
-          >
-            Previous pages
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              if (snapshot.nextPage !== null) void refresh(snapshot.nextPage);
-            }}
-            disabled={loading || snapshot.nextPage === null}
-          >
-            Next pages
-          </button>
           <h3>Sampled work units</h3>
           <ul>
             {snapshot.workUnits.map((row, index) => (
