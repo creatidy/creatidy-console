@@ -27,6 +27,7 @@ export default function KernelSnapshotPanel({
   expired: () => void;
 }) {
   const [snapshot, setSnapshot] = useState<Snapshot>();
+  const [previousWindows, setPreviousWindows] = useState<number[]>([]);
   const [visible, setVisible] = useState(false);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("No snapshot requested.");
@@ -40,6 +41,7 @@ export default function KernelSnapshotPanel({
       active.current?.abort();
       hasSnapshot.current = false;
       setSnapshot(undefined);
+      setPreviousWindows([]);
       setVisible(false);
       setLoading(false);
       setMessage(
@@ -90,7 +92,7 @@ export default function KernelSnapshotPanel({
     };
   }, []);
 
-  async function refresh(page?: number) {
+  async function refresh(page?: number, backwards = false) {
     const selection =
       page === undefined || !snapshot
         ? {}
@@ -103,6 +105,7 @@ export default function KernelSnapshotPanel({
     const deadline = setTimeout(() => controller.abort(), 10000);
     hasSnapshot.current = false;
     setSnapshot(undefined);
+    if (page === undefined) setPreviousWindows([]);
     setVisible(false);
     setMessage("Reading a bounded snapshot.");
     setLoading(true);
@@ -124,6 +127,7 @@ export default function KernelSnapshotPanel({
       )
         return;
       if (result.status !== "observed") {
+        if (result.status === "resync-required") setPreviousWindows([]);
         setMessage(
           result.status === "resync-required"
             ? "The snapshot changed during the read. Request a fresh snapshot; the missed interval remains unknown."
@@ -149,7 +153,22 @@ export default function KernelSnapshotPanel({
         controller.signal.aborted
       )
         return;
-      setSnapshot(result.snapshot as Snapshot);
+      const next = result.snapshot as Snapshot;
+      if (
+        page !== undefined &&
+        snapshot &&
+        next.epoch === snapshot.epoch &&
+        next.sequence === snapshot.sequence
+      ) {
+        setPreviousWindows((windows) =>
+          backwards
+            ? windows.slice(0, -1)
+            : [...windows.slice(-255), snapshot.startPage],
+        );
+      } else {
+        setPreviousWindows([]);
+      }
+      setSnapshot(next);
       hasSnapshot.current = true;
       setVisible(true);
       setMessage("Snapshot observed. It may have changed since this read.");
@@ -203,8 +222,11 @@ export default function KernelSnapshotPanel({
           </p>
           <button
             type="button"
-            onClick={() => void refresh(Math.max(0, snapshot.startPage - 8))}
-            disabled={loading || snapshot.startPage === 0}
+            onClick={() => {
+              const previous = previousWindows.at(-1);
+              if (previous !== undefined) void refresh(previous, true);
+            }}
+            disabled={loading || previousWindows.length === 0}
           >
             Previous pages
           </button>

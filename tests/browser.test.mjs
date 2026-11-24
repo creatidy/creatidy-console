@@ -615,9 +615,11 @@ it.skipIf(!existsSync(chrome))(
       const hostile =
         '<img src=x onerror="window.ownerInjected=1">' + "x".repeat(2048);
       let snapshotReads = 0;
+      const visitedPages = [];
       await page.route("**/api/kernel/snapshot", (route) => {
         snapshotReads++;
         const pageNumber = route.request().postDataJSON()?.page ?? 0;
+        visitedPages.push(pageNumber);
         return route.fulfill({
           json: {
             status: "observed",
@@ -627,7 +629,7 @@ it.skipIf(!existsSync(chrome))(
               sequence: "3",
               revision: "4",
               startPage: pageNumber,
-              nextPage: pageNumber === 0 ? 3 : null,
+              nextPage: { 0: 3, 3: 8, 8: 10 }[pageNumber] ?? null,
               status: "active",
               history: "initial",
               counts: {
@@ -653,6 +655,22 @@ it.skipIf(!existsSync(chrome))(
         .getByText("Showing up to eight pages starting at producer page 3.")
         .waitFor();
       expect(snapshotReads).toBe(2);
+      for (const [button, pageNumber] of [
+        ["Next pages", 8],
+        ["Next pages", 10],
+        ["Previous pages", 8],
+      ]) {
+        const sampled = page.waitForResponse(
+          (response) => response.url().endsWith("/api/kernel/snapshot"),
+          { timeout: 3000 },
+        );
+        await page.getByRole("button", { name: button }).click();
+        await sampled;
+        expect.soft(visitedPages.at(-1)).toBe(pageNumber);
+        await page
+          .getByText(/Showing up to eight pages starting at producer page/)
+          .waitFor();
+      }
       await page.evaluate(() => {
         const original = window.fetch.bind(window);
         let hold = true;
@@ -1096,7 +1114,25 @@ it.skipIf(!existsSync(chrome))(
         )
         .waitFor();
       expect(calls).toBe(0);
+      await page.evaluate(() => {
+        const actualFetch = window.fetch;
+        window.fetch = async (input, options) => {
+          const response = await actualFetch(input, options);
+          if (input === "/api/router/refresh") {
+            await response.json();
+            window.fetch = actualFetch;
+            throw new Error("Synthetic lost first refresh reply");
+          }
+          return response;
+        };
+      });
       await page.getByRole("button", { name: "Refresh Router" }).click();
+      await page.getByText("m".repeat(64), { exact: false }).waitFor();
+      expect
+        .soft(await page.getByText(/Last-known data follows/).count())
+        .toBe(0);
+      if (await page.getByText(/Last-known data follows/).count())
+        await page.getByRole("button", { name: "Refresh Router" }).click();
       await page
         .getByText(
           "Last Router refresh succeeded. Connectivity and freshness are not continuously monitored; observations are not admission guarantees.",
@@ -1127,6 +1163,41 @@ it.skipIf(!existsSync(chrome))(
         ),
       ).not.toContain(key);
       const observedCalls = calls;
+      const refreshControl = page.getByRole("button", {
+        name: "Refresh Router",
+      });
+      await page.evaluate(() => {
+        const fetch = window.fetch;
+        window.routerPassiveCheckHeld = false;
+        window.fetch = (...args) =>
+          args[0] === "/api/kernel/session-check"
+            ? new Promise((resolve) => {
+                window.routerPassiveCheckHeld = true;
+                window.releaseRouterPassiveCheck = () => {
+                  window.fetch = fetch;
+                  resolve(fetch(...args));
+                };
+              })
+            : fetch(...args);
+      });
+      await refreshControl.focus();
+      await page.clock.fastForward(10000);
+      await page.waitForFunction(() => window.routerPassiveCheckHeld);
+      expect
+        .soft(await page.evaluate(() => document.activeElement.textContent))
+        .toBe("Refresh Router");
+      expect(await page.getByText("resource-a", { exact: false }).count()).toBe(
+        0,
+      );
+      await page.evaluate(() => window.releaseRouterPassiveCheck());
+      await page.getByText("m".repeat(64), { exact: false }).waitFor();
+      expect
+        .soft(
+          await refreshControl.evaluate(
+            (node) => document.activeElement === node,
+          ),
+        )
+        .toBe(true);
       await page.route("**/api/kernel/session-check", (route) =>
         route.abort("failed"),
       );

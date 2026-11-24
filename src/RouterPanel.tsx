@@ -89,7 +89,9 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
       if (!currentRequest() || !next) return;
       if (refresh)
         uncertainObservation.current = refreshFailed
-          ? (previousObservation ?? next.observation)
+          ? previousObservation === undefined
+            ? next.observation
+            : previousObservation
           : null;
       if (!next.facts || next.observation !== uncertainObservation.current)
         uncertainObservation.current = null;
@@ -184,13 +186,23 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
     <section aria-labelledby="router-heading">
       <h2 id="router-heading">Router observer</h2>
       {error && <p role="alert">{error}</p>}
+      <button
+        type="button"
+        disabled={
+          pending ||
+          view?.status === "unconfigured" ||
+          view?.status === "configuration_error"
+        }
+        onClick={() => void load(view !== null)}
+      >
+        {pending
+          ? "Refreshing Router"
+          : view
+            ? "Refresh Router"
+            : "Retry Router status"}
+      </button>
       {!view || !visible ? (
-        <>
-          <p>Checking connection configuration and session.</p>
-          <button type="button" disabled={pending} onClick={() => void load()}>
-            Retry Router status
-          </button>
-        </>
+        <p>Checking connection configuration and session.</p>
       ) : (
         <>
           <p role="status">{descriptions[view.status]}</p>
@@ -202,17 +214,6 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
           )}
           {view.gap && <p role="status">{view.gap}</p>}
           {view.last_known && <p>Last-known data follows; it may be stale.</p>}
-          <button
-            type="button"
-            disabled={
-              pending ||
-              view.status === "unconfigured" ||
-              view.status === "configuration_error"
-            }
-            onClick={() => void load(true)}
-          >
-            {pending ? "Refreshing Router" : "Refresh Router"}
-          </button>
           {view.facts && (
             <>
               <h3>Resources</h3>
