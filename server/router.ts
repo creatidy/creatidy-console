@@ -14,6 +14,7 @@ type RouterStatus =
   | "unsupported"
   | "configuration_error";
 class Unsupported extends Error {}
+export class RouterRefreshBusy extends Error {}
 
 function parseObserverJson(source: string): unknown {
   const json = JSON as JSON & { rawJSON: (source: string) => unknown };
@@ -366,10 +367,7 @@ export function createRouterObserver(directory: string) {
     if (pending) {
       if (pending.generation === configurationGeneration)
         return await pending.promise;
-      const previous = pending;
-      await previous.promise;
-      if (pending === previous) pending = null;
-      return await refresh();
+      throw new RouterRefreshBusy();
     }
     const generation = configurationGeneration;
     const active = refreshOnce(config, generation);

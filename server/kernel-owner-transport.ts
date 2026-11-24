@@ -820,19 +820,22 @@ export function createLocalOwnerTransport(
           )
             throw new Error("Invalid progress position");
           if (batch.gap) priorHistoryGap = true;
-          if (
-            selection &&
-            (end.producer !== identity.epoch ||
-              BigInt(end.sequence) !== BigInt(identity.sequence))
-          ) {
+          const sequence = BigInt(end.sequence);
+          const sampled = BigInt(identity.sequence);
+          const mismatch =
+            end.producer !== identity.epoch || sequence !== sampled;
+          // A full, non-gap batch can stop at the last delivered hint, before
+          // the producer's actual high-water mark. It cannot disprove the cut.
+          const truncated =
+            !batch.gap &&
+            end.producer === identity.epoch &&
+            sequence < sampled &&
+            batch.events.length === eventLimit;
+          if (selection && mismatch && !truncated) {
             priorHistoryGap = true;
             throw new SnapshotChanged("Snapshot changed during pagination");
           }
-          if (
-            end.producer !== identity.epoch ||
-            BigInt(end.sequence) !== BigInt(identity.sequence)
-          )
-            priorHistoryUnknown = true;
+          if (mismatch) priorHistoryUnknown = true;
           history = priorHistoryGap
             ? "gap"
             : priorHistoryUnknown

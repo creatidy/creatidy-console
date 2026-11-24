@@ -782,6 +782,97 @@ it("distinguishes bounded continuity from a persistent progress gap", async () =
   channel.close();
 });
 
+it.each(["truncated", "advanced", "gap"] as const)(
+  "classifies a %s progress batch after a slow snapshot",
+  async (mode) => {
+    const scope = "p".repeat(4000);
+    const producer = "a".repeat(32);
+    const position = (sequence: number) => ({ producer, scope, sequence });
+    let slow = false;
+    const { client } = await pair((socket, request) => {
+      if (request.action === "snapshot") {
+        const item = {
+          ...snapshot(),
+          scope,
+          position: position(slow ? 253 : 3),
+        };
+        item.page = Number(request.page ?? 0);
+        if (slow && item.page < 2) {
+          vi.advanceTimersByTime(600);
+          item.work_units = Array.from({ length: 8 }, (_, i) => [
+            `work-${item.page * 8 + i}`,
+            "ready",
+            null,
+            null,
+          ]);
+          item.coverage.work_units = [item.page * 8, 16, item.page === 1];
+        }
+        socket.write(response(item));
+      } else {
+        const { sequence } = request.after as { sequence: number };
+        if (sequence === 3) {
+          const count = Number(request.limit);
+          expect(count).toBeLessThan(250);
+          socket.write(
+            response({
+              events:
+                mode === "gap"
+                  ? []
+                  : Array.from({ length: count }, (_, i) => ({
+                      position: position(4 + i),
+                      kind: "snapshot-changed",
+                      revision: 4,
+                    })),
+              position: position(mode === "gap" ? 253 : 3 + count),
+              gap: mode === "gap",
+            }),
+          );
+        } else {
+          socket.write(
+            response({
+              events: [
+                {
+                  position: position(254),
+                  kind: "snapshot-changed",
+                  revision: 4,
+                },
+              ],
+              position: position(254),
+              gap: false,
+            }),
+          );
+        }
+      }
+    });
+    const channel = createTransport(client, scope, 1000, [
+      "snapshot",
+      "events",
+    ]);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    try {
+      expect((await channel.readSnapshot()).history).toBe("initial");
+      slow = true;
+      expect(await channel.readSnapshot()).toMatchObject({
+        history: "unknown",
+        sequence: "253",
+      });
+      const selected = { page: 2, epoch: producer, sequence: "253" };
+      expect(await channel.readSnapshot(selected)).toMatchObject({
+        history: mode === "gap" ? "gap" : "unknown",
+        sequence: "253",
+        startPage: 2,
+      });
+      if (mode === "advanced")
+        await expect(channel.readSnapshot(selected)).rejects.toThrow(
+          "Snapshot changed during pagination",
+        );
+    } finally {
+      vi.useRealTimers();
+      channel.close();
+    }
+  },
+);
+
 it("retains exact int64 event positions without JavaScript rounding", async () => {
   const sequence = "9007199254740993";
   function send(socket: Socket, result: unknown) {

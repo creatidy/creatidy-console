@@ -684,7 +684,7 @@ describe("Router observer", () => {
     }
   });
 
-  it("refreshes a changed configuration after an older request completes", async () => {
+  it("requires an explicit retry for a changed configuration behind an older request", async () => {
     const oldSource = await upstream();
     const newSource = await upstream();
     newSource.setModel("new-model");
@@ -702,11 +702,12 @@ describe("Router observer", () => {
         ),
       ]);
       writeConfig(dir, newSource.origin);
-      const newRefresh = observer.refresh();
+      await expect(observer.refresh()).rejects.toThrow();
       expect(newSource.calls).toHaveLength(0);
       oldSource.release();
       await oldRefresh;
-      const result = await newRefresh;
+      expect(newSource.calls).toHaveLength(0);
+      const result = await observer.refresh();
       expect(result.status).toBe("connected");
       expect(result.origin).toBe(newSource.origin);
       expect(result.facts?.resources[0]?.identity.model).toBe("new-model");
@@ -757,13 +758,14 @@ describe("Router observer", () => {
           .soft(observer.view())
           .toMatchObject({ status: expected, facts: null });
         const callsBeforeReplacementRefresh = fixture.calls.length;
-        const replacement = configured ? observer.refresh() : null;
+        if (configured) await expect(observer.refresh()).rejects.toThrow();
         fixture.release();
         const result = await pending;
         expect.soft(result.status).toBe(expected);
         expect.soft(result.facts).toBeNull();
-        if (replacement) {
-          expect((await replacement).status).toBe("connected");
+        if (configured) {
+          expect(fixture.calls).toHaveLength(callsBeforeReplacementRefresh);
+          expect((await observer.refresh()).status).toBe("connected");
           expect(
             fixture.calls
               .slice(callsBeforeReplacementRefresh)
@@ -991,8 +993,9 @@ describe("Router observer", () => {
     }
   });
 
-  it("does not return an in-flight observation after session logout", async () => {
+  it("does not return an in-flight observation or queue replacement work across logout", async () => {
     const fixture = await upstream();
+    const replacement = await upstream();
     const dir = directory();
     const state = openState(dir);
     state.db
@@ -1010,6 +1013,15 @@ describe("Router observer", () => {
       stateDirectory: dir,
       staticDirectory: assets,
       origin,
+    });
+    let admit!: () => void;
+    const arrived = new Promise<void>((resolve) => {
+      admit = resolve;
+    });
+    let refreshes = 0;
+    app.addHook("preHandler", async (request) => {
+      if (request.url === "/api/router/refresh" && ++refreshes === 3)
+        setImmediate(admit);
     });
     try {
       const login = await app.inject({
@@ -1042,6 +1054,14 @@ describe("Router observer", () => {
           setTimeout(() => reject(new Error("Fixture timed out")), 3000),
         ),
       ]);
+      writeConfig(dir, replacement.origin);
+      const contended = app.inject({
+        method: "POST",
+        url: "/api/router/refresh",
+        headers: { ...headers, cookie },
+        payload: {},
+      });
+      await arrived;
       expect(
         (
           await app.inject({
@@ -1054,6 +1074,8 @@ describe("Router observer", () => {
       ).toBe(200);
       fixture.release();
       const result = await pending;
+      expect.soft((await contended).statusCode).toBe(503);
+      expect(replacement.calls).toHaveLength(0);
       expect(result.statusCode).toBe(401);
       expect(result.body).not.toContain("model-a");
     } finally {

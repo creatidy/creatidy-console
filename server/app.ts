@@ -9,7 +9,7 @@ import { join, resolve } from "node:path";
 import { createRequire } from "node:module";
 import { isLoopbackListener, isLoopbackOrigin } from "./loopback.ts";
 import { openState } from "./state.ts";
-import { createRouterObserver } from "./router.ts";
+import { createRouterObserver, RouterRefreshBusy } from "./router.ts";
 import { inspectEmptyMiSnapshot } from "./mi-empty-snapshot.ts";
 import {
   compareMiPublications,
@@ -458,7 +458,14 @@ export async function createApp(options: AppOptions) {
   app.post("/api/router/refresh", async (request, reply) => {
     if (!(await authenticated(request)))
       return reply.code(401).send({ error: "Login required" });
-    await routerObserver.refresh();
+    if (reply.raw.destroyed || request.raw.socket.destroyed) return reply;
+    try {
+      await routerObserver.refresh();
+    } catch (error) {
+      if (error instanceof RouterRefreshBusy)
+        return reply.code(503).send({ error: "Router refresh busy" });
+      throw error;
+    }
     if (!(await authenticated(request)))
       return reply.code(401).send({ error: "Login required" });
     return routerObserver.view();

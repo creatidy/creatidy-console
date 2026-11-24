@@ -23,6 +23,7 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
   >(null);
   const [activity, setActivity] = useState<"read" | "refresh" | null>(null);
   const [readFailed, setReadFailed] = useState(false);
+  const [refreshBusy, setRefreshBusy] = useState(false);
   const active = useRef<AbortController | null>(null);
   // Only a previously accepted observation can be mistaken for a new one.
   const uncertainObservation = useRef<string | null>(null);
@@ -61,6 +62,11 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
           controller.abort();
           return null;
         }
+        if (post && response.status === 503) {
+          setRefreshBusy(true);
+          await response.body?.cancel();
+          return null;
+        }
         if (!response.ok) throw new Error();
         if (!post) {
           const result = (await response.json()) as RouterView;
@@ -77,6 +83,7 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
     setActivity(refresh ? "refresh" : "read");
     try {
       if (refresh) {
+        setRefreshBusy(false);
         // Keep the baseline even if the POST is interrupted, or the cache
         // cannot be read afterwards. Only producer evidence can resolve it.
         uncertainObservation.current = view?.observation ?? null;
@@ -151,6 +158,12 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
         <p role="alert">
           Console could not retrieve Router status. Check the application
           connection.
+        </p>
+      )}
+      {refreshBusy && (
+        <p role="status">
+          An earlier Router refresh is still finishing. Retry the refresh to
+          read the new configuration.
         </p>
       )}
       <button

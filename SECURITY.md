@@ -88,10 +88,12 @@ observation stays last known even when a later cache check succeeds. The cache
 read does not contact the producer or confirm ongoing producer authorization. It
 reflects denials or configuration changes known to Console when it takes that
 view; changes after that point, including during delivery to another tab, are
-detected on a later check. This does not erase data already seen or copied by
-the user. The non-touch check uses the pinned `@fastify/session` internal cookie
-decoder and store generation verification; revalidate that coupling when the
-session dependency changes.
+detected on a later check. A refresh for a replaced configuration must be
+retried explicitly if the preceding refresh is still finishing; Console does not
+enqueue a later producer request on the session's behalf. This does not erase
+data already seen or copied by the user. The non-touch check uses the pinned
+`@fastify/session` internal cookie decoder and store generation verification;
+revalidate that coupling when the session dependency changes.
 
 Same-origin Console windows also send a payload-free BroadcastChannel signal
 after logout or an authentication denial, causing other windows to discard their

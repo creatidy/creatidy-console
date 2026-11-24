@@ -418,8 +418,10 @@ from the first unsampled page; a stalled in-flight frame still closes the
 descriptor. Navigation retains the observed epoch and sequence and requires
 resynchronization when that position changes. Oversized records are explicitly
 omitted. Progress state is process-local: gaps and unknown intervals remain
-visible and a new snapshot does not restore missing history. These synthetic
-checks are not installed/live Kernel conformance or verified producer identity.
+visible and a new snapshot does not restore missing history. A limit-truncated
+batch behind a matching cut leaves continuity unknown without invalidating the
+sampled page. These synthetic checks are not installed/live Kernel conformance
+or verified producer identity.
 
 One isolated source-checkout exercise used 512 synthetic work units and 300
 test-injected progress hints against that Kernel revision. Console retained 64
