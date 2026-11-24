@@ -20,14 +20,16 @@ are not evidence of an installed Router connection, and the UI does not simulate
 healthy resources.
 
 An optional Linux supervisor-launched Kernel channel supports authenticated
-inspection of a digest-verified proposal and a reviewed, revision-bound approve
-command when independently provisioned Kernel authority is present. Default
-startup has no Kernel capability; other owner actions are unsupported. A
-historical receipt is not a current grant or proof of effect. A lost reply
-remains unknown unless the supervisor-bound read-only lookup proves the exact
-historical receipt or a terminal refusal. Real live mutation requires separate
-owner authorization. Synthetic tests do not prove an installed or live producer
-connection; #11 installation and #12 conformance gates remain open.
+inspection of a digest-verified proposal and bounded snapshot facts. A reviewed,
+revision-bound approve command requires independently provisioned Kernel
+authority. Default startup has no Kernel capability; other owner actions are
+unsupported. A historical receipt is not a current grant or proof of effect. A
+lost reply remains unknown unless the supervisor-bound read-only lookup proves
+the exact historical receipt or a terminal refusal. Real live mutation requires
+separate owner authorization. Synthetic tests do not prove an installed or live
+producer connection; #11 installation and #12 conformance gates remain open. MI
+offline files can be inspected as untrusted evidence without connecting to MI or
+activating a publication.
 
 Console presents producer-owned facts and delivers authorized commands to their
 owners. It is not a scheduler, harness, inference gateway, model catalog, shared

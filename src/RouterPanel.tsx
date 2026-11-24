@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import type { RouterView } from "../server/router.ts";
 
 const descriptions: Record<RouterView["status"], string> = {
@@ -18,60 +18,176 @@ const descriptions: Record<RouterView["status"], string> = {
 };
 
 export default function RouterPanel({ expired }: { expired: () => void }) {
-  const [view, setView] = useState<RouterView | null>(null);
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState("");
+  const [view, setView] = useState<
+    (RouterView & { refreshUnconfirmed: boolean }) | null
+  >(null);
+  const [activity, setActivity] = useState<"read" | "refresh" | null>(null);
+  const [readFailed, setReadFailed] = useState(false);
+  const [refreshBusy, setRefreshBusy] = useState(false);
+  const active = useRef<AbortController | null>(null);
+  // Only a previously accepted observation can be mistaken for a new one.
+  const uncertainObservation = useRef<string | null>(null);
 
   async function load(refresh = false) {
-    if (refresh) setPending(true);
-    try {
-      const response = await fetch(
-        refresh ? "/api/router/refresh" : "/api/router",
-        refresh
-          ? {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: "{}",
-            }
-          : { cache: "no-store" },
-      );
-      if (response.status === 401) {
-        expired();
-        return;
+    if (document.visibilityState !== "visible") return;
+    active.current?.abort();
+    const controller = new AbortController();
+    active.current = controller;
+    const applicable = () =>
+      active.current === controller && document.visibilityState === "visible";
+    const request = async (post = false) => {
+      const deadline = new AbortController();
+      const timer = setTimeout(() => deadline.abort(), post ? 10000 : 5000);
+      const signal = AbortSignal.any([controller.signal, deadline.signal]);
+      try {
+        const response = await fetch(
+          post ? "/api/router/refresh" : "/api/router",
+          {
+            cache: "no-store",
+            signal,
+            ...(post
+              ? {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: "{}",
+                }
+              : {}),
+          },
+        );
+        if (!applicable()) return null;
+        signal.throwIfAborted();
+        if (response.status === 401) {
+          setView(null);
+          expired();
+          controller.abort();
+          return null;
+        }
+        if (post && response.status === 503) {
+          setRefreshBusy(true);
+          await response.body?.cancel();
+          return null;
+        }
+        if (!response.ok) throw new Error();
+        if (!post) {
+          const result = (await response.json()) as RouterView;
+          signal.throwIfAborted();
+          return result;
+        }
+        // The POST result is never a publication source.
+        await response.body?.cancel();
+        return null;
+      } finally {
+        clearTimeout(timer);
       }
-      if (!response.ok) throw new Error();
-      setView((await response.json()) as RouterView);
-      setError("");
+    };
+    setActivity(refresh ? "refresh" : "read");
+    try {
+      if (refresh) {
+        setRefreshBusy(false);
+        // Keep the baseline even if the POST is interrupted, or the cache
+        // cannot be read afterwards. Only producer evidence can resolve it.
+        uncertainObservation.current = view?.observation ?? null;
+        try {
+          await request(true);
+        } catch {
+          // A producer observation can outlast the browser's refresh request.
+        }
+      }
+      if (!applicable() || controller.signal.aborted) return;
+      const next = await request();
+      if (!next || !applicable()) return;
+      if (next.observation !== uncertainObservation.current)
+        uncertainObservation.current = null;
+      setView({
+        ...next,
+        refreshUnconfirmed:
+          next.status === "connected" && uncertainObservation.current !== null,
+      });
+      setReadFailed(false);
     } catch {
-      setError(
-        "Console could not retrieve Router status. Check the application connection.",
-      );
-      setView((previous) =>
-        previous
-          ? {
-              ...previous,
-              status: "disconnected",
-              last_known: previous.facts !== null,
-            }
-          : null,
-      );
+      if (applicable()) {
+        setView(null);
+        setReadFailed(true);
+      }
     } finally {
-      if (refresh) setPending(false);
+      if (active.current === controller) {
+        active.current = null;
+        setActivity(null);
+      }
     }
   }
+  const reconcile = useEffectEvent((foreground = false) => {
+    if (
+      foreground ||
+      (!active.current &&
+        (readFailed || view?.facts || view?.origin || view?.gap))
+    )
+      void load();
+  });
   useEffect(() => {
-    void load();
+    reconcile(true);
+    const visibility = () => {
+      if (document.visibilityState === "visible") {
+        reconcile(true);
+        return;
+      }
+      active.current?.abort();
+      active.current = null;
+      setView(null);
+      setActivity(null);
+    };
+    document.addEventListener("visibilitychange", visibility);
+    const timer = setInterval(() => reconcile(), 10000);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", visibility);
+      active.current?.abort();
+      active.current = null;
+    };
   }, []);
 
+  const pending = activity === "refresh";
+  const canRefresh =
+    view !== null &&
+    view.status !== "unconfigured" &&
+    view.status !== "configuration_error";
   return (
     <section aria-labelledby="router-heading">
       <h2 id="router-heading">Router observer</h2>
-      {error && <p role="alert">{error}</p>}
-      {!view ? (
-        <p>Checking connection configuration.</p>
+      {readFailed && (
+        <p role="alert">
+          Console could not retrieve Router status. Check the application
+          connection.
+        </p>
+      )}
+      {refreshBusy && (
+        <p role="status">
+          An earlier Router refresh is still finishing. Retry the refresh to
+          read the new configuration.
+        </p>
+      )}
+      <button
+        type="button"
+        aria-disabled={pending}
+        onClick={() => {
+          if (!pending) void load(canRefresh);
+        }}
+      >
+        {pending
+          ? "Refreshing Router"
+          : canRefresh
+            ? "Refresh Router"
+            : "Retry Router status"}
+      </button>
+      {!view || activity !== null ? (
+        <p>Checking connection configuration and session.</p>
       ) : (
         <>
-          <p role="status">{descriptions[view.status]}</p>
+          <p role="status">
+            {view.refreshUnconfirmed
+              ? "Console could not confirm a new Router observation."
+              : descriptions[view.status]}
+          </p>
           {view.origin && (
             <p>
               Configured origin: <code>{view.origin}</code>. This is not a
@@ -79,18 +195,9 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
             </p>
           )}
           {view.gap && <p role="status">{view.gap}</p>}
-          {view.last_known && <p>Last-known data follows; it may be stale.</p>}
-          <button
-            type="button"
-            disabled={
-              pending ||
-              view.status === "unconfigured" ||
-              view.status === "configuration_error"
-            }
-            onClick={() => void load(true)}
-          >
-            {pending ? "Refreshing Router" : "Refresh Router"}
-          </button>
+          {(view.last_known || view.refreshUnconfirmed) && (
+            <p>Last-known data follows; it may be stale.</p>
+          )}
           {view.facts && (
             <>
               <h3>Resources</h3>

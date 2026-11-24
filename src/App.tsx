@@ -1,8 +1,14 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import RouterPanel from "./RouterPanel";
 import KernelOwnerPanel from "./KernelOwnerPanel";
+import KernelSnapshotPanel from "./KernelSnapshotPanel";
+import MiSnapshotPanel from "./MiSnapshotPanel";
 
-type Session = { configured: boolean; authenticated: boolean };
+type Session = {
+  configured: boolean;
+  authenticated: boolean;
+  miInspectionOrigin?: string;
+};
 
 export default function App() {
   const [session, setSession] = useState<Session | null>(null);
@@ -147,11 +153,14 @@ export default function App() {
             }}
           />
           {!pending && (
-            <KernelOwnerPanel
-              expired={() => {
-                invalidate(true);
-              }}
-            />
+            <>
+              <KernelOwnerPanel expired={() => invalidate(true)} />
+              <KernelSnapshotPanel expired={() => invalidate(true)} />
+              <MiSnapshotPanel
+                destination={session.miInspectionOrigin}
+                expired={() => invalidate(true)}
+              />
+            </>
           )}
           <p>Model Intelligence is not configured by this view.</p>
           <button

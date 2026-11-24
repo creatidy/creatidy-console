@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { request as httpRequest } from "node:http";
 import { spawnSync } from "node:child_process";
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -32,6 +33,7 @@ const password = "synthetic-owner-password";
 async function fixture(
   clock = () => Date.now(),
   kernelOwner?: import("../server/app.ts").AppOptions["kernelOwner"],
+  beforeListen?: (app: Awaited<ReturnType<typeof createApp>>) => void,
 ) {
   const dir = mkdtempSync(join(tmpdir(), "console-test-"));
   directories.push(dir);
@@ -69,6 +71,9 @@ async function fixture(
         }
       : {}),
   });
+  beforeListen?.(app);
+  if (kernelOwner?.readSnapshot)
+    await app.listen({ host: "127.0.0.1", port: 0 });
   return { app, dir, assets };
 }
 
@@ -78,6 +83,1200 @@ afterEach(() => {
 });
 
 describe("authenticated application", () => {
+  it("does not interleave snapshot reads with approval revalidation or dispatch", async () => {
+    let release!: () => void;
+    let started!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const readApprovalScope = vi.fn(async () => ({
+      digest: "b".repeat(64),
+      proposalDigest: "a".repeat(64),
+      text: "synthetic scope",
+    }));
+    const readSnapshot = vi.fn(async () => ({
+      scope: "program",
+      epoch: "a".repeat(32),
+      sequence: "0",
+      revision: null,
+      startPage: 0,
+      nextPage: null,
+      status: "absent",
+      history: "initial" as const,
+      counts: {},
+      workUnits: [],
+      attempts: [],
+      decisions: [],
+      correlations: [],
+      commandCoverage: { sampled: 0, total: 0, complete: true },
+    }));
+    const sendCommand = vi.fn(async () => ({ kind: "unknown" as const }));
+    const { app } = await fixture(() => Date.now(), {
+      scope: "program",
+      readProposal: async () => ({
+        digest: "a".repeat(64),
+        text: "synthetic proposal",
+      }),
+      readApprovalScope,
+      readRevision: async () => ({ revision: "-1", status: "absent" }),
+      readSnapshot,
+      canSend: () => true,
+      sendCommand,
+      close: () => {},
+    });
+    try {
+      await app.inject({
+        method: "POST",
+        url: "/api/bootstrap",
+        headers,
+        payload: { token, password },
+      });
+      const login = await app.inject({
+        method: "POST",
+        url: "/api/login",
+        headers,
+        payload: { password },
+      });
+      const auth = {
+        ...headers,
+        cookie: String(login.headers["set-cookie"]).split(";")[0]!,
+      };
+      const post = (url: string, payload: object) =>
+        app.inject({ method: "POST", url, headers: auth, payload });
+      const reviewed = await post("/api/kernel/owner-review", {
+        expires_at: "3000000000",
+      });
+      expect(reviewed.statusCode).toBe(200);
+      readApprovalScope.mockImplementationOnce(async () => {
+        started();
+        await blocked;
+        return {
+          digest: "b".repeat(64),
+          proposalDigest: "a".repeat(64),
+          text: "synthetic scope",
+        };
+      });
+      const confirmation = post("/api/kernel/owner", {
+        action: "approve",
+        review: reviewed.json().review,
+      }).then((result) => result);
+      await entered;
+      expect((await post("/api/kernel/snapshot", {})).json()).toEqual({
+        status: "busy",
+      });
+      expect(readSnapshot).not.toHaveBeenCalled();
+      expect(sendCommand).not.toHaveBeenCalled();
+      release();
+      expect((await confirmation).json()).toEqual({ kind: "unknown" });
+      expect(sendCommand).toHaveBeenCalledOnce();
+      expect((await post("/api/kernel/snapshot", {})).json().status).toBe(
+        "observed",
+      );
+    } finally {
+      release();
+      await app.close();
+    }
+  });
+
+  it("exposes a complete login response to an ordinary HTTP client", async () => {
+    const { app } = await fixture();
+    try {
+      await app.inject({
+        method: "POST",
+        url: "/api/bootstrap",
+        headers,
+        payload: { token, password },
+      });
+      await app.listen({ host: "127.0.0.1", port: 0 });
+      const address = app.server.address();
+      if (!address || typeof address === "string")
+        throw new Error("No local test port");
+      const result = await new Promise<{
+        status: number | undefined;
+        body: string;
+        cookies: string[] | undefined;
+      }>((resolve, reject) => {
+        const request = httpRequest(
+          {
+            hostname: "127.0.0.1",
+            port: address.port,
+            path: "/api/login",
+            method: "POST",
+            headers,
+          },
+          (response) => {
+            const chunks: Buffer[] = [];
+            response.on("data", (chunk: Buffer) => chunks.push(chunk));
+            response.once("end", () =>
+              resolve({
+                status: response.statusCode,
+                body: Buffer.concat(chunks).toString("utf8"),
+                cookies: response.headers["set-cookie"],
+              }),
+            );
+            response.once("error", reject);
+          },
+        );
+        request.setTimeout(5000, () =>
+          request.destroy(new Error("HTTP timeout")),
+        );
+        request.once("error", reject);
+        request.end(JSON.stringify({ password }));
+      });
+      expect(result.status).toBe(200);
+      expect(JSON.parse(result.body)).toEqual({ ok: true });
+      const cookie = result.cookies?.[0]?.split(";")[0];
+      expect(cookie).toBeTruthy();
+      const session = await app.inject({
+        method: "GET",
+        url: "/api/session",
+        headers: { ...headers, cookie: cookie! },
+      });
+      expect(session.json().authenticated).toBe(true);
+    } finally {
+      await app.close();
+    }
+  });
+  it("does not close the producer capability when a browser request aborts", async () => {
+    let release!: () => void;
+    let started!: () => void;
+    let finished!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const completed = new Promise<void>((resolve) => {
+      finished = resolve;
+    });
+    const close = vi.fn();
+    const readSnapshot = vi.fn(
+      () =>
+        new Promise<{
+          scope: string;
+          epoch: string;
+          sequence: string;
+          revision: null;
+          startPage: number;
+          nextPage: number | null;
+          status: string;
+          history: "initial";
+          counts: Record<string, never>;
+          workUnits: never[];
+          attempts: never[];
+          decisions: never[];
+          correlations: never[];
+          commandCoverage: {
+            sampled: number;
+            total: number;
+            complete: boolean;
+          };
+        }>((resolve) => {
+          release = () => {
+            resolve({
+              scope: "synthetic",
+              epoch: "a".repeat(32),
+              sequence: "0",
+              revision: null,
+              startPage: 0,
+              nextPage: null,
+              status: "absent",
+              history: "initial",
+              counts: {},
+              workUnits: [],
+              attempts: [],
+              decisions: [],
+              correlations: [],
+              commandCoverage: { sampled: 0, total: 0, complete: true },
+            });
+            finished();
+          };
+          started();
+        }),
+    );
+    let arrivals = 0;
+    let full!: () => void;
+    let socketClosed!: () => void;
+    let replacementArrived!: () => void;
+    const filled = new Promise<void>((resolve) => {
+      full = resolve;
+    });
+    const closed = new Promise<void>((resolve) => {
+      socketClosed = resolve;
+    });
+    const replaced = new Promise<void>((resolve) => {
+      replacementArrived = resolve;
+    });
+    const { app } = await fixture(
+      Date.now,
+      {
+        scope: "synthetic",
+        readProposal: async () => ({
+          digest: "a".repeat(64),
+          text: "synthetic",
+        }),
+        readSnapshot,
+        close,
+      },
+      (backend) => {
+        backend.addHook("preHandler", async (request, reply) => {
+          if (request.url !== "/api/kernel/snapshot") return;
+          if (++arrivals === 1) reply.raw.once("close", socketClosed);
+          if (arrivals === 16) setImmediate(full);
+          if (arrivals === 18) setImmediate(replacementArrived);
+        });
+      },
+    );
+    try {
+      await app.inject({
+        method: "POST",
+        url: "/api/bootstrap",
+        headers,
+        payload: { token, password },
+      });
+      const login = await app.inject({
+        method: "POST",
+        url: "/api/login",
+        headers,
+        payload: { password },
+      });
+      const cookie = String(login.headers["set-cookie"]).split(";")[0]!;
+      const address = app.server.address();
+      if (!address || typeof address === "string")
+        throw new Error("No local test port");
+      let client!: ReturnType<typeof httpRequest>;
+      const pending = new Promise<Error>((resolve) => {
+        client = httpRequest(
+          {
+            hostname: "127.0.0.1",
+            port: address.port,
+            path: "/api/kernel/snapshot",
+            method: "POST",
+            headers: { ...headers, cookie },
+          },
+          (response) => {
+            response.resume();
+            resolve(new Error(`Unexpected HTTP status ${response.statusCode}`));
+          },
+        );
+        client.once("error", resolve);
+        client.end("{}");
+      });
+      const early = await Promise.race([waiting.then(() => null), pending]);
+      if (early) throw early;
+      const read = () =>
+        app
+          .inject({
+            method: "POST",
+            url: "/api/kernel/snapshot",
+            headers: { ...headers, cookie },
+            payload: {},
+          })
+          .then((response) => response.json().status);
+      const survivors = Array.from({ length: 15 }, read);
+      await filled;
+      const excess = read();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const reply = await Promise.race([
+        excess,
+        new Promise((resolve) => {
+          timer = setTimeout(() => resolve("queued"), 250);
+        }),
+      ]);
+      clearTimeout(timer);
+      expect.soft(reply).toBe("busy");
+      client.destroy();
+      await closed;
+      const result = await pending;
+      expect(result).toBeInstanceOf(Error);
+      expect(close).not.toHaveBeenCalled();
+      const replacement = read();
+      await replaced;
+      release();
+      await completed;
+      expect(await Promise.all([...survivors, replacement])).toEqual(
+        Array(16).fill("observed"),
+      );
+      expect(await excess).toBe("busy");
+      expect(readSnapshot).toHaveBeenCalledOnce();
+      expect(close).not.toHaveBeenCalled();
+    } finally {
+      release?.();
+      await app.close();
+    }
+  });
+  it("protects offline MI publication inspection and retained-file comparison", async () => {
+    const { app } = await fixture();
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const payload = {
+      applicability: {
+        scope: "synthetic",
+        channel: null,
+        configuration: null,
+        source_ids: [],
+      },
+      observations: [],
+      statements: [],
+      notices: [],
+      uncertain_campaigns: [],
+    };
+    const frame = {
+      format_version: 1,
+      payload_schema: "mi.public-evidence-working/2",
+      produced_at: "2026-01-01T00:00:00Z",
+      scope: "synthetic",
+      members: [],
+      sources: [],
+      payload: JSON.stringify(payload),
+    };
+    const artifact = JSON.stringify(frame);
+    const expected = {
+      format_version: 1,
+      payload_schema: frame.payload_schema,
+      sha256: createHash("sha256").update(artifact).digest("hex"),
+    };
+    const snapshot = {
+      schema: "mi.operator-working/1",
+      product: "model-intelligence",
+      instance: "synthetic",
+      evaluated_at: "2026-01-01T00:00:00Z",
+      capabilities: {
+        reads: ["status", "inspect", "export"],
+        commands: [],
+        replay: false,
+      },
+      publication: {
+        state: "available",
+        reference: expected,
+        artifact,
+        diagnostics: [],
+      },
+      health: {
+        state: "missing",
+        sha256: null,
+        data: null,
+        correlation: "unavailable",
+      },
+      facts: {
+        latest: [],
+        future: [],
+        stale: [],
+        unknown_freshness: [],
+        notices: [],
+        uncertain_campaigns: [],
+        conflicts: [],
+        projection: { offers: [], models: [], surfaces: [], conflicts: [] },
+      },
+      history: {
+        scope: "retained-publication-cuts-only",
+        replay: false,
+        checkpoint: null,
+        relation: "initial",
+        evidence_added: [],
+        projection_changed: null,
+      },
+    };
+    const text = JSON.stringify(snapshot);
+    try {
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/api/mi/inspect-publication",
+            headers,
+            payload: { text, expected },
+          })
+        ).statusCode,
+      ).toBe(401);
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/api/mi/inspect-publication",
+            headers: { ...headers, origin: "https://attacker.example" },
+            payload: { text, expected },
+          })
+        ).statusCode,
+      ).toBe(403);
+      await app.inject({
+        method: "POST",
+        url: "/api/bootstrap",
+        headers,
+        payload: { token, password },
+      });
+      const login = await app.inject({
+        method: "POST",
+        url: "/api/login",
+        headers,
+        payload: { password },
+      });
+      const cookie = String(login.headers["set-cookie"]).split(";")[0]!;
+      const auth = { ...headers, cookie };
+      const result = await app.inject({
+        method: "POST",
+        url: "/api/mi/inspect-publication",
+        headers: auth,
+        payload: { text, expected, previous: { text, expected } },
+      });
+      expect(result.json().status).toBe("checked");
+      expect(result.json().comparison).toBe("duplicate");
+      expect(result.json().history).toBe("unavailable");
+      expect(result.headers["cache-control"]).toContain("no-store");
+      const mismatch = await app.inject({
+        method: "POST",
+        url: "/api/mi/inspect-publication",
+        headers: auth,
+        payload: { text, expected: { ...expected, sha256: "0".repeat(64) } },
+      });
+      expect(mismatch.json()).toEqual({ status: "rejected" });
+      const changed = JSON.stringify({ ...snapshot, instance: "different" });
+      const resync = await app.inject({
+        method: "POST",
+        url: "/api/mi/inspect-publication",
+        headers: auth,
+        payload: { text: changed, expected, previous: { text, expected } },
+      });
+      expect(resync.json()).toEqual({ status: "resync-required" });
+      await app.inject({
+        method: "POST",
+        url: "/api/logout",
+        headers: auth,
+        payload: {},
+      });
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/api/mi/inspect-publication",
+            headers: auth,
+            payload: { text, expected },
+          })
+        ).statusCode,
+      ).toBe(401);
+    } finally {
+      await app.close();
+    }
+  });
+  it("requires a session and same origin for offline MI inspection", async () => {
+    const { app } = await fixture();
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const empty = {
+      schema: "mi.operator-working/1",
+      product: "model-intelligence",
+      instance: "synthetic-instance",
+      evaluated_at: "2026-11-13T00:00:00Z",
+      capabilities: {
+        reads: ["status", "inspect", "export"],
+        commands: [],
+        replay: false,
+      },
+      publication: {
+        state: "empty",
+        reference: null,
+        artifact: null,
+        diagnostics: [],
+      },
+      health: {
+        state: "missing",
+        sha256: null,
+        data: null,
+        correlation: "unavailable",
+      },
+      facts: {
+        latest: [],
+        future: [],
+        stale: [],
+        unknown_freshness: [],
+        notices: [],
+        uncertain_campaigns: [],
+        conflicts: [],
+        projection: { offers: [], models: [], surfaces: [], conflicts: [] },
+      },
+      history: {
+        scope: "retained-publication-cuts-only",
+        replay: false,
+        checkpoint: null,
+        relation: "unavailable",
+        evidence_added: [],
+        projection_changed: null,
+      },
+    };
+    const text = JSON.stringify(empty);
+    try {
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/api/mi/inspect-empty",
+            headers,
+            payload: { text },
+          })
+        ).statusCode,
+      ).toBe(401);
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/api/mi/inspect-empty",
+            headers: { ...headers, origin: "https://attacker.example" },
+            payload: { text },
+          })
+        ).statusCode,
+      ).toBe(403);
+      await app.inject({
+        method: "POST",
+        url: "/api/bootstrap",
+        headers,
+        payload: { token, password },
+      });
+      const login = await app.inject({
+        method: "POST",
+        url: "/api/login",
+        headers,
+        payload: { password },
+      });
+      const cookie = String(login.headers["set-cookie"]).split(";")[0]!;
+      const auth = { ...headers, cookie };
+      const result = await app.inject({
+        method: "POST",
+        url: "/api/mi/inspect-empty",
+        headers: auth,
+        payload: { text },
+      });
+      expect(result.json()).toEqual({
+        status: "empty",
+        instance: "synthetic-instance",
+        evaluatedAt: "2026-11-13T00:00:00Z",
+        health: "missing",
+      });
+      expect(result.headers["cache-control"]).toContain("no-store");
+      for (const [state, status] of [
+        ["invalid", "producer-invalid"],
+        ["unsupported", "producer-unsupported"],
+      ] as const) {
+        const reported = await app.inject({
+          method: "POST",
+          url: "/api/mi/inspect-empty",
+          headers: auth,
+          payload: {
+            text: JSON.stringify({
+              ...empty,
+              publication: {
+                state,
+                reference: null,
+                artifact: null,
+                diagnostics: ["retained-publication-invalid-or-unreadable"],
+              },
+            }),
+          },
+        });
+        expect(reported.json()).toEqual({ status });
+      }
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/api/mi/inspect-empty",
+            headers: auth,
+            payload: { text, extra: true },
+          })
+        ).statusCode,
+      ).toBe(400);
+      await app.inject({
+        method: "POST",
+        url: "/api/logout",
+        headers: auth,
+        payload: {},
+      });
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/api/mi/inspect-empty",
+            headers: auth,
+            payload: { text },
+          })
+        ).statusCode,
+      ).toBe(401);
+    } finally {
+      await app.close();
+    }
+  });
+  it("isolates queued scope reads by session and does not queue a selected snapshot", async () => {
+    let release!: () => void;
+    let started!: () => void;
+    let arrivals = 0;
+    let arrived!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const bothArrived = new Promise<void>((resolve) => {
+      arrived = resolve;
+    });
+    const readSnapshot = vi.fn(async (selection?: { page: number }) => ({
+      scope: "program",
+      epoch: "a".repeat(32),
+      sequence: "0",
+      revision: null,
+      startPage: selection?.page ?? 0,
+      nextPage: null,
+      status: "absent",
+      history: "initial" as const,
+      counts: {},
+      workUnits: [],
+      attempts: [],
+      decisions: [],
+      correlations: [],
+      commandCoverage: { sampled: 0, total: 0, complete: true },
+    }));
+    const readApprovalScope = vi.fn(async () => ({
+      digest: "b".repeat(64),
+      proposalDigest: "a".repeat(64),
+      text: "synthetic scope",
+    }));
+    const url = "/api/kernel/approval-scope";
+    const { app } = await fixture(
+      () => Date.now(),
+      {
+        scope: "program",
+        readProposal: () =>
+          new Promise((resolve) => {
+            release = () =>
+              resolve({ digest: "a".repeat(64), text: "synthetic" });
+            started();
+          }),
+        readSnapshot,
+        readApprovalScope,
+        close: () => {},
+      },
+      (app) => {
+        app.addHook("preHandler", async (request) => {
+          if (request.url === url && ++arrivals === 3) setImmediate(arrived);
+        });
+      },
+    );
+    try {
+      await app.inject({
+        method: "POST",
+        url: "/api/bootstrap",
+        headers,
+        payload: { token, password },
+      });
+      const firstLogin = await app.inject({
+        method: "POST",
+        url: "/api/login",
+        headers,
+        payload: { password },
+      });
+      const secondLogin = await app.inject({
+        method: "POST",
+        url: "/api/login",
+        headers,
+        payload: { password },
+      });
+      const first = {
+        ...headers,
+        cookie: String(firstLogin.headers["set-cookie"]).split(";")[0]!,
+      };
+      const second = {
+        ...headers,
+        cookie: String(secondLogin.headers["set-cookie"]).split(";")[0]!,
+      };
+      const proposal = app.inject({
+        method: "GET",
+        url: "/api/kernel/owner",
+        headers: first,
+      });
+      await waiting;
+      const selection = { page: 10, epoch: "a".repeat(32), sequence: "0" };
+      const readPage = () =>
+        app.inject({
+          method: "POST",
+          url: "/api/kernel/snapshot",
+          headers: second,
+          payload: selection,
+        });
+      const contended = readPage();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const deadline = new Promise<string>((resolve) => {
+        timer = setTimeout(() => resolve("queued"), 250);
+      });
+      const result = await Promise.race([
+        contended.then((response) => response.json().status as string),
+        deadline,
+      ]);
+      clearTimeout(timer);
+      expect.soft(result).toBe("busy");
+      const read = (requestHeaders: typeof first) =>
+        app.inject({ method: "GET", url, headers: requestHeaders });
+      const revoked = read(first);
+      const active = read(second);
+      const duplicate = read(second);
+      await bothArrived;
+      expect(readSnapshot).not.toHaveBeenCalled();
+      expect(readApprovalScope).not.toHaveBeenCalled();
+      await app.inject({
+        method: "POST",
+        url: "/api/logout",
+        headers: first,
+        payload: {},
+      });
+      release();
+      await contended;
+      expect((await proposal).statusCode).toBe(401);
+      expect((await revoked).statusCode).toBe(401);
+      const scope = (await active).json();
+      expect(scope.status).toBe("connected");
+      expect((await duplicate).json()).toEqual(scope);
+      expect(readApprovalScope).toHaveBeenCalledOnce();
+      expect((await readPage()).json()).toMatchObject({
+        status: "observed",
+        snapshot: { startPage: 10 },
+      });
+      expect(readSnapshot).toHaveBeenCalledExactlyOnceWith(selection);
+    } finally {
+      await app.close();
+    }
+  });
+  it.each(["connected", "revoked"])(
+    "rejects a contended initial snapshot and authenticates a retry when %s",
+    async (mode) => {
+      let release!: () => void;
+      let started!: () => void;
+      let snapshotArrived!: () => void;
+      const waiting = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      const arrived = new Promise<void>((resolve) => {
+        snapshotArrived = resolve;
+      });
+      const readSnapshot = vi.fn(async () => ({
+        scope: "program",
+        epoch: "a".repeat(32),
+        sequence: "0",
+        revision: null,
+        startPage: 0,
+        nextPage: null,
+        status: "absent",
+        history: "initial" as const,
+        counts: {},
+        workUnits: [],
+        attempts: [],
+        decisions: [],
+        correlations: [],
+        commandCoverage: { sampled: 0, total: 0, complete: true },
+      }));
+      const { app } = await fixture(
+        () => Date.now(),
+        {
+          scope: "program",
+          readProposal: () =>
+            new Promise((resolve) => {
+              release = () =>
+                resolve({ digest: "a".repeat(64), text: "synthetic" });
+              started();
+            }),
+          readSnapshot,
+          close: () => {},
+        },
+        (app) => {
+          app.addHook("onRequest", async (request) => {
+            if (request.url === "/api/kernel/snapshot") snapshotArrived();
+          });
+        },
+      );
+      try {
+        await app.inject({
+          method: "POST",
+          url: "/api/bootstrap",
+          headers,
+          payload: { token, password },
+        });
+        const login = await app.inject({
+          method: "POST",
+          url: "/api/login",
+          headers,
+          payload: { password },
+        });
+        const cookie = String(login.headers["set-cookie"]).split(";")[0]!;
+        const auth = { ...headers, cookie };
+        const proposal = app.inject({
+          method: "GET",
+          url: "/api/kernel/owner",
+          headers: auth,
+        });
+        await waiting;
+        const read = () =>
+          app.inject({
+            method: "POST",
+            url: "/api/kernel/snapshot",
+            headers: auth,
+            payload: {},
+          });
+        const snapshot = read();
+        await arrived;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const deadline = new Promise<string>((resolve) => {
+          timer = setTimeout(() => resolve("queued"), 250);
+        });
+        const result = await Promise.race([
+          snapshot.then((response) => response.json().status as string),
+          deadline,
+        ]);
+        clearTimeout(timer);
+        expect.soft(result).toBe("busy");
+        expect(readSnapshot).not.toHaveBeenCalled();
+        if (mode === "revoked") {
+          await app.inject({
+            method: "POST",
+            url: "/api/logout",
+            headers: auth,
+            payload: {},
+          });
+        }
+        release();
+        await snapshot;
+        if (mode === "connected") {
+          expect((await proposal).json().status).toBe("connected");
+          expect((await read()).json().status).toBe("observed");
+          expect(readSnapshot).toHaveBeenCalledOnce();
+        } else {
+          expect((await proposal).statusCode).toBe(401);
+          expect((await read()).statusCode).toBe(401);
+          expect(readSnapshot).not.toHaveBeenCalled();
+        }
+      } finally {
+        await app.close();
+      }
+    },
+  );
+  it.each([
+    ["snapshot", "abandoned"],
+    ["approval-scope", "abandoned"],
+    ["approval-scope", "expired"],
+    ["approval-scope", "live coalesced waiter"],
+  ] as const)(
+    "admits no deferred %s without a live waiter (%s)",
+    async (operation, mode) => {
+      let release!: () => void;
+      let entered!: () => void;
+      let arrived!: () => void;
+      let closed!: () => void;
+      const proposalEntered = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const snapshotArrived = new Promise<void>((resolve) => {
+        arrived = resolve;
+      });
+      const snapshotClosed = new Promise<void>((resolve) => {
+        closed = resolve;
+      });
+      const readSnapshot = vi.fn(async () => {
+        throw new Error("Unexpected descriptor read");
+      });
+      const readApprovalScope = vi.fn(async () => ({
+        digest: "b".repeat(64),
+        proposalDigest: "a".repeat(64),
+        text: "synthetic scope",
+      }));
+      const path = `/api/kernel/${operation}`;
+      let arrivals = 0;
+      let secondArrived!: () => void;
+      const secondArrival = new Promise<void>((resolve) => {
+        secondArrived = resolve;
+      });
+      let elapsed = 0;
+      const monotonic = vi
+        .spyOn(performance, "now")
+        .mockImplementation(() => elapsed);
+      const { app } = await fixture(
+        Date.now,
+        {
+          scope: "synthetic",
+          readProposal: () =>
+            new Promise((resolve) => {
+              release = () =>
+                resolve({ digest: "a".repeat(64), text: "synthetic" });
+              entered();
+            }),
+          readSnapshot,
+          readApprovalScope,
+          approvalSupported: false,
+          approvalScopeSupported: true,
+          close: () => {},
+        },
+        (backend) => {
+          backend.addHook("preHandler", async (request, reply) => {
+            if (request.url !== path) return;
+            if (++arrivals === 1) {
+              reply.raw.once("close", closed);
+              setImmediate(arrived);
+            } else setImmediate(secondArrived);
+          });
+        },
+      );
+      try {
+        await app.inject({
+          method: "POST",
+          url: "/api/bootstrap",
+          headers,
+          payload: { token, password },
+        });
+        const login = await app.inject({
+          method: "POST",
+          url: "/api/login",
+          headers,
+          payload: { password },
+        });
+        const auth = {
+          ...headers,
+          cookie: String(login.headers["set-cookie"]).split(";")[0]!,
+        };
+        const proposal = app.inject({
+          method: "GET",
+          url: "/api/kernel/owner",
+          headers: auth,
+        });
+        await proposalEntered;
+        const address = app.server.address();
+        if (!address || typeof address === "string")
+          throw new Error("No local test port");
+        const post = operation === "snapshot";
+        const client = httpRequest({
+          hostname: "127.0.0.1",
+          port: address.port,
+          path,
+          method: post ? "POST" : "GET",
+          headers: post ? auth : { host: auth.host, cookie: auth.cookie },
+        });
+        const status = new Promise<number>((resolve) => {
+          client.on("error", () => resolve(0));
+          client.on("response", (response) => {
+            response.resume();
+            resolve(response.statusCode ?? 0);
+          });
+        });
+        client.end(post ? "{}" : undefined);
+        await snapshotArrived;
+        const survivor =
+          mode === "live coalesced waiter"
+            ? app.inject({ method: "GET", url: path, headers: auth })
+            : null;
+        if (survivor) await secondArrival;
+        if (mode === "expired") elapsed += 4001;
+        else {
+          client.destroy();
+          await snapshotClosed;
+        }
+        release();
+        expect((await proposal).json().status).toBe("connected");
+        expect([mode === "expired" ? 503 : 0, post ? 200 : -1]).toContain(
+          await status,
+        );
+        if (survivor) expect((await survivor).json().status).toBe("connected");
+        expect(readSnapshot).not.toHaveBeenCalled();
+        expect(readApprovalScope).toHaveBeenCalledTimes(survivor ? 1 : 0);
+      } finally {
+        monotonic.mockRestore();
+        release?.();
+        await app.close();
+      }
+    },
+  );
+  it.each(["closed", "revoked"])(
+    "protects held snapshots and distinguishes busy, closure and logout (%s)",
+    async (mode) => {
+      let release!: (value: {
+        scope: string;
+        epoch: string;
+        sequence: string;
+        revision: string | null;
+        startPage: number;
+        nextPage: number | null;
+        status: string;
+        history: "initial" | "continuous" | "gap" | "unknown";
+        counts: Record<string, { sampled: number; total: number }>;
+        workUnits: ((string | null)[] | null)[];
+        attempts: ((string | null)[] | null)[];
+        decisions: import("../server/kernel-owner-transport.ts").KernelDecision[];
+        correlations: import("../server/kernel-owner-transport.ts").KernelCorrelation[];
+        commandCoverage: { sampled: number; total: number; complete: boolean };
+      }) => void;
+      let started!: () => void;
+      const waiting = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      const readSnapshot = vi.fn(
+        () =>
+          new Promise<Parameters<typeof release>[0]>((resolve) => {
+            release = resolve;
+            started();
+          }),
+      );
+      let snapshotAvailable = true;
+      const readProposal = vi.fn(async () => ({
+        digest: "a".repeat(64),
+        text: "synthetic",
+      }));
+      const { app } = await fixture(() => Date.now(), {
+        scope: "program",
+        readProposal,
+        readSnapshot,
+        snapshotAvailable: () => snapshotAvailable,
+        close: () => {},
+      });
+      try {
+        expect(
+          (
+            await app.inject({
+              method: "POST",
+              url: "/api/kernel/snapshot",
+              headers,
+              payload: {},
+            })
+          ).statusCode,
+        ).toBe(401);
+        expect(
+          (
+            await app.inject({
+              method: "POST",
+              url: "/api/kernel/snapshot",
+              headers: { ...headers, origin: "https://attacker.example" },
+              payload: {},
+            })
+          ).statusCode,
+        ).toBe(403);
+        expect(readSnapshot).not.toHaveBeenCalled();
+        await app.inject({
+          method: "POST",
+          url: "/api/bootstrap",
+          headers,
+          payload: { token, password },
+        });
+        const login = await app.inject({
+          method: "POST",
+          url: "/api/login",
+          headers,
+          payload: { password },
+        });
+        const cookie = String(login.headers["set-cookie"]).split(";")[0]!;
+        const auth = { ...headers, cookie };
+        for (const payload of [
+          { page: -1, epoch: "a".repeat(32), sequence: "1" },
+          { page: 1, epoch: "a".repeat(32), sequence: "01" },
+          { page: 1, epoch: "a".repeat(32), sequence: "1", extra: true },
+        ]) {
+          expect(
+            (
+              await app.inject({
+                method: "POST",
+                url: "/api/kernel/snapshot",
+                headers: auth,
+                payload,
+              })
+            ).statusCode,
+          ).toBe(400);
+        }
+        expect(readSnapshot).not.toHaveBeenCalled();
+        const pending = app.inject({
+          method: "POST",
+          url: "/api/kernel/snapshot",
+          headers: auth,
+          payload: {},
+        });
+        await waiting;
+        const second = await app.inject({
+          method: "POST",
+          url: "/api/login",
+          headers,
+          payload: { password },
+        });
+        const secondAuth = {
+          ...headers,
+          cookie: String(second.headers["set-cookie"]).split(";")[0]!,
+        };
+        const loadProposal = () =>
+          app.inject({
+            method: "GET",
+            url: "/api/kernel/owner",
+            headers: secondAuth,
+          });
+        const firstProposal = loadProposal();
+        let deadline: ReturnType<typeof setTimeout> | undefined;
+        const busy = await Promise.race([
+          firstProposal.then((response) => response.statusCode),
+          new Promise<number>((resolve) => {
+            deadline = setTimeout(() => resolve(0), 250);
+          }),
+        ]);
+        clearTimeout(deadline);
+        expect.soft(busy).toBe(503);
+        expect(readProposal).not.toHaveBeenCalled();
+        const check = () =>
+          app.inject({
+            method: "GET",
+            url: "/api/kernel/session-check",
+            headers: secondAuth,
+          });
+        expect((await check()).json()).toEqual({
+          authenticated: true,
+          snapshotStatus: "ready",
+        });
+        snapshotAvailable = false;
+        const closed = await check();
+        expect(closed.json()).toEqual({
+          authenticated: true,
+          snapshotStatus: "disconnected",
+        });
+        expect(closed.headers["set-cookie"]).toBeUndefined();
+        expect(readSnapshot).toHaveBeenCalledOnce();
+        expect
+          .soft(
+            (
+              await app.inject({
+                method: "POST",
+                url: "/api/kernel/snapshot",
+                headers: secondAuth,
+                payload: {},
+              })
+            ).json().status,
+          )
+          .toBe("disconnected");
+        if (mode === "revoked")
+          await app.inject({
+            method: "POST",
+            url: "/api/logout",
+            headers: auth,
+            payload: {},
+          });
+        release({
+          scope: "synthetic-private-scope",
+          epoch: "a".repeat(32),
+          sequence: "0",
+          revision: null,
+          startPage: 0,
+          nextPage: null,
+          status: "absent",
+          history: "initial",
+          counts: {},
+          workUnits: [],
+          attempts: [],
+          decisions: [],
+          correlations: [],
+          commandCoverage: { sampled: 0, total: 0, complete: true },
+        });
+        const result = await pending;
+        await firstProposal;
+        if (mode === "revoked") expect(result.statusCode).toBe(401);
+        else expect(result.json()).toEqual({ status: "disconnected" });
+        expect(result.body).not.toContain("synthetic-private-scope");
+        expect((await loadProposal()).json().status).toBe("connected");
+      } finally {
+        await app.close();
+      }
+    },
+  );
   it.each([
     "before confirmation",
     "during revalidation",
@@ -1804,7 +3003,10 @@ describe("authenticated application", () => {
           headers: { ...headers, cookie },
         });
         expect(passive.statusCode).toBe(200);
-        expect(passive.json()).toEqual({ authenticated: true });
+        expect(passive.json()).toEqual({
+          authenticated: true,
+          snapshotStatus: "unavailable",
+        });
         expect(passive.headers["set-cookie"]).toBeUndefined();
         expect(state.db.prepare("SELECT * FROM sessions").get()).toEqual({
           ...row,
@@ -1863,15 +3065,17 @@ describe("authenticated application", () => {
         const initial = row();
         for (let i = 0; i < 3; i++) {
           now += 60_000;
-          const check = await app.inject({
-            method: "GET",
-            url: "/api/kernel/session-check",
-            headers: auth,
-          });
-          expect(check.statusCode).toBe(200);
-          expect(check.headers["set-cookie"]).toBeUndefined();
-          expect(check.headers["cache-control"]).toBe("no-store");
-          expect(row()).toEqual(initial);
+          for (const url of ["/api/kernel/session-check", "/api/router"]) {
+            const check = await app.inject({
+              method: "GET",
+              url,
+              headers: auth,
+            });
+            expect(check.statusCode).toBe(200);
+            expect(check.headers["set-cookie"]).toBeUndefined();
+            expect(check.headers["cache-control"]).toBe("no-store");
+            expect(row()).toEqual(initial);
+          }
         }
         if (mode === "idle") now += 28 * 60_000;
         if (mode === "absolute") {
@@ -1906,6 +3110,13 @@ describe("authenticated application", () => {
         });
         expect(denied.statusCode).toBe(401);
         expect(denied.headers["set-cookie"]).toBeUndefined();
+        const cached = await app.inject({
+          method: "GET",
+          url: "/api/router",
+          headers: auth,
+        });
+        expect(cached.statusCode).toBe(401);
+        expect(cached.headers["set-cookie"]).toBeUndefined();
         expect(
           (
             await app.inject({

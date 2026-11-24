@@ -51,3 +51,12 @@ temporary execution isolation and blocker classification guidance. The loop
 model, reviewer independence/security/result/model selection,
 issue ordering/exclusions, persisted ceiling and merge/completion authority are
 preserved. No producer implementation or runtime model proof is copied.
+
+The file server/mi-publication.ts independently ports consumer validation
+semantics from Creatidy Model Intelligence tests/portable_operator_consumer.py,
+revision c65df369f674b82347a2e08a27d5315d935ac1a4. Copyright 2026 Creatidy.
+Licensed under the Apache License, Version 2.0. It checks bounded snapshots and
+two-file continuity without publisher authentication, admission or recovery of
+earlier history. Supported timestamps, time zones, integers and input size are
+narrower. Review the pinned source and its conformance tests before updating the
+accepted schema. Synthetic fixtures do not grant redistribution rights to data.

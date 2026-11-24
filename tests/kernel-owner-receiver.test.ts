@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { createConnection, createServer } from "node:net";
+import { request } from "node:https";
 import { dirname, join, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -311,6 +312,166 @@ describe.skipIf(process.platform !== "linux")("native owner receiver", () => {
       expect(received).toBe(0);
     }
   });
+
+  it.each([
+    ["v1", undefined],
+    ["v2", ["snapshot", "record", "events"]],
+  ] as const)(
+    "starts HTTPS with a read-only %s descriptor but keeps snapshots local",
+    async (version, operations) => {
+      const key = join(temporary, `https-${version}.key`);
+      const cert = join(temporary, `https-${version}.crt`);
+      const tls = spawnSync(
+        "openssl",
+        [
+          "req",
+          "-x509",
+          "-newkey",
+          "rsa:2048",
+          "-nodes",
+          "-keyout",
+          key,
+          "-out",
+          cert,
+          "-days",
+          "1",
+          "-subj",
+          "/CN=console.example.test",
+          "-addext",
+          "subjectAltName=DNS:console.example.test,IP:127.0.0.1",
+        ],
+        { env, encoding: "utf8" },
+      );
+      expect(tls.status, tls.stderr).toBe(0);
+      const bind = "127.0.0.1";
+      const origin = "https://console.example.test";
+      const reservation = createServer();
+      await new Promise<void>((resolve) =>
+        reservation.listen(0, bind, resolve),
+      );
+      const address = reservation.address();
+      if (!address || typeof address === "string")
+        throw new Error("Missing port");
+      const { port } = address;
+      await new Promise<void>((resolve) => reservation.close(() => resolve()));
+      const exactOrigin = `${origin}:${port}`;
+      const dir = join(temporary, `state-${version}`);
+      const state = openState(dir);
+      state.db
+        .prepare("INSERT INTO settings (name, value) VALUES ('bootstrap', ?)")
+        .run(
+          JSON.stringify({
+            digest: createHash("sha256")
+              .update("synthetic-setup")
+              .digest("hex"),
+            expires: Date.now() + 60000,
+          }),
+        );
+      state.db.close();
+      const child = spawn(process.execPath, ["server/main.ts", "3"], {
+        cwd: appRoot,
+        env: {
+          ...env,
+          CONSOLE_KERNEL_OWNER: "1",
+          CONSOLE_KERNEL_OWNER_SCOPE: "program-1",
+          CONSOLE_KERNEL_OWNER_PRODUCER: "kernel-1",
+          CONSOLE_KERNEL_OWNER_RECIPIENT: "console-1",
+          CONSOLE_ORIGIN: exactOrigin,
+          CONSOLE_STATE_DIR: dir,
+          CONSOLE_BIND_HOST: bind,
+          CONSOLE_TLS_KEY: key,
+          CONSOLE_TLS_CERT: cert,
+        },
+        stdio: ["ignore", "pipe", "pipe", "pipe"],
+      });
+      const result = collect(child);
+      const ready = new Promise<boolean>((resolve) => {
+        child.stdout!.on("data", (data: Buffer) => {
+          if (data.toString().includes("Creatidy Console listening"))
+            resolve(true);
+        });
+        void result.then(() => resolve(false));
+      });
+      const channel = child.stdio[3];
+      if (!channel || !("write" in channel)) throw new Error("Missing channel");
+      let sent = 0;
+      channel.on("data", (data: Buffer) => {
+        sent += data.length;
+      });
+      channel.write(frame("program-1", operations));
+      const api = (path: string, data?: object, cookie?: string) =>
+        new Promise<{
+          status: number | undefined;
+          body: Record<string, unknown>;
+          cookie: string | undefined;
+        }>((resolve, reject) => {
+          const body = data ? JSON.stringify(data) : undefined;
+          const req = request(
+            {
+              hostname: "127.0.0.1",
+              port,
+              servername: new URL(origin).hostname,
+              ca: readFileSync(cert),
+              path,
+              method: body ? "POST" : "GET",
+              headers: {
+                host: new URL(exactOrigin).host,
+                origin: exactOrigin,
+                ...(cookie ? { cookie } : {}),
+                ...(body
+                  ? {
+                      "content-type": "application/json",
+                      "content-length": Buffer.byteLength(body),
+                    }
+                  : {}),
+              },
+            },
+            (res) => {
+              let text = "";
+              res.setEncoding("utf8");
+              res.on("data", (chunk) => {
+                text += chunk;
+              });
+              res.on("end", () =>
+                resolve({
+                  status: res.statusCode,
+                  body: JSON.parse(text),
+                  cookie: res.headers["set-cookie"]?.[0]?.split(";")[0],
+                }),
+              );
+              res.on("error", reject);
+            },
+          );
+          req.on("error", reject);
+          req.end(body);
+        });
+      try {
+        expect(await ready, "valid read-only HTTPS should start").toBe(true);
+        expect(
+          (
+            await api("/api/bootstrap", {
+              token: "synthetic-setup",
+              password: "synthetic-password",
+            })
+          ).status,
+        ).toBe(200);
+        const login = await api("/api/login", {
+          password: "synthetic-password",
+        });
+        expect(login.status).toBe(200);
+        expect((await api("/api/router", undefined, login.cookie)).status).toBe(
+          200,
+        );
+        expect(
+          (await api("/api/kernel/snapshot", {}, login.cookie)).body.status,
+        ).toBe("unavailable");
+        expect(sent).toBe(0);
+      } finally {
+        child.kill("SIGTERM");
+        await result;
+      }
+    },
+  );
 
   it("retains the inherited socket in the real entry point for authenticated reads", async () => {
     const dir = join(temporary, "startup-state");

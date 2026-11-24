@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { readRouterConfig, type RouterConfig } from "./router-config.ts";
@@ -14,6 +14,7 @@ type RouterStatus =
   | "unsupported"
   | "configuration_error";
 class Unsupported extends Error {}
+export class RouterRefreshBusy extends Error {}
 
 function parseObserverJson(source: string): unknown {
   const json = JSON as JSON & { rawJSON: (source: string) => unknown };
@@ -307,21 +308,29 @@ async function observe(
 
 export function createRouterObserver(directory: string) {
   let fingerprint: string | null = null;
+  let configurationGeneration = 0;
   let position: unknown;
+  let observation: string | null = null;
   let facts: Projection | null = null;
   let status: RouterStatus = "unconfigured";
   let gap: string | null = null;
   let origin: string | null = null;
-  let pending: Promise<ReturnType<typeof view>> | null = null;
+  let pending: {
+    generation: number;
+    promise: Promise<ReturnType<typeof view>>;
+  } | null = null;
 
   function configuration() {
     let config: RouterConfig | null;
     try {
       config = readRouterConfig(directory);
     } catch {
+      if (status !== "configuration_error") configurationGeneration++;
       status = "configuration_error";
       facts = null;
+      observation = null;
       position = undefined;
+      gap = null;
       origin = null;
       fingerprint = null;
       return null;
@@ -330,8 +339,10 @@ export function createRouterObserver(directory: string) {
       ? createHash("sha256").update(JSON.stringify(config)).digest("hex")
       : null;
     if (next !== fingerprint || (!config && status !== "unconfigured")) {
+      configurationGeneration++;
       fingerprint = next;
       facts = null;
+      observation = null;
       position = undefined;
       gap = null;
       status = config ? "configured" : "unconfigured";
@@ -346,25 +357,28 @@ export function createRouterObserver(directory: string) {
       origin,
       facts,
       gap,
+      observation: facts ? observation : null,
       last_known: status === "disconnected" && facts !== null,
     };
   }
   async function refresh() {
     const config = configuration();
     if (!config) return view();
-    if (pending) return await pending;
-    const active = refreshOnce(config, fingerprint);
-    pending = active;
+    if (pending) {
+      if (pending.generation === configurationGeneration)
+        return await pending.promise;
+      throw new RouterRefreshBusy();
+    }
+    const generation = configurationGeneration;
+    const active = refreshOnce(config, generation);
+    pending = { generation, promise: active };
     try {
       return await active;
     } finally {
-      if (pending === active) pending = null;
+      if (pending?.promise === active) pending = null;
     }
   }
-  async function refreshOnce(
-    config: RouterConfig,
-    initialFingerprint: string | null,
-  ) {
+  async function refreshOnce(config: RouterConfig, generation: number) {
     try {
       let rejectedReplay = false;
       let nextGap = gap;
@@ -376,7 +390,7 @@ export function createRouterObserver(directory: string) {
         position,
       );
       configuration();
-      if (fingerprint !== initialFingerprint) return view();
+      if (configurationGeneration !== generation) return view();
       if (result.status === 401 || result.status === 403) {
         status = "denied";
         facts = null;
@@ -391,7 +405,7 @@ export function createRouterObserver(directory: string) {
         position = undefined;
         result = await observe(config, "/observer/v1/snapshot");
         configuration();
-        if (fingerprint !== initialFingerprint) return view();
+        if (configurationGeneration !== generation) return view();
       }
       if (result.status === 401 || result.status === 403) {
         status = "denied";
@@ -401,7 +415,12 @@ export function createRouterObserver(directory: string) {
         return view();
       }
       if (result.status !== 200) {
-        if (result.status >= 500) status = "disconnected";
+        if (
+          result.status >= 500 ||
+          result.status === 408 ||
+          result.status === 429
+        )
+          status = "disconnected";
         else {
           status = "unsupported";
           facts = null;
@@ -422,6 +441,9 @@ export function createRouterObserver(directory: string) {
           gap === "Replay was rejected; resynchronization is required."
         )
           nextGap = "Replay was rejected; the snapshot was resynchronized.";
+        else if (!nextGap)
+          nextGap =
+            "Earlier Router progress is unavailable; this snapshot does not reconstruct history.";
       } else {
         const events = list(envelope.events);
         if (events.length > 256)
@@ -471,7 +493,7 @@ export function createRouterObserver(directory: string) {
         if (envelope.provenance_current === false || events.length > 0) {
           const snapshot = await observe(config, "/observer/v1/snapshot");
           configuration();
-          if (fingerprint !== initialFingerprint) return view();
+          if (configurationGeneration !== generation) return view();
           if (snapshot.status === 401 || snapshot.status === 403) {
             status = "denied";
             facts = null;
@@ -479,7 +501,12 @@ export function createRouterObserver(directory: string) {
             gap = null;
             return view();
           }
-          if (snapshot.status >= 500) throw new Error("Snapshot unavailable");
+          if (
+            snapshot.status >= 500 ||
+            snapshot.status === 408 ||
+            snapshot.status === 429
+          )
+            throw new Error("Snapshot unavailable");
           if (snapshot.status !== 200)
             throw new Unsupported("Snapshot unsupported");
           envelope = object(snapshot.data);
@@ -500,16 +527,17 @@ export function createRouterObserver(directory: string) {
         )
       )
         throw new Unsupported("Unsafe observer content");
-      if (configuration() === null || fingerprint !== initialFingerprint)
+      if (configuration() === null || configurationGeneration !== generation)
         return view();
       facts = nextFacts;
+      observation = randomUUID();
       position = nextPosition;
       gap = nextGap;
       status = "connected";
       return view();
     } catch (error) {
       configuration();
-      if (fingerprint !== initialFingerprint) return view();
+      if (configurationGeneration !== generation) return view();
       if (error instanceof Unsupported) {
         status = "unsupported";
         facts = null;

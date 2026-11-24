@@ -33,8 +33,116 @@ Consumer fixtures, browser security and installed/live receipts remain distinct;
 their completion is not a prerequisite for starting the code that creates them.
 The in-progress Router-only consumer uses fixed snapshot/replay paths and an
 opaque server-held cursor; it requests a fresh snapshot after replayed changes
-and does not claim reconstructed intermediate history. Its loopback-only
-connection scope and synthetic tests do not establish a live producer receipt.
+and does not claim reconstructed intermediate history. Two separately authorized
+isolated installed-Router attempts observed a nonempty synthetic unbound
+resource and its Console projection at Router
+`8fc4f91ff1aa4c52f4738d436fc2ac12d0b8acb1` and Console
+`88eead49216c359b7e224cb183e68aa712889c79`. Neither reached replay, retention
+overflow, recovery or revocation. One browser login response could not be read
+by the evidence collector; complete browser-response security evidence is
+unverified. The temporary run artifacts are unavailable in this checkout, so
+those prior observations have not been independently revalidated here. They are
+not provider collection, live production data, or packaged Console acceptance.
+
+### Pending Router Acceptance Procedure
+
+This procedure is preparation, not authorization for a new installed test. The
+previous two authorized attempts are exhausted; the owner must separately bound
+any new target, state-change count, execution time and access before execution.
+Use a fresh isolated loopback-only Router and Console, synthetic accounts and
+private state, and the pinned producer contract. Supply the observer credential
+to Console through its command's standard input, never a URL, argument, browser
+store or log. Do not enable an endpoint, worker, provider collection or
+inference. One proposed scope is one attempt, at most 264 Router state-changing
+operations including setup and revocation, and 15 minutes of execution. This is
+a proposal, not permission; stop earlier if event advancement or isolation
+cannot be proved.
+
+1. Bootstrap Router and issue an observer-scoped client using the documented
+   administrator interface. Register one synthetic `local_app_adapter` resource
+   without endpoint or worker binding, then verify its nonempty snapshot through
+   `GET /observer/v1/snapshot` and the authenticated Console projection.
+2. Preserve the producer-issued cursor. Change the resource's enabled state
+   through the supported administrator operation. Replay the original cursor
+   using `POST /observer/v1/replay`, verify actual events and advancing sequence
+   numbers. Pause producer mutations. Through a separately authorized
+   observer-scoped client, capture a producer snapshot and cursor immediately
+   before and after one explicit Console refresh. Require unchanged producer
+   epoch, sequence, and provenance across the two producer reads and matching
+   visible facts in Console. Retain the independent client's cursor privately as
+   the baseline for the stable cut. Console's cursor remains opaque and
+   server-private; this checks agreement on the observed cut, not cursor
+   equality with Console.
+3. Leave Console unrefreshed and keep the independent baseline cursor unchanged.
+   Alternate genuine enabled-state changes and use a separate verification
+   cursor to check that semantic events actually advance; no-op updates and
+   timestamp-only changes must not be counted as events. Exceed the producer's
+   256-event retained window only within the newly approved limit, without
+   changing retention settings or writing its database.
+4. Replay the independent baseline and compare the producer-reported reason and
+   resync snapshot with a fresh producer snapshot. This establishes retention
+   loss for the independent baseline. Separately refresh Console and require its
+   explicit gap notice and current facts matching the producer snapshot. This
+   tests recovery from Console's own parked observation, not reconstruction of
+   missing intermediate history. Revoke Console's observer credential and verify
+   denial, clearing, and credential isolation.
+5. Check browser login status and authenticated UI separately from response-body
+   capture. An ordinary authenticated HTTP client can inspect the login JSON; a
+   failed optional browser body capture must be reported separately and must not
+   prevent independent replay checks. It is not proof that browser responses are
+   credential-free: retain that security cell as unverified until inspected.
+
+The same login-capture symptom was reproduced with synthetic local state: the
+application checks the login response status without consuming its body, and
+Chrome 157.0.8103.78 with Playwright 1.65.0 did not report that response as
+finished to Playwright's body reader. An ordinary HTTP client received the
+complete JSON and an authenticated session. The original temporary collector is
+unavailable, so this does not prove its exact internal trigger. The browser
+regression separately checks unmodified login status/UI and, in another login,
+drains a response clone to make body inspection possible. That instrumentation
+changes timing; it does not prove unmodified browser body capture or repair the
+previous installed receipt.
+
+`tests/router.test.ts` exercises a separate synthetic 256-event fixture,
+including no-op changes, replay and expiry. It is not an installed producer
+receipt. The Router projection and cursor are process-local, not a persisted
+projection cache. Recreating the observer requests a snapshot and explicitly
+reports earlier history as unavailable; it does not change producer state. There
+is currently no projection-cache schema to migrate. The private `router.json`
+connection configuration is not disposable projection data and is not a
+cache-loss fixture.
+
+For that bounded scenario, the pinned Router's supported server entry point is
+`python -I -m scarcity_router.control_server --host 127.0.0.1 --port <port> --data-dir <private-dir>`;
+the same module with `--issue-bootstrap-claim` issues its one-time setup claim.
+Submit the claim to `POST /control/bootstrap/admin`, retrieve the administrator
+CSRF value from `/admin`, and issue `POST /control/clients` with role
+`observer`. Use `POST /control/resources` with this synthetic registration,
+leaving endpoint and worker bindings absent:
+
+```json
+{
+  "registration": {
+    "identity": {
+      "resource_id": "acceptance-local",
+      "channel": "local_app_adapter",
+      "provider": "ollama",
+      "model": "synthetic-local",
+      "entitlement": "unknown"
+    },
+    "freshness_ttl_seconds": 60
+  },
+  "enabled": false
+}
+```
+
+Alternate `POST /control/resources/acceptance-local/enabled` with a JSON
+`enabled` boolean, and revoke the client with `DELETE /control/clients/<id>`.
+Administrator mutations require the session cookie and `X-Scarcity-CSRF` header;
+observer requests require the separate bearer credential. Use a private client
+process or pipe to hold credentials and cursors, not shell arguments or retained
+logs. This configuration proves only a real Router's synthetic configured state,
+not provider health, quota or source discovery.
 
 ## Historical Integration Risks
 
@@ -169,6 +277,24 @@ Separate the two acceptance levels:
   integration. Completed downstream components are not prerequisites merely to
   define or validate the initial MI contract.
 
+Console offers explicitly selected, bounded offline file inspection of a subset
+of `mi.operator-working/1` at MI revision
+`c65df369f674b82347a2e08a27d5315d935ac1a4`. The nonempty inspector checks the
+full supported envelope, exact artifact bytes and an operator-supplied separate
+version/schema/digest; it can compare two separately selected files without
+claiming earlier history. Different payload schemas require explicit resync;
+each supported version is still independently inspectable. The implementation
+uses a narrower timestamp, time zone, integer and 256 KiB input policy than the
+producer, and rejects unsupported valid encodings. It neither activates
+publications nor treats the supplied reference as authenticated publisher
+identity. Source ownership, freshness, rights and projected facts remain
+untrusted producer claims. It does not claim full portable receiver conformance,
+preserve cut history, or connect to MI. The empty-file inspector also
+distinguishes a file's reported invalid and unsupported publication states from
+malformed input. A failed later inspection keeps the prior file explicitly
+last-known only while the Console session remains valid; it does not accept a
+new cut or reconstruct missing history.
+
 A missing or incompatible field must produce a concrete Console consumer
 requirement: affected behavior, evidence/negative case and expected semantics.
 Request a versioned producer change from MI and validate the supported revised
@@ -277,11 +403,45 @@ depends on the supervisor and protected descriptor inheritance. Channel closure
 does not itself cancel work or prove settlement. See the
 [merged producer contract](https://forgejo.creatidy.com/Creatidy/creatidy-kernel/src/commit/407f1be3195d3c698ac1f5e7c57e65e215d0c88a/docs/architecture/contracts.md).
 This delivery is not installed Console conformance or live integration evidence.
-The earlier Linux supervisor-launched Console delivery validated and retained
-the descriptor and greeting for authenticated proposal inspection but did not
-enable submissions. The default still has no capability. Labels do not verify
-producer identity. A valid-looking receipt shape is not evidence of an
-authenticated producer or an observed effect.
+The earlier Linux supervisor-launched Console delivery provided authenticated
+proposal inspection without submissions. The scoped approval and historical
+recovery behavior now supported by Console is described below.
+
+The optional Linux supervisor-launched Console backend validates and retains the
+descriptor and greeting for authenticated proposal and snapshot inspection. The
+default has no capability. Labels do not verify producer identity. A
+valid-looking receipt shape is not evidence of an authenticated producer or an
+observed effect.
+
+The bounded snapshot view uses Kernel version-1 snapshot and progress frames at
+source revision `1bcb052e527933b7b2f419ac76017f2d20e88a1e`, specifically
+`ports/served.py` and `adapters/served_local.py`. Work units, attempts,
+decisions and correlation references retain producer facts; they are not a
+cross-product join or an owner-action queue. Opaque runtime handles are not
+displayed and do not establish effect settlement. Each request samples at most
+eight pages with explicit collection and command coverage. An initial or
+selected page returns busy rather than waiting for a contended descriptor. An
+already admitted exchange remains bounded by the descriptor contract even if its
+HTTP requester leaves. Slow reads stop at complete frame boundaries and continue
+from the first unsampled page; a stalled in-flight frame still closes the
+descriptor. Navigation retains the observed epoch and sequence and requires
+resynchronization when that position changes. Oversized records are explicitly
+omitted. Progress state is process-local: gaps and unknown intervals remain
+visible and a new snapshot does not restore missing history. A limit-truncated
+batch behind a matching cut leaves continuity unknown without invalidating the
+sampled page. These synthetic checks are not installed/live Kernel conformance
+or verified producer identity.
+
+One isolated source-checkout exercise used 512 synthetic work units and 300
+test-injected progress hints against that Kernel revision. Console retained 64
+work units per bounded window, detected a stale page and reported a gap; a
+separate two-work-unit retention-overflow case also reported a gap without
+changing the synthetic producer's durable history. On a one-CPU, 256 MiB
+network-disabled container, those single runs took 518 ms and 14 ms
+respectively; the observed Node heap deltas were approximately 1.52 MB and 5 KB,
+not peak memory. These measurements are not performance guarantees, real
+owner-decision evidence, an installed artifact receipt, or the required real
+Router exercise.
 
 Kernel
 [PR #130](https://forgejo.creatidy.com/Creatidy/creatidy-kernel/pulls/130) was
@@ -336,7 +496,7 @@ supervisor uses a stable producer label for each journal lineage; changing
 recipients does not bypass an unresolved command for that producer and Program.
 The optional supervisor-launched backend exposes this scoped approval path only
 with the inherited owner capability and a validated v2 operation declaration
-containing approval support; a validated v1 greeting remains proposal-only. A v2
+containing approval support; a validated v1 greeting remains read-only. A v2
 descriptor without a proposal or approval binding is not probed for unsupported
 operations. Qualified proposal v2/v3 and qualified fields in a v1 approval scope
 are not supported by Console; a recognized unsupported payload grants no approve

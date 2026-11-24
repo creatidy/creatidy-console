@@ -7,11 +7,23 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { unlinkSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { createRequire } from "node:module";
+import { isLoopbackListener, isLoopbackOrigin } from "./loopback.ts";
 import { openState } from "./state.ts";
-import { createRouterObserver } from "./router.ts";
+import { createRouterObserver, RouterRefreshBusy } from "./router.ts";
+import { inspectEmptyMiSnapshot } from "./mi-empty-snapshot.ts";
+import {
+  compareMiPublications,
+  inspectMiPublication,
+  type ExpectedMiReference,
+} from "./mi-publication.ts";
+import {
+  InvalidOwnerResponse,
+  SnapshotChanged,
+  type KernelDecision,
+  type KernelCorrelation,
+} from "./kernel-owner-transport.ts";
 import type { OwnerPairing } from "./kernel-owner-greeting.ts";
 import { UnsupportedOwnerPayload } from "./kernel-owner-proposal.ts";
-import { InvalidOwnerResponse } from "./kernel-owner-transport.ts";
 import {
   ownerIdentityDigest,
   parseOwnerJson,
@@ -20,6 +32,9 @@ import {
   type ApprovalDisposition,
   type OwnerObservation,
 } from "./kernel-owner-v1.ts";
+
+class KernelReadBusy extends Error {}
+const KERNEL_READ_LIMIT = 16;
 
 declare module "fastify" {
   interface Session {
@@ -41,6 +56,27 @@ export interface AppOptions {
     approvalScopeSupported?: boolean;
     approvalSupported?: boolean;
     readProposal: () => Promise<{ digest: string; text: string }>;
+    snapshotAvailable?: () => boolean;
+    readSnapshot?: (selection?: {
+      page: number;
+      epoch: string;
+      sequence: string;
+    }) => Promise<{
+      scope: string;
+      epoch: string;
+      sequence: string;
+      revision: string | null;
+      startPage: number;
+      nextPage: number | null;
+      status: string;
+      history: "initial" | "continuous" | "gap" | "unknown";
+      counts: Record<string, { sampled: number; total: number }>;
+      workUnits: ((string | null)[] | null)[];
+      attempts: ((string | null)[] | null)[];
+      decisions: (KernelDecision | null)[];
+      correlations: (KernelCorrelation | null)[];
+      commandCoverage: { sampled: number; total: number; complete: boolean };
+    }>;
     readApprovalScope?: () => Promise<{
       digest: string;
       proposalDigest: string;
@@ -79,10 +115,7 @@ export async function createApp(options: AppOptions) {
     origin.username ||
     origin.password ||
     (origin.protocol !== "https:" &&
-      !(
-        origin.protocol === "http:" &&
-        ["127.0.0.1", "[::1]", "localhost"].includes(origin.hostname)
-      ))
+      !(origin.protocol === "http:" && isLoopbackOrigin(origin)))
   ) {
     throw new Error("Origin must be exact HTTPS or loopback HTTP");
   }
@@ -128,6 +161,31 @@ export async function createApp(options: AppOptions) {
   const cookieName =
     origin.protocol === "https:" ? "__Host-console" : "console";
   const routerObserver = createRouterObserver(options.stateDirectory);
+  function localConsoleOrigin() {
+    const listener = app.server.address();
+    return listener &&
+      typeof listener !== "string" &&
+      isLoopbackListener(listener.address) &&
+      isLoopbackOrigin(origin)
+      ? origin.origin
+      : null;
+  }
+  const snapshotStatus = () => {
+    const channel = options.kernelOwner;
+    if (!localConsoleOrigin() || !channel?.readSnapshot) return "unavailable";
+    return channel.snapshotAvailable?.() === false ? "disconnected" : "ready";
+  };
+  const admitMiInspection: import("fastify").onRequestAsyncHookHandler = async (
+    request,
+    reply,
+  ) => {
+    if (!localConsoleOrigin())
+      return reply
+        .code(403)
+        .send({ error: "Offline MI inspection requires a local Console" });
+    if (!(await authenticated(request)))
+      return reply.code(401).send({ error: "Login required" });
+  };
   await app.register(cookie);
   app.addHook("onRequest", async (request, reply) => {
     reply
@@ -152,8 +210,8 @@ export async function createApp(options: AppOptions) {
       return reply.code(403).send({ error: "Request origin denied" });
     }
   });
-  // Bypass the session plugin's rolling/expired-cookie handling for this
-  // read-only check. Use its pinned decoder and the same signed generation.
+  // Passive session checks and Router reconciliation must not renew sessions.
+  // Use the pinned decoder and the same signed generation without touching it.
   const Session = createRequire(import.meta.url)(
     "@fastify/session/lib/session",
   ) as {
@@ -166,7 +224,8 @@ export async function createApp(options: AppOptions) {
   app.addHook("onRequest", async (request, reply) => {
     if (
       request.method !== "GET" ||
-      request.routeOptions.url !== "/api/kernel/session-check"
+      (request.routeOptions.url !== "/api/kernel/session-check" &&
+        request.routeOptions.url !== "/api/router")
     )
       return;
     const cookieValue = request.cookies[cookieName];
@@ -197,7 +256,11 @@ export async function createApp(options: AppOptions) {
       expiryTime <= Date.now()
     )
       return reply.code(401).send({ error: "Login required" });
-    return reply.send({ authenticated: true });
+    return reply.send(
+      request.routeOptions.url === "/api/router"
+        ? routerObserver.view()
+        : { authenticated: true, snapshotStatus: snapshotStatus() },
+    );
   });
   await app.register(session, {
     secret: String(signing),
@@ -260,10 +323,15 @@ export async function createApp(options: AppOptions) {
       throw error;
     }
   }
-  app.get("/api/session", async (request) => ({
-    configured: Boolean(owner()),
-    authenticated: await authenticated(request),
-  }));
+  app.get("/api/session", async (request) => {
+    const signedIn = await authenticated(request);
+    const miInspectionOrigin = signedIn && localConsoleOrigin();
+    return {
+      configured: Boolean(owner()),
+      authenticated: signedIn,
+      ...(miInspectionOrigin ? { miInspectionOrigin } : {}),
+    };
+  });
   app.post<{ Body: { token?: unknown; password?: unknown } }>(
     "/api/bootstrap",
     async (request, reply) => {
@@ -384,20 +452,114 @@ export async function createApp(options: AppOptions) {
       return reply.code(401).send({ error: "Login required" });
     return { message: "Console session authenticated." };
   });
-  app.get("/api/router", async (request, reply) => {
+  app.get("/api/router", async (_request, reply) =>
+    reply.code(401).send({ error: "Login required" }),
+  );
+  app.post("/api/router/refresh", async (request, reply) => {
+    if (!(await authenticated(request)))
+      return reply.code(401).send({ error: "Login required" });
+    if (reply.raw.destroyed || request.raw.socket.destroyed) return reply;
+    try {
+      await routerObserver.refresh();
+    } catch (error) {
+      if (error instanceof RouterRefreshBusy)
+        return reply.code(503).send({ error: "Router refresh busy" });
+      throw error;
+    }
     if (!(await authenticated(request)))
       return reply.code(401).send({ error: "Login required" });
     return routerObserver.view();
   });
-  app.post("/api/router/refresh", async (request, reply) => {
-    if (!(await authenticated(request)))
-      return reply.code(401).send({ error: "Login required" });
-    const result = await routerObserver.refresh();
-    if (!(await authenticated(request)))
-      return reply.code(401).send({ error: "Login required" });
-    return result;
-  });
-  let proposalRead: Promise<{ digest: string; text: string }> | undefined;
+  let kernelRead: Promise<void> = Promise.resolve();
+  let kernelReadActive = false;
+  let ownerSequenceActive = false;
+  const ownerBusy = () => kernelReadActive || ownerSequenceActive;
+  const liveResponse = (reply: import("fastify").FastifyReply) =>
+    !reply.raw.destroyed && !reply.request.raw.socket.destroyed;
+  type ReadWaiter = () => Promise<boolean>;
+  type QueuedRead<T> = { pending: Promise<T>; waiters: Set<ReadWaiter> };
+  async function serializeKernelRead<T>(
+    waiters: Set<ReadWaiter>,
+    read: () => Promise<T>,
+  ): Promise<T> {
+    const previous = kernelRead;
+    let release!: () => void;
+    kernelRead = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    try {
+      await previous;
+      for (const admit of waiters) {
+        if (!(await admit())) continue;
+        if (ownerBusy()) throw new KernelReadBusy();
+        return await runKernelRead(read);
+      }
+      throw new KernelReadBusy();
+    } finally {
+      release();
+    }
+  }
+  async function runKernelRead<T>(read: () => Promise<T>): Promise<T> {
+    kernelReadActive = true;
+    try {
+      return await read();
+    } finally {
+      kernelReadActive = false;
+    }
+  }
+  const proposalReads = new Map<
+    string,
+    QueuedRead<{ digest: string; text: string }>
+  >();
+  type ReadSnapshot = NonNullable<
+    NonNullable<AppOptions["kernelOwner"]>["readSnapshot"]
+  >;
+  type SnapshotResult =
+    | { status: "observed"; snapshot: Awaited<ReturnType<ReadSnapshot>> }
+    | { status: "busy" | "resync-required" | "read-unavailable" };
+  type SnapshotWaiter = (result: SnapshotResult) => void;
+  let snapshotRead: { key: string; waiters: Set<SnapshotWaiter> } | undefined;
+  const approvalScopeReads = new Map<
+    string,
+    QueuedRead<{ digest: string; proposalDigest: string; text: string }>
+  >();
+  const readCount = () =>
+    proposalReads.size + approvalScopeReads.size + (snapshotRead ? 1 : 0);
+  const readQueueFull = () => readCount() >= KERNEL_READ_LIMIT;
+  const readsPending = () => readCount() > 0;
+  const sessionKey = (request: import("fastify").FastifyRequest) =>
+    JSON.stringify([request.session.sessionStoreId, request.session.sessionId]);
+  async function coalesceKernelRead<T>(
+    reads: Map<string, QueuedRead<T>>,
+    reply: import("fastify").FastifyReply,
+    read: () => Promise<T>,
+    skipSnapshots: boolean,
+  ) {
+    const key = sessionKey(reply.request);
+    let entry = reads.get(key);
+    if (!entry) {
+      if (readQueueFull() || (skipSnapshots && snapshotRead))
+        throw new KernelReadBusy();
+      const waiters = new Set<ReadWaiter>();
+      entry = { waiters, pending: serializeKernelRead(waiters, read) };
+      reads.set(key, entry);
+    }
+    if (entry.waiters.size >= KERNEL_READ_LIMIT) throw new KernelReadBusy();
+    // A queued read has less time to start than the browser's read deadline.
+    // Each live waiter has its own admission check; an abandoned first caller
+    // cannot cancel a coalesced same-session read for the others.
+    const deadline = performance.now() + 4000;
+    const live = () => liveResponse(reply) && performance.now() < deadline;
+    const admit = async () =>
+      live() && (await authenticated(reply.request)) && live();
+    entry.waiters.add(admit);
+    try {
+      return await entry.pending;
+    } finally {
+      entry.waiters.delete(admit);
+      if (reads.get(key) === entry) reads.delete(key);
+    }
+  }
   app.get("/api/kernel/owner", async (request, reply) => {
     if (!(await authenticated(request)))
       return reply.code(401).send({ error: "Login required" });
@@ -407,20 +569,22 @@ export async function createApp(options: AppOptions) {
     let proposal: { digest: string; text: string } | undefined;
     let failure = "disconnected";
     try {
-      proposalRead ??= ownerChannel.readProposal();
-      const pending = proposalRead;
-      try {
-        proposal = await pending;
-      } finally {
-        if (proposalRead === pending) proposalRead = undefined;
-      }
+      proposal = await coalesceKernelRead(
+        proposalReads,
+        reply,
+        ownerChannel.readProposal,
+        true,
+      );
     } catch (error) {
       if (error instanceof UnsupportedOwnerPayload) failure = "unsupported";
       else if (error instanceof InvalidOwnerResponse) failure = "invalid";
+      else if (error instanceof KernelReadBusy) failure = "busy";
       // Do not expose producer errors or retain partial observations.
     }
     if (!(await authenticated(request)))
       return reply.code(401).send({ error: "Login required" });
+    if (failure === "busy")
+      return reply.code(503).send({ error: "Kernel read busy" });
     if (!proposal) return { status: failure, actions: [] };
     let approve = false;
     if (
@@ -432,9 +596,20 @@ export async function createApp(options: AppOptions) {
     ) {
       try {
         approve =
-          (await readApprovalScope(ownerChannel.readApprovalScope))
-            .proposalDigest === proposal.digest;
-      } catch {
+          (
+            await coalesceKernelRead(
+              approvalScopeReads,
+              reply,
+              ownerChannel.readApprovalScope,
+              true,
+            )
+          ).proposalDigest === proposal.digest;
+      } catch (error) {
+        if (error instanceof KernelReadBusy) {
+          if (!(await authenticated(request)))
+            return reply.code(401).send({ error: "Login required" });
+          return reply.code(503).send({ error: "Kernel read busy" });
+        }
         // An otherwise supported proposal need not have a usable approval scope.
       }
       if (!(await authenticated(request)))
@@ -448,23 +623,6 @@ export async function createApp(options: AppOptions) {
       text: proposal.text,
     };
   });
-  let approvalScopeRead:
-    | ReturnType<
-        NonNullable<NonNullable<AppOptions["kernelOwner"]>["readApprovalScope"]>
-      >
-    | undefined;
-  async function readApprovalScope(
-    read: NonNullable<
-      NonNullable<AppOptions["kernelOwner"]>["readApprovalScope"]
-    >,
-  ) {
-    const pending = (approvalScopeRead ??= read());
-    try {
-      return await pending;
-    } finally {
-      if (approvalScopeRead === pending) approvalScopeRead = undefined;
-    }
-  }
   app.get("/api/kernel/approval-scope", async (request, reply) => {
     if (!(await authenticated(request)))
       return reply.code(401).send({ error: "Login required" });
@@ -478,14 +636,22 @@ export async function createApp(options: AppOptions) {
       { digest: string; proposalDigest: string; text: string } | undefined;
     let failure = "disconnected";
     try {
-      observation = await readApprovalScope(channel.readApprovalScope);
+      observation = await coalesceKernelRead(
+        approvalScopeReads,
+        reply,
+        channel.readApprovalScope,
+        false,
+      );
     } catch (error) {
       if (error instanceof UnsupportedOwnerPayload) failure = "unsupported";
       else if (error instanceof InvalidOwnerResponse) failure = "invalid";
+      else if (error instanceof KernelReadBusy) failure = "busy";
       // Do not expose producer errors or retain partial observations.
     }
     if (!(await authenticated(request)))
       return reply.code(401).send({ error: "Login required" });
+    if (failure === "busy")
+      return reply.code(503).send({ error: "Kernel read busy" });
     return observation
       ? {
           status: "connected",
@@ -784,6 +950,10 @@ export async function createApp(options: AppOptions) {
     if (BigInt(input.expires_at) <= BigInt(Math.floor(now() / 1000)))
       return reply.code(409).send({ error: "Approval deadline expired" });
     const originalBinding = binding(request);
+    // Keep snapshot sampling out of multi-exchange review and dispatch paths.
+    if (ownerBusy())
+      return reply.code(503).send({ error: "Review unavailable" });
+    ownerSequenceActive = true;
     try {
       const proposal = await channel.readProposal();
       const scope = await channel.readApprovalScope();
@@ -823,6 +993,8 @@ export async function createApp(options: AppOptions) {
       };
     } catch {
       return reply.code(503).send({ error: "Review unavailable" });
+    } finally {
+      ownerSequenceActive = false;
     }
   });
   app.post("/api/kernel/owner", async (request, reply) => {
@@ -858,8 +1030,14 @@ export async function createApp(options: AppOptions) {
       review.expires <= now()
     )
       return reply.code(409).send({ error: "Review unavailable" });
+    if (ownerBusy())
+      return reply.code(503).send({
+        kind: "not-sent",
+        error: "Owner channel busy; no command sent",
+      });
     reviews.delete(input.review);
     let initiated = false;
+    ownerSequenceActive = true;
     try {
       const scope = await channel.readApprovalScope();
       const revision = await channel.readRevision();
@@ -934,6 +1112,8 @@ export async function createApp(options: AppOptions) {
             ? { kind: "unknown", error: "Approval outcome unknown" }
             : { kind: "not-sent", error: "Approval was not sent" },
         );
+    } finally {
+      ownerSequenceActive = false;
     }
   });
   app.post("/api/kernel/owner-replay", async (request, reply) => {
@@ -956,6 +1136,7 @@ export async function createApp(options: AppOptions) {
       return reply
         .code(503)
         .send({ error: "Verified outcome awaiting local persistence" });
+    let recovering = false;
     try {
       const row = db
         .prepare(
@@ -964,15 +1145,16 @@ export async function createApp(options: AppOptions) {
         .get(input.commandId) as unknown as DispositionRow | undefined;
       const original = row && dispositionCommand(row, channel);
       if (original && channel?.readDisposition) {
-        if (!channel.canSend?.())
-          return reply
-            .code(503)
-            .send({ error: "Owner channel busy; disposition check not sent" });
+        if (ownerBusy() || !channel.canSend?.())
+          return reply.code(503).send({
+            error: "Owner channel busy; disposition check not sent",
+          });
         const token = beginOwnerReplay(
           request.session.sessionStoreId,
           request.session.sessionId,
           original,
         );
+        recovering = ownerSequenceActive = true;
         const pending = dispatchOwnerCommand(token, (command) => {
           const observed = channel.readDisposition!(command).then((result) => {
             persistReceipt(command, result);
@@ -994,6 +1176,8 @@ export async function createApp(options: AppOptions) {
       return reply
         .code(503)
         .send({ error: "Original outcome remains unknown" });
+    } finally {
+      if (recovering) ownerSequenceActive = false;
     }
     const command = replayable.get(input.commandId);
     if (
@@ -1007,10 +1191,11 @@ export async function createApp(options: AppOptions) {
         .code(409)
         .send({ error: "Original owner channel unavailable" });
     }
-    if (!channel.canSend?.())
+    if (ownerBusy() || !channel.canSend?.())
       return reply
         .code(503)
         .send({ error: "Owner channel busy; receipt check not sent" });
+    ownerSequenceActive = true;
     try {
       const token = beginOwnerReplay(
         request.session.sessionStoreId,
@@ -1038,7 +1223,173 @@ export async function createApp(options: AppOptions) {
       return reply
         .code(503)
         .send({ error: "Original outcome remains unknown" });
+    } finally {
+      ownerSequenceActive = false;
     }
+  });
+  app.post(
+    "/api/mi/inspect-empty",
+    { bodyLimit: 512 * 1024, onRequest: admitMiInspection },
+    async (request, reply) => {
+      const body = request.body;
+      if (
+        !body ||
+        typeof body !== "object" ||
+        Array.isArray(body) ||
+        Object.keys(body).length !== 1 ||
+        typeof (body as Record<string, unknown>).text !== "string"
+      )
+        return reply.code(400).send({ error: "Invalid request" });
+      const result = inspectEmptyMiSnapshot((body as { text: string }).text);
+      if (!(await authenticated(request)))
+        return reply.code(401).send({ error: "Login required" });
+      return result;
+    },
+  );
+  app.post(
+    "/api/mi/inspect-publication",
+    { bodyLimit: 1024 * 1024, onRequest: admitMiInspection },
+    async (request, reply) => {
+      const body = request.body;
+      if (!body || typeof body !== "object" || Array.isArray(body))
+        return reply.code(400).send({ error: "Invalid request" });
+      const input = body as Record<string, unknown>;
+      if (
+        !Object.hasOwn(input, "text") ||
+        !Object.hasOwn(input, "expected") ||
+        Object.keys(input).some(
+          (key) => !["text", "expected", "previous"].includes(key),
+        ) ||
+        typeof input.text !== "string"
+      )
+        return reply.code(400).send({ error: "Invalid request" });
+      const expected = input.expected as ExpectedMiReference;
+      const inspection = inspectMiPublication(input.text, expected);
+      let comparison: ReturnType<typeof compareMiPublications> | undefined;
+      if (input.previous !== undefined) {
+        if (
+          !input.previous ||
+          typeof input.previous !== "object" ||
+          Array.isArray(input.previous)
+        )
+          return reply.code(400).send({ error: "Invalid request" });
+        const previous = input.previous as Record<string, unknown>;
+        if (
+          Object.keys(previous).length !== 2 ||
+          typeof previous.text !== "string" ||
+          !Object.hasOwn(previous, "expected")
+        )
+          return reply.code(400).send({ error: "Invalid request" });
+        comparison = compareMiPublications(
+          previous.text,
+          previous.expected as ExpectedMiReference,
+          input.text,
+          expected,
+        );
+      }
+      if (!(await authenticated(request)))
+        return reply.code(401).send({ error: "Login required" });
+      if (
+        inspection.status !== "checked" ||
+        (comparison &&
+          (comparison.status === "rejected" ||
+            comparison.status === "resync-required"))
+      )
+        return {
+          status:
+            comparison?.status === "resync-required"
+              ? "resync-required"
+              : "rejected",
+        };
+      return { ...inspection, comparison: comparison?.status ?? "unavailable" };
+    },
+  );
+  app.post("/api/kernel/snapshot", async (request, reply) => {
+    if (!(await authenticated(request)))
+      return reply.code(401).send({ error: "Login required" });
+    const status = snapshotStatus();
+    if (status !== "ready") return { status };
+    if (
+      !request.body ||
+      typeof request.body !== "object" ||
+      Array.isArray(request.body)
+    )
+      return reply.code(400).send({ error: "Invalid request" });
+    const input = request.body as Record<string, unknown>;
+    let selection:
+      { page: number; epoch: string; sequence: string } | undefined;
+    if (Object.keys(input).length !== 0) {
+      if (
+        Object.keys(input).length !== 3 ||
+        typeof input.page !== "number" ||
+        !Number.isSafeInteger(input.page) ||
+        input.page < 0 ||
+        input.page > 1000000 ||
+        typeof input.epoch !== "string" ||
+        !/^[0-9a-f]{32}$/.test(input.epoch) ||
+        typeof input.sequence !== "string" ||
+        !/^(0|[1-9][0-9]{0,18})$/.test(input.sequence)
+      )
+        return reply.code(400).send({ error: "Invalid request" });
+      selection = {
+        page: input.page,
+        epoch: input.epoch,
+        sequence: input.sequence,
+      };
+    }
+    const key = JSON.stringify([sessionKey(request), selection ?? null]);
+    if (
+      snapshotRead
+        ? snapshotRead.key !== key ||
+          snapshotRead.waiters.size >= KERNEL_READ_LIMIT
+        : ownerBusy() || readsPending()
+    )
+      return { status: "busy" };
+    if (!liveResponse(reply)) return reply;
+    if (!snapshotRead) {
+      // Either admit now or return busy. The exchange has its own deadline
+      // and drains independently of HTTP waiters, even if all leave.
+      const entry = { key, waiters: new Set<SnapshotWaiter>() };
+      snapshotRead = entry;
+      const finish = (result: SnapshotResult) => {
+        snapshotRead = undefined;
+        for (const send of entry.waiters) send(result);
+        entry.waiters.clear();
+      };
+      kernelRead = runKernelRead(() =>
+        options.kernelOwner!.readSnapshot!(selection),
+      ).then(
+        (snapshot) => finish({ status: "observed", snapshot }),
+        (error) =>
+          finish({
+            status:
+              error instanceof SnapshotChanged
+                ? "resync-required"
+                : error instanceof KernelReadBusy
+                  ? "busy"
+                  : "read-unavailable",
+          }),
+      );
+    }
+    const { waiters } = snapshotRead;
+    let send!: (result: SnapshotResult | null) => void;
+    const promise = new Promise<SnapshotResult | null>((resolve) => {
+      send = resolve;
+    });
+    const detach = () => {
+      waiters.delete(send);
+      send(null);
+    };
+    waiters.add(send);
+    reply.raw.once("close", detach);
+    const result = await promise;
+    reply.raw.off("close", detach);
+    if (!result || !liveResponse(reply)) return reply;
+    const authorized = await authenticated(request);
+    if (!liveResponse(reply)) return reply;
+    if (!authorized) return reply.code(401).send({ error: "Login required" });
+    const current = snapshotStatus();
+    return current === "ready" ? result : { status: current };
   });
   await app.register(fastifyStatic, {
     root: resolve(options.staticDirectory ?? "dist"),

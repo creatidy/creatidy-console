@@ -1,4 +1,5 @@
 import { execFile, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdtempSync,
@@ -139,8 +140,96 @@ it.skipIf(!existsSync(chrome))(
       await page
         .getByLabel("Owner password", { exact: true })
         .fill("synthetic-owner-password");
-      await page.getByRole("button", { name: "Sign in" }).click();
+      const [loginResponse] = await Promise.all([
+        page.waitForResponse(
+          (response) =>
+            response.url() === `${origin}/api/login` &&
+            response.request().method() === "POST",
+          { timeout: 5000 },
+        ),
+        page.getByRole("button", { name: "Sign in" }).click(),
+      ]);
+      expect(loginResponse.status()).toBe(200);
       await page.getByRole("heading", { name: "Your console" }).waitFor();
+      const remote = await browser.newPage();
+      const remoteOrigin = "https://console.example.invalid";
+      const remoteUploads = [];
+      try {
+        await remote.route(`${remoteOrigin}/**`, async (route) => {
+          const { pathname } = new URL(route.request().url());
+          if (pathname === "/api/session") {
+            await route.fulfill({
+              json: {
+                configured: true,
+                authenticated: true,
+                miInspectionOrigin: remoteOrigin,
+              },
+            });
+          } else if (pathname.startsWith("/api/mi/inspect-")) {
+            remoteUploads.push(pathname);
+            await route.fulfill({ json: { status: "rejected" } });
+          } else if (pathname.startsWith("/api/")) {
+            await route.fulfill({ json: { status: "unavailable" } });
+          } else {
+            const asset = await fetch(`${origin}${pathname}`);
+            await route.fulfill({
+              status: asset.status,
+              contentType: asset.headers.get("content-type"),
+              body: Buffer.from(await asset.arrayBuffer()),
+            });
+          }
+        });
+        await remote.goto(remoteOrigin);
+        await remote.getByRole("heading", { name: "Your console" }).waitFor();
+        const file = {
+          name: "synthetic.json",
+          mimeType: "application/json",
+          buffer: Buffer.from("{}"),
+        };
+        const empty = remote.locator("#mi-snapshot-file");
+        const current = remote.locator("#mi-publication-file");
+        const previous = remote.locator("#mi-previous-file");
+        if ((await empty.count()) && (await empty.isEnabled())) {
+          const sent = remote.waitForResponse("**/api/mi/inspect-empty");
+          await empty.setInputFiles(file);
+          await sent;
+          await remote.getByText(/The file or reference is invalid/).waitFor();
+        }
+        if ((await current.count()) && (await current.isEnabled())) {
+          await remote.locator("#mi-digest").fill("a".repeat(64));
+          await remote.locator("#mi-previous-digest").fill("b".repeat(64));
+          for (const compare of [false, true]) {
+            if (compare) await previous.setInputFiles(file);
+            const sent = remote.waitForResponse(
+              "**/api/mi/inspect-publication",
+            );
+            await current.setInputFiles(file);
+            await sent;
+            await remote
+              .getByText(/The file or reference is invalid/)
+              .waitFor();
+          }
+        }
+        expect.soft(remoteUploads).toEqual([]);
+        expect
+          .soft(
+            await remote
+              .getByText(/Offline MI inspection is unavailable/)
+              .count(),
+          )
+          .toBe(1);
+        expect
+          .soft(await remote.locator('input[type="file"]:enabled').count())
+          .toBe(0);
+      } finally {
+        await remote.close();
+      }
+      await page
+        .getByText(/Selected files are sent to the authenticated local Console/)
+        .waitFor();
+      expect(
+        await page.locator("#mi-snapshot-heading + p code").textContent(),
+      ).toBe(origin);
       await page
         .getByRole("heading", { name: "Kernel owner actions" })
         .waitFor();
@@ -154,6 +243,287 @@ it.skipIf(!existsSync(chrome))(
           .getByRole("button", { name: /approve|stop|reconcile|start/i })
           .count(),
       ).toBe(0);
+      const mi = {
+        schema: "mi.operator-working/1",
+        product: "model-intelligence",
+        instance: '<img src=x onerror="window.miInjected=1">',
+        evaluated_at: "2026-11-13T00:00:00Z",
+        capabilities: {
+          reads: ["status", "inspect", "export"],
+          commands: [],
+          replay: false,
+        },
+        publication: {
+          state: "empty",
+          reference: null,
+          artifact: null,
+          diagnostics: [],
+        },
+        health: {
+          state: "missing",
+          sha256: null,
+          data: null,
+          correlation: "unavailable",
+        },
+        facts: {
+          latest: [],
+          future: [],
+          stale: [],
+          unknown_freshness: [],
+          notices: [],
+          uncertain_campaigns: [],
+          conflicts: [],
+          projection: { offers: [], models: [], surfaces: [], conflicts: [] },
+        },
+        history: {
+          scope: "retained-publication-cuts-only",
+          replay: false,
+          checkpoint: null,
+          relation: "unavailable",
+          evidence_added: [],
+          projection_changed: null,
+        },
+      };
+      await page
+        .getByLabel("Select an offline snapshot (maximum 256 KiB)")
+        .setInputFiles({
+          name: "synthetic-mi.json",
+          mimeType: "application/json",
+          buffer: Buffer.from(JSON.stringify(mi)),
+        });
+      await page.getByText(/Supported empty snapshot shape/).waitFor();
+      expect(await page.evaluate(() => window.miInjected)).toBeUndefined();
+      for (const [state, expected] of [
+        ["invalid", /reports an invalid retained publication/],
+        ["unsupported", /reports an unsupported retained publication/],
+      ]) {
+        await page
+          .getByLabel("Select an offline snapshot (maximum 256 KiB)")
+          .setInputFiles({
+            name: "synthetic-mi-state.json",
+            mimeType: "application/json",
+            buffer: Buffer.from(
+              JSON.stringify({
+                ...mi,
+                publication: {
+                  state,
+                  reference: null,
+                  artifact: null,
+                  diagnostics: ["retained-publication-invalid-or-unreadable"],
+                },
+              }),
+            ),
+          });
+        await page.getByText(expected).waitFor();
+        await page
+          .getByText(/previous inspected file remains last known/)
+          .waitFor();
+        await page.getByText(/Unverified file instance/).waitFor();
+      }
+      await page
+        .getByLabel("Select an offline snapshot (maximum 256 KiB)")
+        .setInputFiles({
+          name: "invalid.json",
+          mimeType: "application/json",
+          buffer: Buffer.from("{invalid"),
+        });
+      await page
+        .getByText(/previous inspected file remains last known/)
+        .waitFor();
+      await page.getByText(/Unverified file instance/).waitFor();
+      await page.evaluate(() => {
+        const original = window.fetch.bind(window);
+        let hold = true;
+        window.fetch = (...args) => {
+          if (hold && args[0] === "/api/kernel/session-check") {
+            hold = false;
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: () =>
+                new Promise((resolve) => {
+                  window.releaseOldMiCheck = () =>
+                    resolve({ authenticated: false });
+                }),
+            });
+          }
+          return original(...args);
+        };
+      });
+      await page.clock.fastForward(10000);
+      await page.waitForFunction(
+        () => typeof window.releaseOldMiCheck === "function",
+      );
+      await page
+        .getByLabel("Select an offline snapshot (maximum 256 KiB)")
+        .setInputFiles({
+          name: "synthetic-mi.json",
+          mimeType: "application/json",
+          buffer: Buffer.from(JSON.stringify(mi)),
+        });
+      await page.getByText(/Unverified file instance/).waitFor();
+      await page.evaluate(async () => {
+        window.releaseOldMiCheck();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(await page.getByText(/Unverified file instance/).count()).toBe(1);
+      await page.reload();
+      await page.getByRole("heading", { name: "Your console" }).waitFor();
+      expect(await page.getByText(/Unverified file instance/).count()).toBe(0);
+      const payload = {
+        applicability: {
+          scope: "synthetic",
+          channel: null,
+          configuration: null,
+          source_ids: ["synthetic-source"],
+        },
+        observations: [
+          {
+            id: mi.instance,
+            source: "synthetic-source",
+            authority: "official",
+            type: "documentation",
+            reference: "https://example.invalid/",
+            revision: null,
+            rights: { distribution: "unknown", license: "unknown" },
+            times: {
+              acquired: "2026-01-01T00:00:00Z",
+              observed: null,
+              published: null,
+              fresh_until: null,
+            },
+          },
+        ],
+        statements: [],
+        notices: [],
+        uncertain_campaigns: [],
+      };
+      const frame = {
+        format_version: 1,
+        payload_schema: "mi.public-evidence-working/2",
+        produced_at: "2026-01-01T00:00:00Z",
+        scope: "synthetic",
+        members: [`observation:${mi.instance}`],
+        sources: [
+          {
+            source_id: "synthetic-source",
+            reference: "https://example.invalid/",
+            revision: null,
+          },
+        ],
+        payload: JSON.stringify(payload),
+      };
+      const artifact = JSON.stringify(frame);
+      const ref = {
+        format_version: 1,
+        payload_schema: frame.payload_schema,
+        sha256: createHash("sha256").update(artifact).digest("hex"),
+      };
+      const publication = {
+        ...mi,
+        publication: {
+          state: "available",
+          reference: ref,
+          artifact,
+          diagnostics: [],
+        },
+        history: { ...mi.history, relation: "initial" },
+      };
+      const file = {
+        name: "synthetic-publication.json",
+        mimeType: "application/json",
+        buffer: Buffer.from(JSON.stringify(publication)),
+      };
+      await page
+        .getByLabel("Expected artifact SHA-256", { exact: true })
+        .fill(ref.sha256);
+      await page
+        .getByLabel("Previous expected artifact SHA-256")
+        .fill(ref.sha256);
+      await page
+        .getByLabel("Previous offline snapshot (optional, maximum 256 KiB)")
+        .setInputFiles(file);
+      await page
+        .getByLabel("Select a current publication snapshot (maximum 256 KiB)")
+        .setInputFiles(file);
+      await page.getByText(/Comparison of supplied files: duplicate/).waitFor();
+      expect(
+        await page
+          .getByText(/Neither file nor reference is authenticated/)
+          .count(),
+      ).toBe(1);
+      const disclosure = page.getByText(
+        "Untrusted evidence records and reported rights",
+      );
+      await disclosure.click();
+      expect(await page.getByText(/synthetic-source/).count()).toBeGreaterThan(
+        0,
+      );
+      expect(await page.evaluate(() => window.miInjected)).toBeUndefined();
+      let disclosureCheckStarted;
+      let releaseDisclosureCheck;
+      const startedDisclosureCheck = new Promise((resolve) => {
+        disclosureCheckStarted = resolve;
+      });
+      const heldDisclosureCheck = new Promise((resolve) => {
+        releaseDisclosureCheck = resolve;
+      });
+      await page.route("**/api/kernel/session-check", async (route) => {
+        disclosureCheckStarted();
+        await heldDisclosureCheck;
+        await route.fallback();
+      });
+      try {
+        await disclosure.focus();
+        await page.clock.fastForward(10000);
+        await startedDisclosureCheck;
+        await disclosure.waitFor({ state: "detached" });
+      } finally {
+        releaseDisclosureCheck();
+      }
+      await disclosure.waitFor();
+      await page.unroute("**/api/kernel/session-check");
+      expect(
+        await disclosure.evaluate((node) => ({
+          open: node.parentElement.open,
+          focused: document.activeElement === node,
+        })),
+      ).toEqual({ open: true, focused: true });
+      await page
+        .getByLabel("Previous offline snapshot (optional, maximum 256 KiB)")
+        .setInputFiles(file);
+      const unrelated = {
+        ...file,
+        buffer: Buffer.from(
+          JSON.stringify({ ...publication, instance: "other-instance" }),
+        ),
+      };
+      await page
+        .getByLabel("Select a current publication snapshot (maximum 256 KiB)")
+        .setInputFiles(unrelated);
+      await page
+        .getByText(/do not establish a continuous retained cut/)
+        .waitFor();
+      await page
+        .getByText(/previous inspected file remains last known/)
+        .waitFor();
+      await page.getByText(/Comparison of supplied files: duplicate/).waitFor();
+      await page
+        .getByLabel("Select a current publication snapshot (maximum 256 KiB)")
+        .setInputFiles(unrelated);
+      await page
+        .getByText(/Unverified file instance: other-instance/)
+        .waitFor();
+      await page.getByText(/Earlier history: unavailable/).waitFor();
+      expect(await disclosure.evaluate((node) => node.parentElement.open)).toBe(
+        false,
+      );
+      await page.reload();
+      await page.getByRole("heading", { name: "Your console" }).waitFor();
+      expect(await page.getByText(/Comparison of supplied files/).count()).toBe(
+        0,
+      );
       await page.route("**/api/kernel/owner-journal", (route) =>
         route.fulfill({
           json: {
@@ -244,9 +614,253 @@ it.skipIf(!existsSync(chrome))(
       await page.unroute("**/api/kernel/owner-journal");
       const hostile =
         '<img src=x onerror="window.ownerInjected=1">' + "x".repeat(2048);
+      let snapshotReads = 0;
+      const visitedPages = [];
+      let busyLaterPage = true;
+      let holdLaterPage = true;
+      const sessionCheckPath = "**/api/kernel/session-check";
+      let snapshotStatus = "ready";
+      await page.route(sessionCheckPath, async (route) => {
+        const response = await route.fetch();
+        await route.fulfill({
+          response,
+          json: { ...(await response.json()), snapshotStatus },
+        });
+      });
+      const laterRequest = Promise.withResolvers();
+      const releaseLaterRequest = Promise.withResolvers();
+      await page.route("**/api/kernel/snapshot", async (route) => {
+        snapshotReads++;
+        const pageNumber = route.request().postDataJSON()?.page ?? 0;
+        visitedPages.push(pageNumber);
+        if (snapshotStatus === "disconnected")
+          return route.fulfill({ json: { status: "disconnected" } });
+        if (pageNumber === 10 && busyLaterPage) {
+          busyLaterPage = false;
+          return route.fulfill({ json: { status: "busy" } });
+        }
+        if (pageNumber === 10 && holdLaterPage) {
+          holdLaterPage = false;
+          laterRequest.resolve(route.request().postDataJSON());
+          await releaseLaterRequest.promise;
+          return route.abort();
+        }
+        return route.fulfill({
+          json: {
+            status: "observed",
+            snapshot: {
+              scope: hostile,
+              epoch: "a".repeat(32),
+              sequence: "3",
+              revision: "4",
+              startPage: pageNumber,
+              nextPage: { 0: 3, 3: 8, 8: 10 }[pageNumber] ?? null,
+              status: "active",
+              history: "gap",
+              counts: {
+                work_units: { sampled: pageNumber ? 1 : 24, total: 25 },
+              },
+              workUnits: [[hostile, "pending", null, null], null],
+              attempts: [],
+              decisions: [],
+              correlations: [],
+              commandCoverage: { sampled: 0, total: 0, complete: true },
+            },
+          },
+        });
+      });
+      expect(snapshotReads).toBe(0);
+      await page.getByRole("button", { name: "Read snapshot" }).click();
+      await page.getByText("work_units: 25 total; 24 sampled").waitFor();
+      expect
+        .soft(
+          await page
+            .getByText(/Progress continuity for this descriptor: gap/)
+            .count(),
+        )
+        .toBe(1);
+      expect(snapshotReads).toBe(1);
+      expect(await page.evaluate(() => window.ownerInjected)).toBeUndefined();
+      await page.getByRole("button", { name: "Next pages" }).click();
+      await page.getByText("work_units: 25 total; 1 sampled").waitFor();
+      await page
+        .getByText("Showing up to eight pages starting at producer page 3.")
+        .waitFor();
+      expect
+        .soft(
+          await page
+            .getByText(/Progress continuity for this descriptor: gap/)
+            .count(),
+        )
+        .toBe(1);
+      expect(snapshotReads).toBe(2);
+      for (const [button, pageNumber, outcome] of [
+        ["Next pages", 8, "observed"],
+        ["Next pages", 10, "busy"],
+        ["Next pages", 10, "timeout"],
+        ["Next pages", 10, "observed"],
+        ["Previous pages", 8, "observed"],
+      ]) {
+        const control = page.getByRole("button", { name: button });
+        if (outcome === "timeout") {
+          await control.focus();
+          await control.press("Enter");
+          try {
+            expect(await laterRequest.promise).toEqual({
+              page: 10,
+              epoch: "a".repeat(32),
+              sequence: "3",
+            });
+            await page.clock.fastForward(15000);
+            await page.getByText(/Kernel snapshot read timed out/).waitFor();
+            expect(await control.isEnabled()).toBe(true);
+            expect(await page.getByText("Sampled work units").count()).toBe(0);
+          } finally {
+            releaseLaterRequest.resolve();
+          }
+          continue;
+        }
+        const sampled = page.waitForResponse(
+          (response) => response.url().endsWith("/api/kernel/snapshot"),
+          { timeout: 3000 },
+        );
+        await control.focus();
+        await control.press("Enter");
+        await sampled;
+        expect.soft(visitedPages.at(-1)).toBe(pageNumber);
+        if (outcome === "busy") {
+          await page
+            .getByText(/Another snapshot read is in progress/)
+            .waitFor();
+        } else
+          await page
+            .getByText(/Showing up to eight pages starting at producer page/)
+            .waitFor();
+        expect
+          .soft(await page.evaluate(() => document.activeElement?.textContent))
+          .toBe(button);
+      }
+      const previousPages = page.getByRole("button", {
+        name: "Previous pages",
+      });
+      await previousPages.focus();
+      await page.evaluate(() => {
+        const original = window.fetch.bind(window);
+        let hold = true;
+        window.fetch = (...args) => {
+          if (hold && args[0] === "/api/kernel/session-check") {
+            hold = false;
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: () =>
+                new Promise((resolve) => {
+                  window.releaseOldKernelCheck = () =>
+                    resolve({ authenticated: false });
+                }),
+            });
+          }
+          return original(...args);
+        };
+      });
+      await page.clock.fastForward(10000);
+      await page.waitForFunction(
+        () => typeof window.releaseOldKernelCheck === "function",
+      );
+      expect(
+        await previousPages.evaluate((node) => document.activeElement === node),
+      ).toBe(true);
+      expect(await page.getByText("Sampled work units").count()).toBe(0);
+      await page.getByRole("button", { name: "Read snapshot" }).click();
+      await page.getByText("work_units: 25 total; 24 sampled").waitFor();
+      await page.evaluate(async () => {
+        window.releaseOldKernelCheck();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(
+        await page.getByText("work_units: 25 total; 24 sampled").count(),
+      ).toBe(1);
+      const readsBeforeClosure = snapshotReads;
+      snapshotStatus = "disconnected";
+      await page.clock.fastForward(10000);
+      const unavailable = page.getByText(
+        "The configured Kernel snapshot channel is closed.",
+      );
+      await unavailable.waitFor({ timeout: 3000 });
+      expect(await page.getByText("Sampled work units").count()).toBe(0);
+      expect(snapshotReads).toBe(readsBeforeClosure);
+      await page.getByRole("button", { name: "Read snapshot" }).click();
+      await unavailable.waitFor();
+      expect(snapshotReads).toBe(readsBeforeClosure + 1);
+      await page.getByRole("heading", { name: "Your console" }).waitFor();
+      snapshotStatus = "ready";
+      await page.route("**/api/kernel/session-check", (route) =>
+        route.fulfill({ status: 401, json: { error: "Login required" } }),
+      );
+      await page.getByRole("button", { name: "Read snapshot" }).click();
+      await page.getByRole("heading", { name: "Sign in" }).waitFor();
+      expect(
+        await page.getByText("work_units: 25 total; 24 sampled").count(),
+      ).toBe(0);
+      await page.unroute("**/api/kernel/session-check");
+      await page.unroute("**/api/kernel/snapshot");
+      await page
+        .getByLabel("Owner password", { exact: true })
+        .fill("synthetic-owner-password");
+      await page.evaluate(() => {
+        window.originalTestFetch = window.fetch;
+        window.fetch = async (...args) => {
+          const response = await window.originalTestFetch(...args);
+          if (new URL(response.url).pathname === "/api/login")
+            await response.clone().arrayBuffer();
+          return response;
+        };
+      });
+      try {
+        const [instrumentedLogin] = await Promise.all([
+          page.waitForResponse(
+            (response) =>
+              response.url() === `${origin}/api/login` &&
+              response.request().method() === "POST",
+            { timeout: 5000 },
+          ),
+          page.getByRole("button", { name: "Sign in" }).click(),
+        ]);
+        expect(instrumentedLogin.status()).toBe(200);
+        let timer;
+        try {
+          expect(
+            await Promise.race([
+              instrumentedLogin.json(),
+              new Promise((_, reject) => {
+                timer = setTimeout(
+                  () =>
+                    reject(new Error("Instrumented login body unavailable")),
+                  5000,
+                );
+              }),
+            ]),
+          ).toEqual({ ok: true });
+        } finally {
+          clearTimeout(timer);
+        }
+      } finally {
+        await page.evaluate(() => {
+          window.fetch = window.originalTestFetch;
+          delete window.originalTestFetch;
+        });
+      }
+      await page.getByRole("heading", { name: "Your console" }).waitFor();
       let proposalReads = 0;
+      let ownerContended = true;
       await page.route("**/api/kernel/owner", (route) => {
         proposalReads++;
+        if (ownerContended)
+          return route.fulfill({
+            status: 503,
+            json: { error: "Kernel read busy" },
+          });
         return route.fulfill({
           json: {
             status: "connected",
@@ -260,6 +874,14 @@ it.skipIf(!existsSync(chrome))(
       });
       await page.setViewportSize({ width: 360, height: 800 });
       await page.reload();
+      await page
+        .getByText(/Kernel proposal unavailable|Kernel read busy/)
+        .waitFor();
+      ownerContended = false;
+      const retryProposal = page.getByRole("button", {
+        name: "Retry Kernel proposal",
+      });
+      await retryProposal.click();
       await page
         .getByText(
           "Verified proposal received when this view opened; it may have changed. Reload to recheck. Approval requires a fresh review.",
@@ -406,7 +1028,7 @@ it.skipIf(!existsSync(chrome))(
       await page.clock.fastForward(10000);
       await page.getByText(hostile, { exact: false }).first().waitFor();
       expect(checks).toBe(2);
-      expect(proposalReads).toBe(1);
+      expect(proposalReads).toBe(2);
       await page.unroute("**/api/kernel/session-check");
       let releaseCheck;
       let checkStarted;
@@ -521,8 +1143,17 @@ it.skipIf(!existsSync(chrome))(
         sources: [],
         discoveries: [],
       };
+      let heldRefresh;
+      const holdRouterRefresh = () =>
+        new Promise((resolve) => {
+          heldRefresh = resolve;
+        });
       upstream = createHttpServer((request, response) => {
         calls++;
+        if (upstreamMode === "hold") {
+          heldRefresh(response);
+          return;
+        }
         if (
           request.headers.authorization !== `Bearer ${key}` ||
           upstreamMode === "denied"
@@ -588,7 +1219,25 @@ it.skipIf(!existsSync(chrome))(
         )
         .waitFor();
       expect(calls).toBe(0);
+      await page.evaluate(() => {
+        const actualFetch = window.fetch;
+        window.fetch = async (input, options) => {
+          const response = await actualFetch(input, options);
+          if (input === "/api/router/refresh") {
+            await response.json();
+            window.fetch = actualFetch;
+            throw new Error("Synthetic lost first refresh reply");
+          }
+          return response;
+        };
+      });
       await page.getByRole("button", { name: "Refresh Router" }).click();
+      await page.getByText("m".repeat(64), { exact: false }).waitFor();
+      expect
+        .soft(await page.getByText(/Last-known data follows/).count())
+        .toBe(0);
+      if (await page.getByText(/Last-known data follows/).count())
+        await page.getByRole("button", { name: "Refresh Router" }).click();
       await page
         .getByText(
           "Last Router refresh succeeded. Connectivity and freshness are not continuously monitored; observations are not admission guarantees.",
@@ -618,13 +1267,249 @@ it.skipIf(!existsSync(chrome))(
           }),
         ),
       ).not.toContain(key);
+      // A second Console client invalidates the prior observation while the
+      // refresh caller is still waiting on its final authenticated read.
+      await page.evaluate(() => {
+        const original = window.fetch;
+        let refreshed = false;
+        window.fetch = async (...args) => {
+          if (args[0] === "/api/router/refresh") {
+            const response = await original(...args);
+            refreshed = true;
+            return response;
+          }
+          if (refreshed && args[0] === "/api/router") {
+            await new Promise((resolve) => {
+              window.releaseRouterPublication = () => {
+                window.fetch = original;
+                resolve();
+              };
+            });
+          }
+          return original(...args);
+        };
+      });
+      await page.getByRole("button", { name: "Refresh Router" }).click();
+      await page.waitForFunction(() =>
+        Boolean(window.releaseRouterPublication),
+      );
+      upstreamMode = "denied";
+      const otherClient = await page
+        .context()
+        .request.post(`${origin}/api/router/refresh`, {
+          headers: { origin },
+          data: {},
+        });
+      expect((await otherClient.json()).status).toBe("denied");
+      await page.evaluate(() => window.releaseRouterPublication());
+      await page
+        .getByRole("button", { name: "Refresh Router", exact: true })
+        .waitFor();
+      expect
+        .soft(await page.getByText(/Observer access was denied/).count())
+        .toBe(1);
+      expect
+        .soft(await page.getByText("resource-a", { exact: false }).count())
+        .toBe(0);
+
+      upstreamMode = "connected";
+      await page.getByRole("button", { name: "Refresh Router" }).click();
+      await page.getByText("m".repeat(64), { exact: false }).waitFor();
+      const beforeFailedRecovery = calls;
+      await page.route("**/api/router/refresh", (route) =>
+        route.abort("failed"),
+      );
+      await page.route("**/api/router", (route) => route.abort("failed"));
+      await page.getByRole("button", { name: "Refresh Router" }).click();
+      await page.getByRole("button", { name: "Retry Router status" }).waitFor();
+      expect(await page.getByText("resource-a", { exact: false }).count()).toBe(
+        0,
+      );
+      await page.unroute("**/api/router/refresh");
+      await page.unroute("**/api/router");
+      await page.clock.fastForward(10001);
+      await page.getByText("m".repeat(64), { exact: false }).waitFor();
+      expect
+        .soft(await page.getByText(/Last-known data follows/).count())
+        .toBe(1);
+      expect(calls).toBe(beforeFailedRecovery);
+      await page.getByRole("button", { name: "Refresh Router" }).click();
+      await page.getByText(/Last Router refresh succeeded/).waitFor();
+      // Hold an already sampled response across a newer authenticated view.
+      // The synthetic delivery ignores HTTP abort so the browser's fence is tested.
+      await page.evaluate(() => {
+        const original = window.fetch;
+        window.fetch = async (input, options) => {
+          const response = await original(input, options);
+          if (input !== "/api/router") return response;
+          window.fetch = original;
+          const previous = new Response(await response.text());
+          return new Promise((resolve) => {
+            window.deliverOldRouterView = () => resolve(previous);
+          });
+        };
+      });
+      await page.clock.fastForward(10001);
+      await page.waitForFunction(() => Boolean(window.deliverOldRouterView));
+      await page.evaluate(() => {
+        Object.defineProperty(document, "visibilityState", {
+          configurable: true,
+          value: "hidden",
+        });
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      expect(await page.getByText("resource-a", { exact: false }).count()).toBe(
+        0,
+      );
+      upstreamMode = "denied";
+      expect(
+        (
+          await (
+            await page.context().request.post(`${origin}/api/router/refresh`, {
+              headers: { origin },
+              data: {},
+            })
+          ).json()
+        ).status,
+      ).toBe("denied");
+      await page.evaluate(() => {
+        Object.defineProperty(document, "visibilityState", {
+          configurable: true,
+          value: "visible",
+        });
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await page.getByText(/Observer access was denied/).waitFor();
+      await page.evaluate(async () => {
+        window.deliverOldRouterView();
+        await Promise.resolve();
+      });
+      expect(await page.getByText(/Observer access was denied/).count()).toBe(
+        1,
+      );
+      expect(await page.getByText("resource-a", { exact: false }).count()).toBe(
+        0,
+      );
+      upstreamMode = "connected";
+      await page.getByRole("button", { name: "Refresh Router" }).click();
+      await page.getByText(/Last Router refresh succeeded/).waitFor();
+      const reconciledCalls = calls;
+      const refreshControl = page.getByRole("button", {
+        name: "Refresh Router",
+      });
+      await page.evaluate(() => {
+        const fetch = window.fetch;
+        window.routerPassiveCheckHeld = false;
+        window.fetch = (...args) =>
+          args[0] === "/api/router"
+            ? new Promise((resolve) => {
+                window.routerPassiveCheckHeld = true;
+                window.releaseRouterPassiveCheck = () => {
+                  window.fetch = fetch;
+                  resolve(fetch(...args));
+                };
+              })
+            : fetch(...args);
+      });
+      await refreshControl.focus();
+      await page.clock.fastForward(10000);
+      await page.waitForFunction(() => window.routerPassiveCheckHeld);
+      expect
+        .soft(await page.evaluate(() => document.activeElement.textContent))
+        .toBe("Refresh Router");
+      expect(await page.getByText("resource-a", { exact: false }).count()).toBe(
+        0,
+      );
+      await page.evaluate(() => window.releaseRouterPassiveCheck());
+      await page.getByText("m".repeat(64), { exact: false }).waitFor();
+      expect
+        .soft(
+          await refreshControl.evaluate(
+            (node) => document.activeElement === node,
+          ),
+        )
+        .toBe(true);
+      await page.route("**/api/router", (route) => route.abort("failed"));
+      await page.clock.fastForward(10000);
+      await page.getByRole("button", { name: "Retry Router status" }).waitFor();
+      expect(await page.getByText("resource-a", { exact: false }).count()).toBe(
+        0,
+      );
+      await page.unroute("**/api/router");
+      const recovery = page.waitForResponse(`${origin}/api/router`, {
+        timeout: 2500,
+      });
+      await page.clock.fastForward(10000);
+      const recovered = await recovery;
+      expect(recovered.status()).toBe(200);
+      expect(await recovered.headerValue("set-cookie")).toBeNull();
+      await page.getByText("m".repeat(64), { exact: false }).waitFor();
+      expect(calls).toBe(reconciledCalls);
+      await page.route("**/api/router", (route) =>
+        route.fulfill({ status: 401, json: { error: "expired" } }),
+      );
+      await page.clock.fastForward(10000);
+      await page.getByRole("heading", { name: "Sign in" }).waitFor();
+      expect(await page.getByText("resource-a", { exact: false }).count()).toBe(
+        0,
+      );
+      await page.unroute("**/api/router");
+      await page
+        .getByLabel("Owner password", { exact: true })
+        .fill("synthetic-owner-password");
+      await page.getByRole("button", { name: "Sign in" }).click();
+      await page.getByText("m".repeat(64), { exact: false }).waitFor();
       upstreamMode = "disconnected";
       await page.getByRole("button", { name: "Refresh Router" }).click();
       await page
         .getByText("Last-known data follows; it may be stale.")
         .waitFor();
-      upstreamMode = "denied";
+      const beforeTimeouts = calls;
+      const cachedDisconnect = page.waitForResponse(`${origin}/api/router`);
+      await page.clock.fastForward(10000);
+      expect((await (await cachedDisconnect).json()).status).toBe(
+        "disconnected",
+      );
+      await page
+        .getByText("Last-known data follows; it may be stale.")
+        .waitFor();
+      expect(calls).toBe(beforeTimeouts);
+      await page.evaluate(() => {
+        const original = window.fetch;
+        window.routerTimeouts = 0;
+        window.restoreRouterFetch = () => {
+          window.fetch = original;
+        };
+        window.fetch = (input, options) => {
+          if (input !== "/api/router/refresh") return original(input, options);
+          window.routerTimeouts++;
+          return new Promise((_, reject) => {
+            options.signal.addEventListener(
+              "abort",
+              () => reject(options.signal.reason),
+              { once: true },
+            );
+          });
+        };
+      });
       await page.getByRole("button", { name: "Refresh Router" }).click();
+      await page.waitForFunction(() => window.routerTimeouts === 1);
+      await page.clock.fastForward(10001);
+      await page
+        .getByText("Last-known data follows; it may be stale.")
+        .waitFor({ timeout: 3000 });
+      await page.getByText("m".repeat(64), { exact: false }).waitFor();
+      expect(calls).toBe(beforeTimeouts);
+      await page.getByRole("button", { name: "Refresh Router" }).click();
+      await page.waitForFunction(() => window.routerTimeouts === 2);
+      upstreamMode = "denied";
+      const denied = await page.request.post(`${origin}/api/router/refresh`, {
+        headers: { origin },
+        data: {},
+      });
+      expect((await denied.json()).status).toBe("denied");
+      const deniedCalls = calls;
+      await page.clock.fastForward(10001);
       await page
         .getByText(
           "Observer access was denied or revoked. Cached facts were cleared.",
@@ -633,6 +1518,129 @@ it.skipIf(!existsSync(chrome))(
       expect(await page.getByText("resource-a", { exact: false }).count()).toBe(
         0,
       );
+      expect(calls).toBe(deniedCalls);
+      await page.evaluate(() => window.restoreRouterFetch());
+      upstreamMode = "connected";
+      await page.getByRole("button", { name: "Refresh Router" }).click();
+      await page.getByText("m".repeat(64), { exact: false }).waitFor();
+      // The real POST reaches Console, but the browser stops waiting before
+      // the synthetic producer replies. The recovery GET still has old facts.
+      for (const finalStatus of ["connected", "denied"]) {
+        const heldRouterRefresh = holdRouterRefresh();
+        upstreamMode = "hold";
+        await page.evaluate(() => {
+          const original = window.fetch;
+          window.routerRefreshWaiting = false;
+          window.restoreRouterFetch = () => {
+            window.fetch = original;
+          };
+          window.fetch = (input, options) => {
+            if (input !== "/api/router/refresh")
+              return original(input, options);
+            window.routerRefreshWaiting = true;
+            return new Promise((_, reject) =>
+              options.signal.addEventListener(
+                "abort",
+                () => reject(options.signal.reason),
+                { once: true },
+              ),
+            );
+          };
+        });
+        await page.getByRole("button", { name: "Refresh Router" }).click();
+        await page.waitForFunction(() => window.routerRefreshWaiting, {
+          timeout: 3000,
+        });
+        const refreshResponse = page.request.post(
+          `${origin}/api/router/refresh`,
+          {
+            headers: { origin },
+            data: {},
+            timeout: 5000,
+          },
+        );
+        const heldResponse = await Promise.race([
+          heldRouterRefresh,
+          refreshResponse.then(() => {
+            throw new Error("Refresh was not held by the fixture");
+          }),
+        ]);
+        const delayedCalls = calls;
+        try {
+          await page.clock.fastForward(10001);
+          // Re-establish a cached nonempty view before delivering delayed denial.
+          await page
+            .getByText("Last-known data follows; it may be stale.")
+            .waitFor({ timeout: 3000 });
+          await page
+            .getByText("m".repeat(64), { exact: false })
+            .waitFor({ timeout: 3000 });
+        } finally {
+          if (finalStatus === "denied") heldResponse.writeHead(401).end();
+          else
+            heldResponse
+              .writeHead(200, { "content-type": "application/json" })
+              .end(
+                JSON.stringify({
+                  schema_version: 1,
+                  cursor: position,
+                  events: [],
+                  resync: null,
+                  resync_reason: null,
+                  provenance_current: true,
+                }),
+              );
+        }
+        expect((await (await refreshResponse).json()).status).toBe(finalStatus);
+        await page.clock.fastForward(10001);
+        if (finalStatus === "connected") {
+          await page
+            .getByText(/Last Router refresh succeeded/)
+            .waitFor({ timeout: 3000 });
+          await page
+            .getByText("m".repeat(64), { exact: false })
+            .waitFor({ timeout: 3000 });
+        } else {
+          await page
+            .getByText(
+              "Observer access was denied or revoked. Cached facts were cleared.",
+            )
+            .waitFor({ timeout: 3000 });
+          expect(
+            await page.getByText("resource-a", { exact: false }).count(),
+          ).toBe(0);
+        }
+        expect(calls).toBe(delayedCalls);
+        await page.evaluate(() => window.restoreRouterFetch());
+      }
+      upstreamMode = "connected";
+      await page.getByRole("button", { name: "Refresh Router" }).click();
+      await page.getByText("m".repeat(64), { exact: false }).waitFor();
+      const beforeInvalid = calls;
+      const configPath = join(state, "router.json");
+      const validConfig = readFileSync(configPath);
+      writeFileSync(configPath, "invalid");
+      await page.clock.fastForward(10001);
+      await page
+        .getByText(
+          "The local Router configuration is invalid or has unsafe permissions.",
+        )
+        .waitFor();
+      expect(await page.getByText("resource-a", { exact: false }).count()).toBe(
+        0,
+      );
+      expect(calls).toBe(beforeInvalid);
+      writeFileSync(configPath, validConfig);
+      const retryConfig = page.getByRole("button", {
+        name: "Retry Router status",
+      });
+      await retryConfig.click();
+      await page
+        .getByText(
+          "Configured, but not yet observed. Refresh to request a snapshot.",
+        )
+        .waitFor();
+      expect(calls).toBe(beforeInvalid);
       upstreamMode = "unsupported";
       await page.getByRole("button", { name: "Refresh Router" }).click();
       await page

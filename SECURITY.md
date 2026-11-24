@@ -45,32 +45,53 @@ browser-facing boundary for Kernel owner commands. A Console session does not
 grant Kernel authority: a trusted host must independently provision the correct
 Kernel-authorized capability. Kernel #124 delivered a Linux trusted-supervisor
 launch contract. The optional Linux supervisor-launched receiver retains the
-validated descriptor for fixed, bounded reads and reviewed approve delivery;
-default startup has no capability. The browser receives the verified original
-proposal text, scope and digest only after Console session checks before and
-after the read. Labels check pairing, not producer identity; descriptor custody
-and the trusted supervisor are security assumptions. The producer's declarations
-are not the effective host policy, which remains unknown. No proposal data is
-cached by the adapter or persisted in browser storage. Approval uses separately
-provisioned authority and exact reviewed identity. The local journal retains
-historical receipts, proven stale-revision refusals or unknown outcomes. A
-receipt is not proof of current authority or effect. Replay is limited to the
-original channel; recovery on a replacement is read-only and requires the
-supervisor's authoritative-journal continuity attestation and Kernel's exact
-original request and identity checks. Unpaired legacy intents remain unknown.
-Other owner actions are unsupported. No real live mutation is authorized without
-separate owner approval. Synthetic tests do not establish installed consumer
-conformance or live integration; #11 installation and #12 conformance remain
-separate. No Kernel HTTP server, arbitrary dispatcher, browser-selected
-principal, active SQLite peer or new authentication system follows from this
-decision.
+validated descriptor for fixed, bounded reads (including paginated snapshots)
+and reviewed approve delivery; default startup has no capability. The browser
+receives the verified original proposal text, scope and digest only after
+Console session checks before and after the read. Labels check pairing, not
+producer identity; descriptor custody and the trusted supervisor are security
+assumptions. The producer's declarations are not the effective host policy,
+which remains unknown. No proposal data is cached by the adapter or persisted in
+browser storage. Approval uses separately provisioned authority and exact
+reviewed identity. The local journal retains historical receipts, proven
+stale-revision refusals or unknown outcomes. A receipt is not proof of current
+authority or effect. Replay is limited to the original channel; recovery on a
+replacement is read-only and requires the supervisor's authoritative-journal
+continuity attestation and Kernel's exact original request and identity checks.
+Unpaired legacy intents remain unknown. Other owner actions are unsupported. No
+real live mutation is authorized without separate owner approval. Synthetic
+tests do not establish installed consumer conformance or live integration; #11
+installation and #12 conformance remain separate. No Kernel HTTP server,
+arbitrary dispatcher, browser-selected principal, active SQLite peer or new
+authentication system follows from this decision.
 
-While the proposal is visible, Console checks the existing session without
-extending its idle or absolute expiry. The view hides the proposal while a check
-is pending and when the document is hidden; foregrounding requires a new check.
-External revocation is detected on the next check, not instantaneously, and
-browser scheduling or suspension can delay checks. This does not erase data
-already seen or copied by the user. The non-touch check uses the pinned
+Snapshot reads require both a loopback listener and a loopback Console browser
+origin. A valid read-only descriptor does not prevent HTTPS startup outside that
+topology; only the new snapshot route is unavailable there. Snapshots expose
+bounded work-unit, attempt, decision and correlation records and collection
+coverage, not full commands or complete history; oversized records are omitted.
+Opaque runtime handle values are not sent to the browser, and neither their
+presence nor absence proves effect settlement. Reads use the same supervisor
+provision and do not independently authenticate producer identity. Progress
+continuity is a bounded in-memory hint between observations; a snapshot cannot
+restore missing history, and a Console restart forgets the preceding
+observation.
+
+While Router facts, the proposal or a snapshot are visible, Console checks the
+existing session without extending its idle or absolute expiry. The views hide
+their data while a check is pending and when the document is hidden;
+foregrounding requires a new check. External revocation is detected on the next
+check, not instantaneously, and browser scheduling or suspension can delay
+checks. Router displays only the result of the authenticated cache-only view,
+including after an explicit refresh. If a refresh is interrupted, an unchanged
+observation stays last known even when a later cache check succeeds. The cache
+read does not contact the producer or confirm ongoing producer authorization. It
+reflects denials or configuration changes known to Console when it takes that
+view; changes after that point, including during delivery to another tab, are
+detected on a later check. A refresh for a replaced configuration must be
+retried explicitly if the preceding refresh is still finishing; Console does not
+enqueue a later producer request on the session's behalf. This does not erase
+data already seen or copied by the user. The non-touch check uses the pinned
 `@fastify/session` internal cookie decoder and store generation verification;
 revalidate that coupling when the session dependency changes.
 
@@ -79,8 +100,24 @@ after logout or an authentication denial, causing other windows to discard their
 displayed session state. Delivery is best effort and may be delayed or
 unavailable when browser contexts are suspended, partitioned or do not support
 the API; non-touch checks remain the fallback. A transient check failure hides
-the proposal and retries the non-touch check at a bounded interval while
-visible.
+the proposal; the snapshot is discarded and must be requested again. The
+proposal view retries the non-touch check at a bounded interval while visible.
+
+The optional offline Model Intelligence file inspector accepts explicitly
+selected files of at most 256 KiB each and sends them only to the authenticated
+local Console server for an in-memory check. Both a loopback listener and a
+matching loopback browser origin are required. The UI identifies the destination
+before selection, rejects redirects and does not offer either mode remotely. The
+server checks the boundary before parsing file payloads. Do not proxy this local
+listener to a remote client. Console does not retain the files, read arbitrary
+server paths, connect to MI or activate any publication. A nonempty file must
+match a separately supplied version, schema and digest; Console cannot verify
+how that reference was obtained. Structural checks and a comparison of two
+supplied files do not authenticate an instance or publisher, establish source
+truth or freshness, recover earlier history, or authorize data redistribution.
+The displayed result is hidden during session checks and removed on visibility
+loss, logout, expiry or reload. Unsupported valid encodings and oversized inputs
+are rejected rather than silently interpreted.
 
 The initial Router observer adapter accepts only explicitly configured literal
 loopback IP origins, not DNS names or arbitrary URLs. It does not follow

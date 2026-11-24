@@ -5,6 +5,7 @@ import {
   mkdirSync,
   readFileSync,
   rmSync,
+  renameSync,
   symlinkSync,
   writeFileSync,
   chmodSync,
@@ -120,6 +121,13 @@ async function upstream() {
       response.setHeader("content-type", "application/json");
       if (mode === "denied") {
         response.writeHead(401).end("{}");
+        return;
+      }
+      if (
+        (mode === "retry-replay" && request.method === "POST") ||
+        (mode === "retry-snapshot" && request.method === "GET")
+      ) {
+        response.writeHead(mode === "retry-replay" ? 429 : 408).end("{}");
         return;
       }
       if (mode === "provenance-denied" && request.method === "GET") {
@@ -256,7 +264,9 @@ async function upstream() {
           resync: null,
           resync_reason: null,
           provenance_current:
-            mode !== "provenance" && mode !== "provenance-denied",
+            mode !== "provenance" &&
+            mode !== "provenance-denied" &&
+            mode !== "retry-snapshot",
         }),
       );
     });
@@ -280,6 +290,9 @@ async function upstream() {
     },
     setMode: (value: string) => {
       mode = value;
+    },
+    setModel: (value: string) => {
+      currentModel = value;
     },
   };
 }
@@ -407,6 +420,136 @@ describe("Router observer", () => {
     expect(JSON.stringify(disconnected)).not.toContain("a".repeat(32));
   });
 
+  it("marks earlier history unavailable when rebuilding a disposable observer", async () => {
+    const fixture = await upstream();
+    const dir = directory();
+    writeConfig(dir, fixture.origin);
+    const observer = createRouterObserver(dir);
+    expect((await observer.refresh()).gap).toContain(
+      "Earlier Router progress is unavailable",
+    );
+    fixture.setMode("gap");
+    expect((await observer.refresh()).gap).toContain("history_gap");
+    const restored = createRouterObserver(dir);
+    const rebuilt = await restored.refresh();
+    expect(rebuilt.status).toBe("connected");
+    expect(rebuilt.facts?.resources[0]?.identity.model).toBe("model-gap");
+    expect(rebuilt.gap).toContain("does not reconstruct history");
+    expect(fixture.calls.map((call) => [call.method, call.url])).toEqual([
+      ["GET", "/observer/v1/snapshot"],
+      ["POST", "/observer/v1/replay"],
+      ["GET", "/observer/v1/snapshot"],
+    ]);
+  });
+
+  it("exercises synthetic semantic replay before bounded retention loss", async () => {
+    let sequence = 0;
+    let enabled = false;
+    const retained: {
+      cursor: ReturnType<typeof cursor>;
+      snapshot: ReturnType<typeof snapshot>;
+    }[] = [];
+    const calls: string[] = [];
+    const current = () => {
+      const value = snapshot();
+      value.resources[0]!.enabled = enabled;
+      value.resources[0]!.availability = enabled ? "unknown" : "disabled";
+      return value;
+    };
+    const change = (next: boolean) => {
+      if (next === enabled) return;
+      enabled = next;
+      retained.push({ cursor: cursor(++sequence), snapshot: current() });
+      if (retained.length > 256) retained.shift();
+    };
+    const server = createServer((request, response) => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk: Buffer) => chunks.push(chunk));
+      request.on("end", () => {
+        calls.push(`${request.method} ${request.url}`);
+        response.setHeader("content-type", "application/json");
+        if (request.headers.authorization !== `Bearer ${credential}`) {
+          response.writeHead(401).end("{}");
+          return;
+        }
+        if (request.method === "GET") {
+          response.end(
+            JSON.stringify({
+              schema_version: 1,
+              cursor: cursor(sequence),
+              snapshot: current(),
+            }),
+          );
+          return;
+        }
+        const previous = JSON.parse(Buffer.concat(chunks).toString()).cursor
+          .sequence as number;
+        const expired =
+          retained.length > 0 && previous < retained[0]!.cursor.sequence - 1;
+        response.end(
+          JSON.stringify({
+            schema_version: 1,
+            cursor: cursor(sequence),
+            events: expired
+              ? []
+              : retained.filter((event) => event.cursor.sequence > previous),
+            resync: expired
+              ? { cursor: cursor(sequence), snapshot: current() }
+              : null,
+            resync_reason: expired ? "cursor_expired" : null,
+            provenance_current: true,
+          }),
+        );
+      });
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (!address || typeof address === "string")
+      throw new Error("Missing fixture address");
+    const routerOrigin = `http://127.0.0.1:${address.port}`;
+    const dir = directory();
+    writeConfig(dir, routerOrigin);
+    const observer = createRouterObserver(dir);
+    await observer.refresh();
+    change(false);
+    expect(sequence).toBe(0);
+    change(true);
+    change(false);
+    expect(sequence).toBe(2);
+    const replay = await fetch(`${routerOrigin}/observer/v1/replay`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${credential}`,
+      },
+      body: JSON.stringify({ cursor: cursor(0) }),
+    }).then((response) => response.json());
+    expect(
+      replay.events.map(
+        (event: { cursor: { sequence: number } }) => event.cursor.sequence,
+      ),
+    ).toEqual([1, 2]);
+    expect(replay.resync).toBeNull();
+    expect((await observer.refresh()).gap).toContain(
+      "intermediate history may have been omitted",
+    );
+    for (let index = 0; index < 257; index++) change(index % 2 === 0);
+    expect(sequence).toBe(259);
+    const recovered = await observer.refresh();
+    expect(recovered.gap).toContain("cursor_expired");
+    expect(recovered.facts?.resources[0]?.enabled).toBe(true);
+    expect(calls).toEqual([
+      "GET /observer/v1/snapshot",
+      "POST /observer/v1/replay",
+      "POST /observer/v1/replay",
+      "GET /observer/v1/snapshot",
+      "POST /observer/v1/replay",
+    ]);
+  });
+
   it("fails closed for unsupported versions, redirects, secret echoes and unsafe config files", async () => {
     const fixture = await upstream();
     const dir = directory();
@@ -524,37 +667,116 @@ describe("Router observer", () => {
     }
   });
 
-  it("clears facts when provenance refresh is denied and when config is removed during replay", async () => {
-    const fixture = await upstream();
+  it("retains last-known facts for transient replay and snapshot failures", async () => {
+    for (const mode of ["retry-replay", "retry-snapshot"]) {
+      const fixture = await upstream();
+      const dir = directory();
+      writeConfig(dir, fixture.origin);
+      const observer = createRouterObserver(dir);
+      expect((await observer.refresh()).status).toBe("connected");
+      fixture.setMode(mode);
+      const unavailable = await observer.refresh();
+      expect(unavailable.status).toBe("disconnected");
+      expect(unavailable.last_known).toBe(true);
+      expect(unavailable.facts?.resources[0]?.identity.model).toBe("model-a");
+      fixture.setMode("normal");
+      expect((await observer.refresh()).status).toBe("connected");
+    }
+  });
+
+  it("requires an explicit retry for a changed configuration behind an older request", async () => {
+    const oldSource = await upstream();
+    const newSource = await upstream();
+    newSource.setModel("new-model");
     const dir = directory();
-    writeConfig(dir, fixture.origin);
+    writeConfig(dir, oldSource.origin);
     const observer = createRouterObserver(dir);
     expect((await observer.refresh()).status).toBe("connected");
-    fixture.setMode("provenance-denied");
-    const denied = await observer.refresh();
-    expect(denied.status).toBe("denied");
-    expect(denied.facts).toBeNull();
-    fixture.setMode("normal");
-    expect((await observer.refresh()).status).toBe("connected");
-    fixture.setMode("held");
-    const pending = observer.refresh();
+    oldSource.setMode("held");
+    const oldRefresh = observer.refresh();
     try {
       await Promise.race([
-        fixture.waiting,
+        oldSource.waiting,
         new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error("Fixture timed out")), 3000),
         ),
       ]);
-      rmSync(join(dir, "router.json"));
-      expect(observer.view().status).toBe("unconfigured");
-      fixture.release();
-      const result = await pending;
-      expect(result.status).toBe("unconfigured");
-      expect(result.facts).toBeNull();
+      writeConfig(dir, newSource.origin);
+      await expect(observer.refresh()).rejects.toThrow();
+      expect(newSource.calls).toHaveLength(0);
+      oldSource.release();
+      await oldRefresh;
+      expect(newSource.calls).toHaveLength(0);
+      const result = await observer.refresh();
+      expect(result.status).toBe("connected");
+      expect(result.origin).toBe(newSource.origin);
+      expect(result.facts?.resources[0]?.identity.model).toBe("new-model");
+      expect(newSource.calls.map((call) => [call.method, call.url])).toEqual([
+        ["GET", "/observer/v1/snapshot"],
+      ]);
     } finally {
-      fixture.release();
+      oldSource.release();
     }
   });
+
+  it.each(["removed", "restored", "replaced"])(
+    "clears facts on denial and fences old in-flight work when configuration is %s",
+    async (change) => {
+      const fixture = await upstream();
+      const dir = directory();
+      writeConfig(dir, fixture.origin);
+      const observer = createRouterObserver(dir);
+      expect((await observer.refresh()).status).toBe("connected");
+      fixture.setMode("provenance-denied");
+      const denied = await observer.refresh();
+      expect(denied.status).toBe("denied");
+      expect(denied.facts).toBeNull();
+      fixture.setMode("normal");
+      expect((await observer.refresh()).status).toBe("connected");
+      fixture.setMode("held");
+      const pending = observer.refresh();
+      try {
+        await Promise.race([
+          fixture.waiting,
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("Fixture timed out")), 3000),
+          ),
+        ]);
+        const path = join(dir, "router.json");
+        if (change === "replaced") {
+          const replacement = join(dir, "replacement.json");
+          writeFileSync(replacement, readFileSync(path), { mode: 0o600 });
+          renameSync(replacement, path);
+        } else {
+          rmSync(path);
+          expect(observer.view().status).toBe("unconfigured");
+          if (change === "restored") writeConfig(dir, fixture.origin);
+        }
+        const configured = change !== "removed";
+        const expected = configured ? "configured" : "unconfigured";
+        expect
+          .soft(observer.view())
+          .toMatchObject({ status: expected, facts: null });
+        const callsBeforeReplacementRefresh = fixture.calls.length;
+        if (configured) await expect(observer.refresh()).rejects.toThrow();
+        fixture.release();
+        const result = await pending;
+        expect.soft(result.status).toBe(expected);
+        expect.soft(result.facts).toBeNull();
+        if (configured) {
+          expect(fixture.calls).toHaveLength(callsBeforeReplacementRefresh);
+          expect((await observer.refresh()).status).toBe("connected");
+          expect(
+            fixture.calls
+              .slice(callsBeforeReplacementRefresh)
+              .map(({ method, url }) => [method, url]),
+          ).toEqual([["GET", "/observer/v1/snapshot"]]);
+        }
+      } finally {
+        fixture.release();
+      }
+    },
+  );
 
   it("requires verified TLS for a loopback HTTPS observer", async () => {
     const dir = directory();
@@ -723,8 +945,109 @@ describe("Router observer", () => {
     expect(createRouterObserver(dir).view().status).toBe("unconfigured");
   });
 
-  it("does not return an in-flight observation after session logout", async () => {
+  it("keeps Router usable when a connected Kernel read fails", async () => {
     const fixture = await upstream();
+    const dir = directory();
+    const state = openState(dir);
+    state.db
+      .prepare("INSERT INTO owner (id, password_hash) VALUES (1, ?)")
+      .run(await hash(password));
+    state.db.close();
+    writeConfig(dir, fixture.origin);
+    const app = await createApp({
+      stateDirectory: dir,
+      origin,
+      kernelOwner: {
+        scope: "synthetic",
+        readProposal: async () => {
+          throw new Error("synthetic Kernel failure");
+        },
+        close: () => {},
+      },
+    });
+    try {
+      const login = await app.inject({
+        method: "POST",
+        url: "/api/login",
+        headers,
+        payload: { password },
+      });
+      const cookie = String(login.headers["set-cookie"]).split(";")[0]!;
+      const kernel = await app.inject({
+        method: "GET",
+        url: "/api/kernel/owner",
+        headers: { ...headers, cookie },
+      });
+      expect(kernel.json()).toEqual({ status: "disconnected", actions: [] });
+      const router = await app.inject({
+        method: "POST",
+        url: "/api/router/refresh",
+        headers: { ...headers, cookie },
+        payload: {},
+      });
+      expect(router.json().status).toBe("connected");
+      expect(router.json().facts.resources[0].identity.model).toBe("model-a");
+      expect(router.body).not.toContain(credential);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects a non-regular config on passive reconciliation without blocking Console", async () => {
+    const fixture = await upstream();
+    const dir = directory();
+    writeConfig(dir, fixture.origin);
+    const state = openState(dir);
+    state.db
+      .prepare("INSERT INTO owner (id, password_hash) VALUES (1, ?)")
+      .run(await hash(password));
+    state.db.close();
+    // Isolate the synchronous file open so the regression fails by a bounded
+    // child timeout, not by locking up the test runner or the fixture server.
+    const script = `
+      import { execFileSync } from "node:child_process";
+      import { renameSync } from "node:fs";
+      import { join } from "node:path";
+      import { createApp } from "./server/app.ts";
+      import assert from "node:assert/strict";
+      const [dir, origin, password] = process.argv.slice(1);
+      const app = await createApp({ stateDirectory: dir, origin });
+      try {
+        const headers = { host: new URL(origin).host, origin };
+        const post = (url, payload) => app.inject({ method: "POST", url, headers, payload });
+        const login = await post("/api/login", { password });
+        assert.equal(login.statusCode, 200);
+        headers.cookie = String(login.headers["set-cookie"]).split(";")[0];
+        assert.equal((await post("/api/router/refresh", {})).json().status, "connected");
+        const fifo = join(dir, "replacement");
+        execFileSync("mkfifo", ["-m", "600", fifo]);
+        renameSync(fifo, join(dir, "router.json"));
+        const response = await app.inject({ method: "GET", url: "/api/router", headers });
+        assert.equal(response.json().status, "configuration_error");
+        assert.equal(response.json().facts, null);
+        assert.equal(response.headers["set-cookie"], undefined);
+        const session = await app.inject({ method: "GET", url: "/api/kernel/session-check", headers });
+        assert.equal(session.json().authenticated, true);
+        assert.equal((await post("/api/logout", {})).statusCode, 200);
+      } finally { await app.close(); }
+    `;
+    await run(
+      process.execPath,
+      ["--input-type=module", "-e", script, dir, origin, password],
+      {
+        env: { PATH: process.env.PATH ?? "", HOME: dir, TMPDIR: dir },
+        timeout: 4000,
+        killSignal: "SIGKILL",
+      },
+    );
+    expect(fixture.calls.map(({ method, url }) => [method, url])).toEqual([
+      ["GET", "/observer/v1/snapshot"],
+    ]);
+  });
+
+  it("does not return an in-flight observation or queue replacement work across logout", async () => {
+    const fixture = await upstream();
+    const replacement = await upstream();
     const dir = directory();
     const state = openState(dir);
     state.db
@@ -742,6 +1065,15 @@ describe("Router observer", () => {
       stateDirectory: dir,
       staticDirectory: assets,
       origin,
+    });
+    let admit!: () => void;
+    const arrived = new Promise<void>((resolve) => {
+      admit = resolve;
+    });
+    let refreshes = 0;
+    app.addHook("preHandler", async (request) => {
+      if (request.url === "/api/router/refresh" && ++refreshes === 3)
+        setImmediate(admit);
     });
     try {
       const login = await app.inject({
@@ -774,6 +1106,14 @@ describe("Router observer", () => {
           setTimeout(() => reject(new Error("Fixture timed out")), 3000),
         ),
       ]);
+      writeConfig(dir, replacement.origin);
+      const contended = app.inject({
+        method: "POST",
+        url: "/api/router/refresh",
+        headers: { ...headers, cookie },
+        payload: {},
+      });
+      await arrived;
       expect(
         (
           await app.inject({
@@ -786,6 +1126,8 @@ describe("Router observer", () => {
       ).toBe(200);
       fixture.release();
       const result = await pending;
+      expect.soft((await contended).statusCode).toBe(503);
+      expect(replacement.calls).toHaveLength(0);
       expect(result.statusCode).toBe(401);
       expect(result.body).not.toContain("model-a");
     } finally {
