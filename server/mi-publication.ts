@@ -1097,6 +1097,8 @@ export function compareMiPublications(
       return { status: "duplicate", history: "unavailable" };
     const history = after.root.history as Obj;
     if (
+      // MI opens the checkpoint using the active publication's schema.
+      before.cut.schema !== after.cut.schema ||
       before.root.instance !== after.root.instance ||
       history.checkpoint !== before.cut.sha256 ||
       (history.relation !== "same" && history.relation !== "extension") ||

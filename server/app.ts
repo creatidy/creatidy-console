@@ -458,17 +458,21 @@ export async function createApp(options: AppOptions) {
   app.post("/api/router/refresh", async (request, reply) => {
     if (!(await authenticated(request)))
       return reply.code(401).send({ error: "Login required" });
-    const result = await routerObserver.refresh();
+    await routerObserver.refresh();
     if (!(await authenticated(request)))
       return reply.code(401).send({ error: "Login required" });
-    return result;
+    return routerObserver.view();
   });
   let kernelRead: Promise<void> = Promise.resolve();
   let kernelReadActive = false;
   let ownerSequenceActive = false;
   const ownerBusy = () => kernelReadActive || ownerSequenceActive;
+  const liveResponse = (reply: import("fastify").FastifyReply) =>
+    !reply.raw.destroyed && !reply.request.raw.socket.destroyed;
+  type ReadWaiter = () => Promise<boolean>;
+  type QueuedRead<T> = { pending: Promise<T>; waiters: Set<ReadWaiter> };
   async function serializeKernelRead<T>(
-    request: import("fastify").FastifyRequest,
+    waiters: Set<ReadWaiter>,
     read: () => Promise<T>,
   ): Promise<T> {
     const previous = kernelRead;
@@ -478,21 +482,27 @@ export async function createApp(options: AppOptions) {
     });
     try {
       await previous;
-      if (!(await authenticated(request))) throw new Error("Session expired");
-      if (ownerSequenceActive) throw new KernelReadBusy();
-      kernelReadActive = true;
-      try {
-        return await read();
-      } finally {
-        kernelReadActive = false;
+      for (const admit of waiters) {
+        if (!(await admit())) continue;
+        if (ownerBusy()) throw new KernelReadBusy();
+        return await runKernelRead(read);
       }
+      throw new KernelReadBusy();
     } finally {
       release();
     }
   }
+  async function runKernelRead<T>(read: () => Promise<T>): Promise<T> {
+    kernelReadActive = true;
+    try {
+      return await read();
+    } finally {
+      kernelReadActive = false;
+    }
+  }
   const proposalReads = new Map<
     string,
-    Promise<{ digest: string; text: string }>
+    QueuedRead<{ digest: string; text: string }>
   >();
   const snapshotReads = new Map<
     string,
@@ -505,9 +515,7 @@ export async function createApp(options: AppOptions) {
   >();
   const approvalScopeReads = new Map<
     string,
-    ReturnType<
-      NonNullable<NonNullable<AppOptions["kernelOwner"]>["readApprovalScope"]>
-    >
+    QueuedRead<{ digest: string; proposalDigest: string; text: string }>
   >();
   const readQueueFull = () =>
     proposalReads.size + snapshotReads.size + approvalScopeReads.size >= 16;
@@ -515,28 +523,52 @@ export async function createApp(options: AppOptions) {
     proposalReads.size + snapshotReads.size + approvalScopeReads.size > 0;
   const sessionKey = (request: import("fastify").FastifyRequest) =>
     JSON.stringify([request.session.sessionStoreId, request.session.sessionId]);
+  async function coalesceKernelRead<T>(
+    reads: Map<string, QueuedRead<T>>,
+    reply: import("fastify").FastifyReply,
+    read: () => Promise<T>,
+    skipSnapshots: boolean,
+  ) {
+    const key = sessionKey(reply.request);
+    let entry = reads.get(key);
+    if (!entry) {
+      if (readQueueFull() || (skipSnapshots && snapshotReads.size > 0))
+        throw new KernelReadBusy();
+      const waiters = new Set<ReadWaiter>();
+      entry = { waiters, pending: serializeKernelRead(waiters, read) };
+      reads.set(key, entry);
+    }
+    if (entry.waiters.size >= 16) throw new KernelReadBusy();
+    // A queued read has less time to start than the browser's read deadline.
+    // Each live waiter has its own admission check; an abandoned first caller
+    // cannot cancel a coalesced same-session read for the others.
+    const deadline = performance.now() + 4000;
+    const live = () => liveResponse(reply) && performance.now() < deadline;
+    const admit = async () =>
+      live() && (await authenticated(reply.request)) && live();
+    entry.waiters.add(admit);
+    try {
+      return await entry.pending;
+    } finally {
+      entry.waiters.delete(admit);
+      if (reads.get(key) === entry) reads.delete(key);
+    }
+  }
   app.get("/api/kernel/owner", async (request, reply) => {
     if (!(await authenticated(request)))
       return reply.code(401).send({ error: "Login required" });
     const ownerChannel = options.kernelOwner;
     if (!ownerChannel || ownerChannel.proposalSupported === false)
       return { status: "unavailable", actions: [] };
-    const key = sessionKey(request);
-    if (!proposalReads.has(key) && (readQueueFull() || snapshotReads.size > 0))
-      return reply.code(503).send({ error: "Kernel read busy" });
     let proposal: { digest: string; text: string } | undefined;
     let failure = "disconnected";
     try {
-      let pending = proposalReads.get(key);
-      if (!pending) {
-        pending = serializeKernelRead(request, ownerChannel.readProposal);
-        proposalReads.set(key, pending);
-      }
-      try {
-        proposal = await pending;
-      } finally {
-        if (proposalReads.get(key) === pending) proposalReads.delete(key);
-      }
+      proposal = await coalesceKernelRead(
+        proposalReads,
+        reply,
+        ownerChannel.readProposal,
+        true,
+      );
     } catch (error) {
       if (error instanceof UnsupportedOwnerPayload) failure = "unsupported";
       else if (error instanceof InvalidOwnerResponse) failure = "invalid";
@@ -559,8 +591,9 @@ export async function createApp(options: AppOptions) {
       try {
         approve =
           (
-            await readApprovalScope(
-              request,
+            await coalesceKernelRead(
+              approvalScopeReads,
+              reply,
               ownerChannel.readApprovalScope,
               true,
             )
@@ -584,28 +617,6 @@ export async function createApp(options: AppOptions) {
       text: proposal.text,
     };
   });
-  async function readApprovalScope(
-    request: import("fastify").FastifyRequest,
-    read: NonNullable<
-      NonNullable<AppOptions["kernelOwner"]>["readApprovalScope"]
-    >,
-    skipSnapshotQueue = false,
-  ) {
-    const key = sessionKey(request);
-    let pending = approvalScopeReads.get(key);
-    if (!pending) {
-      if (readQueueFull() || (skipSnapshotQueue && snapshotReads.size > 0))
-        throw new KernelReadBusy();
-      pending = serializeKernelRead(request, read);
-      approvalScopeReads.set(key, pending);
-    }
-    try {
-      return await pending;
-    } finally {
-      if (approvalScopeReads.get(key) === pending)
-        approvalScopeReads.delete(key);
-    }
-  }
   app.get("/api/kernel/approval-scope", async (request, reply) => {
     if (!(await authenticated(request)))
       return reply.code(401).send({ error: "Login required" });
@@ -619,7 +630,12 @@ export async function createApp(options: AppOptions) {
       { digest: string; proposalDigest: string; text: string } | undefined;
     let failure = "disconnected";
     try {
-      observation = await readApprovalScope(request, channel.readApprovalScope);
+      observation = await coalesceKernelRead(
+        approvalScopeReads,
+        reply,
+        channel.readApprovalScope,
+        false,
+      );
     } catch (error) {
       if (error instanceof UnsupportedOwnerPayload) failure = "unsupported";
       else if (error instanceof InvalidOwnerResponse) failure = "invalid";
@@ -1317,19 +1333,23 @@ export async function createApp(options: AppOptions) {
     const key = JSON.stringify(selection ?? null);
     const session = sessionKey(request);
     const existing = snapshotReads.get(session);
-    if ((existing && existing.key !== key) || (!existing && readQueueFull()))
+    if (existing ? existing.key !== key : ownerBusy() || readsPending())
       return { status: "busy" };
-    // A selected page should retry rather than wait behind other reads.
-    if (selection && !existing && (ownerBusy() || readsPending()))
-      return { status: "busy" };
+    if (!liveResponse(reply)) return reply;
     let snapshot;
     let changed = false;
     let busy = false;
     try {
       let pending = existing?.pending;
       if (!pending) {
-        pending = serializeKernelRead(request, () =>
+        // Both initial and selected pages are either admitted now or busy.
+        // Do not tie an admitted exchange to any one HTTP waiter's lifetime.
+        pending = runKernelRead(() =>
           options.kernelOwner!.readSnapshot!(selection),
+        );
+        kernelRead = pending.then(
+          () => {},
+          () => {},
         );
         snapshotReads.set(session, { key, pending });
       }

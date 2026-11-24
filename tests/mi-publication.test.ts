@@ -154,6 +154,7 @@ function editedCut(
   const artifact = JSON.stringify(frame);
   const reference = {
     ...original.expected,
+    payload_schema: frame.payload_schema,
     sha256: createHash("sha256").update(artifact).digest("hex"),
   };
   return {
@@ -309,6 +310,42 @@ describe("offline MI publication validation", () => {
         expected,
       ),
     ).toEqual({ status: "resync-required", history: "unavailable" });
+  });
+  it.each([
+    [1, 1, "following"],
+    [1, 2, "resync-required"],
+    [2, 1, "resync-required"],
+    [2, 2, "following"],
+  ])("compares /%s with /%s as %s", (beforeVersion, afterVersion, status) => {
+    // At MI c65df369, operator.snapshot opens the checkpoint using the active
+    // schema, even when the evidence is expressible in both schemas.
+    const before = editedCut(fixture(), (_payload, frame) => {
+      frame.payload_schema = `mi.public-evidence-working/${beforeVersion}`;
+    });
+    const after = editedCut(before, (_payload, frame) => {
+      frame.payload_schema = `mi.public-evidence-working/${afterVersion}`;
+      frame.produced_at = "2026-01-04T00:00:00Z";
+    });
+    const previous = JSON.stringify(before.snapshot);
+    const current = JSON.stringify({
+      ...after.snapshot,
+      evaluated_at: "2026-01-04T00:00:00Z",
+      history: {
+        ...after.snapshot.history,
+        checkpoint: before.expected.sha256,
+        relation: "extension",
+        projection_changed: false,
+      },
+    });
+    expect(inspectMiPublication(previous, before.expected).status).toBe(
+      "checked",
+    );
+    expect(inspectMiPublication(current, after.expected).status).toBe(
+      "checked",
+    );
+    expect(
+      compareMiPublications(previous, before.expected, current, after.expected),
+    ).toEqual({ status, history: "unavailable" });
   });
   it("permits reacquisition but refuses provenance or rights rewrites", () => {
     const { snapshot, expected } = fixture();

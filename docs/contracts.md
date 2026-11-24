@@ -273,16 +273,18 @@ of `mi.operator-working/1` at MI revision
 `c65df369f674b82347a2e08a27d5315d935ac1a4`. The nonempty inspector checks the
 full supported envelope, exact artifact bytes and an operator-supplied separate
 version/schema/digest; it can compare two separately selected files without
-claiming earlier history. The implementation uses a narrower timestamp, time
-zone, integer and 256 KiB input policy than the producer, and rejects
-unsupported valid encodings. It neither activates publications nor treats the
-supplied reference as authenticated publisher identity. Source ownership,
-freshness, rights and projected facts remain untrusted producer claims. It does
-not claim full portable receiver conformance, preserve cut history, or connect
-to MI. The empty-file inspector also distinguishes a file's reported invalid and
-unsupported publication states from malformed input. A failed later inspection
-keeps the prior file explicitly last-known only while the Console session
-remains valid; it does not accept a new cut or reconstruct missing history.
+claiming earlier history. Different payload schemas require explicit resync;
+each supported version is still independently inspectable. The implementation
+uses a narrower timestamp, time zone, integer and 256 KiB input policy than the
+producer, and rejects unsupported valid encodings. It neither activates
+publications nor treats the supplied reference as authenticated publisher
+identity. Source ownership, freshness, rights and projected facts remain
+untrusted producer claims. It does not claim full portable receiver conformance,
+preserve cut history, or connect to MI. The empty-file inspector also
+distinguishes a file's reported invalid and unsupported publication states from
+malformed input. A failed later inspection keeps the prior file explicitly
+last-known only while the Console session remains valid; it does not accept a
+new cut or reconstruct missing history.
 
 A missing or incompatible field must produce a concrete Console consumer
 requirement: affected behavior, evidence/negative case and expected semantics.
@@ -408,14 +410,16 @@ source revision `1bcb052e527933b7b2f419ac76017f2d20e88a1e`, specifically
 decisions and correlation references retain producer facts; they are not a
 cross-product join or an owner-action queue. Opaque runtime handles are not
 displayed and do not establish effect settlement. Each request samples at most
-eight pages with explicit collection and command coverage. Slow reads stop at
-complete frame boundaries and continue from the first unsampled page; a stalled
-in-flight frame still closes the descriptor. Navigation retains the observed
-epoch and sequence and requires resynchronization when that position changes.
-Oversized records are explicitly omitted. Progress state is process-local: gaps
-and unknown intervals remain visible and a new snapshot does not restore missing
-history. These synthetic checks are not installed/live Kernel conformance or
-verified producer identity.
+eight pages with explicit collection and command coverage. An initial or
+selected page returns busy rather than waiting for a contended descriptor. An
+already admitted exchange remains bounded by the descriptor contract even if its
+HTTP requester leaves. Slow reads stop at complete frame boundaries and continue
+from the first unsampled page; a stalled in-flight frame still closes the
+descriptor. Navigation retains the observed epoch and sequence and requires
+resynchronization when that position changes. Oversized records are explicitly
+omitted. Progress state is process-local: gaps and unknown intervals remain
+visible and a new snapshot does not restore missing history. These synthetic
+checks are not installed/live Kernel conformance or verified producer identity.
 
 One isolated source-checkout exercise used 512 synthetic work units and 300
 test-injected progress hints against that Kernel revision. Console retained 64

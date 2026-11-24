@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import type { RouterView } from "../server/router.ts";
 
 const descriptions: Record<RouterView["status"], string> = {
@@ -18,176 +18,128 @@ const descriptions: Record<RouterView["status"], string> = {
 };
 
 export default function RouterPanel({ expired }: { expired: () => void }) {
-  const [view, setView] = useState<RouterView | null>(null);
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState("");
-  const [visible, setVisible] = useState(false);
-  const currentView = useRef<RouterView | null>(null);
-  const generation = useRef(0);
+  const [view, setView] = useState<
+    (RouterView & { refreshUnconfirmed: boolean }) | null
+  >(null);
+  const [activity, setActivity] = useState<"read" | "refresh" | null>(null);
+  const [readFailed, setReadFailed] = useState(false);
   const active = useRef<AbortController | null>(null);
+  // Only a previously accepted observation can be mistaken for a new one.
   const uncertainObservation = useRef<string | null>(null);
-  const retryCache = useRef(false);
 
   async function load(refresh = false) {
     if (document.visibilityState !== "visible") return;
-    generation.current++;
     active.current?.abort();
-    const current = generation.current;
-    const previousObservation = currentView.current?.observation;
     const controller = new AbortController();
     active.current = controller;
-    const deadlines: ReturnType<typeof setTimeout>[] = [];
-    const bounded = (ms = 5000) => {
+    const applicable = () =>
+      active.current === controller && document.visibilityState === "visible";
+    const request = async (post = false) => {
       const deadline = new AbortController();
-      deadlines.push(setTimeout(() => deadline.abort(), ms));
-      return AbortSignal.any([controller.signal, deadline.signal]);
-    };
-    const currentRequest = () => current === generation.current;
-    const read = async (post = false) => {
-      const signal = bounded(post ? 10000 : 5000);
-      const response = await fetch(
-        post ? "/api/router/refresh" : "/api/router",
-        {
-          cache: "no-store",
-          signal,
-          ...(post
-            ? {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: "{}",
-              }
-            : {}),
-        },
-      );
-      if (!currentRequest()) return null;
-      signal.throwIfAborted();
-      if (response.status === 401) {
-        retryCache.current = false;
-        currentView.current = null;
-        setView(null);
-        expired();
-        return null;
-      }
-      if (!response.ok) throw new Error();
-      const result = (await response.json()) as RouterView;
-      signal.throwIfAborted();
-      return result;
-    };
-    setVisible(false);
-    setPending(refresh);
-    try {
-      let next: RouterView | null;
-      let refreshFailed = false;
+      const timer = setTimeout(() => deadline.abort(), post ? 10000 : 5000);
+      const signal = AbortSignal.any([controller.signal, deadline.signal]);
       try {
-        next = await read(refresh);
-      } catch (error) {
-        if (!currentRequest()) return;
-        if (!refresh) throw error;
-        refreshFailed = true;
-        // The producer read can outlast the browser's request. Recover only
-        // the server's view and keep reconciling it while facts are displayed.
-        next = await read();
-      }
-      if (!currentRequest() || !next) return;
-      if (refresh)
-        uncertainObservation.current = refreshFailed
-          ? previousObservation === undefined
-            ? next.observation
-            : previousObservation
-          : null;
-      if (!next.facts || next.observation !== uncertainObservation.current)
-        uncertainObservation.current = null;
-      if (next.facts || next.origin || next.gap) {
-        const signal = bounded();
-        const session = await fetch("/api/kernel/session-check", {
-          cache: "no-store",
-          signal,
-        });
-        if (!currentRequest()) return;
+        const response = await fetch(
+          post ? "/api/router/refresh" : "/api/router",
+          {
+            cache: "no-store",
+            signal,
+            ...(post
+              ? {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: "{}",
+                }
+              : {}),
+          },
+        );
+        if (!applicable()) return null;
         signal.throwIfAborted();
-        if (session.status === 401) {
-          retryCache.current = false;
-          currentView.current = null;
+        if (response.status === 401) {
           setView(null);
           expired();
-          return;
+          controller.abort();
+          return null;
         }
-        if (!session.ok || (await session.json()).authenticated !== true)
-          throw new Error();
-        signal.throwIfAborted();
+        if (!response.ok) throw new Error();
+        if (!post) {
+          const result = (await response.json()) as RouterView;
+          signal.throwIfAborted();
+          return result;
+        }
+        // The POST result is never a publication source.
+        await response.body?.cancel();
+        return null;
+      } finally {
+        clearTimeout(timer);
       }
-      if (!currentRequest() || document.visibilityState !== "visible") return;
-      if (uncertainObservation.current && next.status === "connected") {
-        next = {
-          ...next,
-          status: "disconnected",
-          last_known: next.facts !== null,
-        };
+    };
+    setActivity(refresh ? "refresh" : "read");
+    try {
+      if (refresh) {
+        // Keep the baseline even if the POST is interrupted, or the cache
+        // cannot be read afterwards. Only producer evidence can resolve it.
+        uncertainObservation.current = view?.observation ?? null;
+        try {
+          await request(true);
+        } catch {
+          // A producer observation can outlast the browser's refresh request.
+        }
       }
-      currentView.current = next;
-      retryCache.current = false;
-      setView(next);
-      setError(
-        refreshFailed
-          ? "Console could not complete the Router refresh. Showing the server's cached status."
-          : "",
-      );
-      setVisible(true);
+      if (!applicable() || controller.signal.aborted) return;
+      const next = await request();
+      if (!next || !applicable()) return;
+      if (next.observation !== uncertainObservation.current)
+        uncertainObservation.current = null;
+      setView({
+        ...next,
+        refreshUnconfirmed:
+          next.status === "connected" && uncertainObservation.current !== null,
+      });
+      setReadFailed(false);
     } catch {
-      if (currentRequest()) {
-        retryCache.current = true;
-        currentView.current = null;
+      if (applicable()) {
         setView(null);
-        setError(
-          "Console could not retrieve Router status. Check the application connection.",
-        );
+        setReadFailed(true);
       }
     } finally {
-      deadlines.forEach(clearTimeout);
-      if (currentRequest()) {
+      if (active.current === controller) {
         active.current = null;
-        setPending(false);
+        setActivity(null);
       }
     }
   }
+  const reconcile = useEffectEvent((foreground = false) => {
+    if (
+      foreground ||
+      (!active.current &&
+        (readFailed || view?.facts || view?.origin || view?.gap))
+    )
+      void load();
+  });
   useEffect(() => {
-    void load();
-    const hide = () => {
-      generation.current++;
+    reconcile(true);
+    const visibility = () => {
+      if (document.visibilityState === "visible") {
+        reconcile(true);
+        return;
+      }
       active.current?.abort();
       active.current = null;
-      currentView.current = null;
-      retryCache.current = false;
       setView(null);
-      setVisible(false);
-      setPending(false);
-    };
-    const visibility = () => {
-      if (document.visibilityState !== "visible") hide();
-      else void load();
+      setActivity(null);
     };
     document.addEventListener("visibilitychange", visibility);
-    const timer = setInterval(() => {
-      if (
-        document.visibilityState !== "visible" ||
-        (!retryCache.current &&
-          !currentView.current?.facts &&
-          !currentView.current?.origin &&
-          !currentView.current?.gap) ||
-        active.current
-      )
-        return;
-      void load();
-    }, 10000);
+    const timer = setInterval(() => reconcile(), 10000);
     return () => {
       clearInterval(timer);
       document.removeEventListener("visibilitychange", visibility);
-      generation.current++;
       active.current?.abort();
-      currentView.current = null;
+      active.current = null;
     };
   }, []);
 
+  const pending = activity === "refresh";
   const canRefresh =
     view !== null &&
     view.status !== "unconfigured" &&
@@ -195,7 +147,12 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
   return (
     <section aria-labelledby="router-heading">
       <h2 id="router-heading">Router observer</h2>
-      {error && <p role="alert">{error}</p>}
+      {readFailed && (
+        <p role="alert">
+          Console could not retrieve Router status. Check the application
+          connection.
+        </p>
+      )}
       <button
         type="button"
         aria-disabled={pending}
@@ -209,11 +166,15 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
             ? "Refresh Router"
             : "Retry Router status"}
       </button>
-      {!view || !visible ? (
+      {!view || activity !== null ? (
         <p>Checking connection configuration and session.</p>
       ) : (
         <>
-          <p role="status">{descriptions[view.status]}</p>
+          <p role="status">
+            {view.refreshUnconfirmed
+              ? "Console could not confirm a new Router observation."
+              : descriptions[view.status]}
+          </p>
           {view.origin && (
             <p>
               Configured origin: <code>{view.origin}</code>. This is not a
@@ -221,7 +182,9 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
             </p>
           )}
           {view.gap && <p role="status">{view.gap}</p>}
-          {view.last_known && <p>Last-known data follows; it may be stale.</p>}
+          {(view.last_known || view.refreshUnconfirmed) && (
+            <p>Last-known data follows; it may be stale.</p>
+          )}
           {view.facts && (
             <>
               <h3>Resources</h3>

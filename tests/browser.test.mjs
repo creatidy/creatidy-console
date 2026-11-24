@@ -1248,7 +1248,133 @@ it.skipIf(!existsSync(chrome))(
           }),
         ),
       ).not.toContain(key);
-      const observedCalls = calls;
+      // A second Console client invalidates the prior observation while the
+      // refresh caller is still waiting on its final authenticated read.
+      await page.evaluate(() => {
+        const original = window.fetch;
+        let refreshed = false;
+        window.fetch = async (...args) => {
+          if (args[0] === "/api/router/refresh") {
+            const response = await original(...args);
+            refreshed = true;
+            return response;
+          }
+          if (refreshed && args[0] === "/api/router") {
+            await new Promise((resolve) => {
+              window.releaseRouterPublication = () => {
+                window.fetch = original;
+                resolve();
+              };
+            });
+          }
+          return original(...args);
+        };
+      });
+      await page.getByRole("button", { name: "Refresh Router" }).click();
+      await page.waitForFunction(() =>
+        Boolean(window.releaseRouterPublication),
+      );
+      upstreamMode = "denied";
+      const otherClient = await page
+        .context()
+        .request.post(`${origin}/api/router/refresh`, {
+          headers: { origin },
+          data: {},
+        });
+      expect((await otherClient.json()).status).toBe("denied");
+      await page.evaluate(() => window.releaseRouterPublication());
+      await page
+        .getByRole("button", { name: "Refresh Router", exact: true })
+        .waitFor();
+      expect
+        .soft(await page.getByText(/Observer access was denied/).count())
+        .toBe(1);
+      expect
+        .soft(await page.getByText("resource-a", { exact: false }).count())
+        .toBe(0);
+
+      upstreamMode = "connected";
+      await page.getByRole("button", { name: "Refresh Router" }).click();
+      await page.getByText("m".repeat(64), { exact: false }).waitFor();
+      const beforeFailedRecovery = calls;
+      await page.route("**/api/router/refresh", (route) =>
+        route.abort("failed"),
+      );
+      await page.route("**/api/router", (route) => route.abort("failed"));
+      await page.getByRole("button", { name: "Refresh Router" }).click();
+      await page.getByRole("button", { name: "Retry Router status" }).waitFor();
+      expect(await page.getByText("resource-a", { exact: false }).count()).toBe(
+        0,
+      );
+      await page.unroute("**/api/router/refresh");
+      await page.unroute("**/api/router");
+      await page.clock.fastForward(10001);
+      await page.getByText("m".repeat(64), { exact: false }).waitFor();
+      expect
+        .soft(await page.getByText(/Last-known data follows/).count())
+        .toBe(1);
+      expect(calls).toBe(beforeFailedRecovery);
+      await page.getByRole("button", { name: "Refresh Router" }).click();
+      await page.getByText(/Last Router refresh succeeded/).waitFor();
+      // Hold an already sampled response across a newer authenticated view.
+      // The synthetic delivery ignores HTTP abort so the browser's fence is tested.
+      await page.evaluate(() => {
+        const original = window.fetch;
+        window.fetch = async (input, options) => {
+          const response = await original(input, options);
+          if (input !== "/api/router") return response;
+          window.fetch = original;
+          const previous = new Response(await response.text());
+          return new Promise((resolve) => {
+            window.deliverOldRouterView = () => resolve(previous);
+          });
+        };
+      });
+      await page.clock.fastForward(10001);
+      await page.waitForFunction(() => Boolean(window.deliverOldRouterView));
+      await page.evaluate(() => {
+        Object.defineProperty(document, "visibilityState", {
+          configurable: true,
+          value: "hidden",
+        });
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      expect(await page.getByText("resource-a", { exact: false }).count()).toBe(
+        0,
+      );
+      upstreamMode = "denied";
+      expect(
+        (
+          await (
+            await page.context().request.post(`${origin}/api/router/refresh`, {
+              headers: { origin },
+              data: {},
+            })
+          ).json()
+        ).status,
+      ).toBe("denied");
+      await page.evaluate(() => {
+        Object.defineProperty(document, "visibilityState", {
+          configurable: true,
+          value: "visible",
+        });
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await page.getByText(/Observer access was denied/).waitFor();
+      await page.evaluate(async () => {
+        window.deliverOldRouterView();
+        await Promise.resolve();
+      });
+      expect(await page.getByText(/Observer access was denied/).count()).toBe(
+        1,
+      );
+      expect(await page.getByText("resource-a", { exact: false }).count()).toBe(
+        0,
+      );
+      upstreamMode = "connected";
+      await page.getByRole("button", { name: "Refresh Router" }).click();
+      await page.getByText(/Last Router refresh succeeded/).waitFor();
+      const reconciledCalls = calls;
       const refreshControl = page.getByRole("button", {
         name: "Refresh Router",
       });
@@ -1256,7 +1382,7 @@ it.skipIf(!existsSync(chrome))(
         const fetch = window.fetch;
         window.routerPassiveCheckHeld = false;
         window.fetch = (...args) =>
-          args[0] === "/api/kernel/session-check"
+          args[0] === "/api/router"
             ? new Promise((resolve) => {
                 window.routerPassiveCheckHeld = true;
                 window.releaseRouterPassiveCheck = () => {
@@ -1284,15 +1410,13 @@ it.skipIf(!existsSync(chrome))(
           ),
         )
         .toBe(true);
-      await page.route("**/api/kernel/session-check", (route) =>
-        route.abort("failed"),
-      );
+      await page.route("**/api/router", (route) => route.abort("failed"));
       await page.clock.fastForward(10000);
       await page.getByRole("button", { name: "Retry Router status" }).waitFor();
       expect(await page.getByText("resource-a", { exact: false }).count()).toBe(
         0,
       );
-      await page.unroute("**/api/kernel/session-check");
+      await page.unroute("**/api/router");
       const recovery = page.waitForResponse(`${origin}/api/router`, {
         timeout: 2500,
       });
@@ -1301,8 +1425,8 @@ it.skipIf(!existsSync(chrome))(
       expect(recovered.status()).toBe(200);
       expect(await recovered.headerValue("set-cookie")).toBeNull();
       await page.getByText("m".repeat(64), { exact: false }).waitFor();
-      expect(calls).toBe(observedCalls);
-      await page.route("**/api/kernel/session-check", (route) =>
+      expect(calls).toBe(reconciledCalls);
+      await page.route("**/api/router", (route) =>
         route.fulfill({ status: 401, json: { error: "expired" } }),
       );
       await page.clock.fastForward(10000);
@@ -1310,7 +1434,7 @@ it.skipIf(!existsSync(chrome))(
       expect(await page.getByText("resource-a", { exact: false }).count()).toBe(
         0,
       );
-      await page.unroute("**/api/kernel/session-check");
+      await page.unroute("**/api/router");
       await page
         .getByLabel("Owner password", { exact: true })
         .fill("synthetic-owner-password");

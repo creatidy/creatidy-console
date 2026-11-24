@@ -82,11 +82,14 @@ existing session without extending its idle or absolute expiry. The views hide
 their data while a check is pending and when the document is hidden;
 foregrounding requires a new check. External revocation is detected on the next
 check, not instantaneously, and browser scheduling or suspension can delay
-checks. Router also reconciles visible observations with Console's cache-only
-view, including after a timed-out refresh. This detects producer denials that
-Console has learned about; it does not contact the producer or confirm ongoing
-producer authorization. This does not erase data already seen or copied by the
-user. The non-touch check uses the pinned `@fastify/session` internal cookie
+checks. Router displays only the result of the authenticated cache-only view,
+including after an explicit refresh. If a refresh is interrupted, an unchanged
+observation stays last known even when a later cache check succeeds. The cache
+read does not contact the producer or confirm ongoing producer authorization. It
+reflects denials or configuration changes known to Console when it takes that
+view; changes after that point, including during delivery to another tab, are
+detected on a later check. This does not erase data already seen or copied by
+the user. The non-touch check uses the pinned `@fastify/session` internal cookie
 decoder and store generation verification; revalidate that coupling when the
 session dependency changes.
 
