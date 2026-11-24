@@ -34,6 +34,7 @@ import {
 } from "./kernel-owner-v1.ts";
 
 class KernelReadBusy extends Error {}
+const KERNEL_READ_LIMIT = 16;
 
 declare module "fastify" {
   interface Session {
@@ -169,12 +170,11 @@ export async function createApp(options: AppOptions) {
       ? origin.origin
       : null;
   }
-  const snapshotAvailable = () =>
-    Boolean(
-      localConsoleOrigin() &&
-      options.kernelOwner?.readSnapshot &&
-      (options.kernelOwner.snapshotAvailable?.() ?? true),
-    );
+  const snapshotStatus = () => {
+    const channel = options.kernelOwner;
+    if (!localConsoleOrigin() || !channel?.readSnapshot) return "unavailable";
+    return channel.snapshotAvailable?.() === false ? "disconnected" : "ready";
+  };
   const admitMiInspection: import("fastify").onRequestAsyncHookHandler = async (
     request,
     reply,
@@ -259,7 +259,7 @@ export async function createApp(options: AppOptions) {
     return reply.send(
       request.routeOptions.url === "/api/router"
         ? routerObserver.view()
-        : { authenticated: true, snapshotAvailable: snapshotAvailable() },
+        : { authenticated: true, snapshotStatus: snapshotStatus() },
     );
   });
   await app.register(session, {
@@ -511,23 +511,22 @@ export async function createApp(options: AppOptions) {
     string,
     QueuedRead<{ digest: string; text: string }>
   >();
-  const snapshotReads = new Map<
-    string,
-    {
-      key: string;
-      pending: ReturnType<
-        NonNullable<NonNullable<AppOptions["kernelOwner"]>["readSnapshot"]>
-      >;
-    }
-  >();
+  type ReadSnapshot = NonNullable<
+    NonNullable<AppOptions["kernelOwner"]>["readSnapshot"]
+  >;
+  type SnapshotResult =
+    | { status: "observed"; snapshot: Awaited<ReturnType<ReadSnapshot>> }
+    | { status: "busy" | "resync-required" | "read-unavailable" };
+  type SnapshotWaiter = (result: SnapshotResult) => void;
+  let snapshotRead: { key: string; waiters: Set<SnapshotWaiter> } | undefined;
   const approvalScopeReads = new Map<
     string,
     QueuedRead<{ digest: string; proposalDigest: string; text: string }>
   >();
-  const readQueueFull = () =>
-    proposalReads.size + snapshotReads.size + approvalScopeReads.size >= 16;
-  const readsPending = () =>
-    proposalReads.size + snapshotReads.size + approvalScopeReads.size > 0;
+  const readCount = () =>
+    proposalReads.size + approvalScopeReads.size + (snapshotRead ? 1 : 0);
+  const readQueueFull = () => readCount() >= KERNEL_READ_LIMIT;
+  const readsPending = () => readCount() > 0;
   const sessionKey = (request: import("fastify").FastifyRequest) =>
     JSON.stringify([request.session.sessionStoreId, request.session.sessionId]);
   async function coalesceKernelRead<T>(
@@ -539,13 +538,13 @@ export async function createApp(options: AppOptions) {
     const key = sessionKey(reply.request);
     let entry = reads.get(key);
     if (!entry) {
-      if (readQueueFull() || (skipSnapshots && snapshotReads.size > 0))
+      if (readQueueFull() || (skipSnapshots && snapshotRead))
         throw new KernelReadBusy();
       const waiters = new Set<ReadWaiter>();
       entry = { waiters, pending: serializeKernelRead(waiters, read) };
       reads.set(key, entry);
     }
-    if (entry.waiters.size >= 16) throw new KernelReadBusy();
+    if (entry.waiters.size >= KERNEL_READ_LIMIT) throw new KernelReadBusy();
     // A queued read has less time to start than the browser's read deadline.
     // Each live waiter has its own admission check; an abandoned first caller
     // cannot cancel a coalesced same-session read for the others.
@@ -1308,7 +1307,8 @@ export async function createApp(options: AppOptions) {
   app.post("/api/kernel/snapshot", async (request, reply) => {
     if (!(await authenticated(request)))
       return reply.code(401).send({ error: "Login required" });
-    if (!snapshotAvailable()) return { status: "unavailable" };
+    const status = snapshotStatus();
+    if (status !== "ready") return { status };
     if (
       !request.body ||
       typeof request.body !== "object" ||
@@ -1337,49 +1337,59 @@ export async function createApp(options: AppOptions) {
         sequence: input.sequence,
       };
     }
-    const key = JSON.stringify(selection ?? null);
-    const session = sessionKey(request);
-    const existing = snapshotReads.get(session);
-    if (existing ? existing.key !== key : ownerBusy() || readsPending())
+    const key = JSON.stringify([sessionKey(request), selection ?? null]);
+    if (
+      snapshotRead
+        ? snapshotRead.key !== key ||
+          snapshotRead.waiters.size >= KERNEL_READ_LIMIT
+        : ownerBusy() || readsPending()
+    )
       return { status: "busy" };
     if (!liveResponse(reply)) return reply;
-    let snapshot;
-    let changed = false;
-    let busy = false;
-    try {
-      let pending = existing?.pending;
-      if (!pending) {
-        // Both initial and selected pages are either admitted now or busy.
-        // Do not tie an admitted exchange to any one HTTP waiter's lifetime.
-        pending = runKernelRead(() =>
-          options.kernelOwner!.readSnapshot!(selection),
-        );
-        kernelRead = pending.then(
-          () => {},
-          () => {},
-        );
-        snapshotReads.set(session, { key, pending });
-      }
-      try {
-        snapshot = await pending;
-      } finally {
-        if (snapshotReads.get(session)?.pending === pending)
-          snapshotReads.delete(session);
-      }
-    } catch (error) {
-      // The producer channel does not distinguish refusal from disconnection.
-      changed = error instanceof SnapshotChanged;
-      busy = error instanceof KernelReadBusy;
+    if (!snapshotRead) {
+      // Either admit now or return busy. The exchange has its own deadline
+      // and drains independently of HTTP waiters, even if all leave.
+      const entry = { key, waiters: new Set<SnapshotWaiter>() };
+      snapshotRead = entry;
+      const finish = (result: SnapshotResult) => {
+        snapshotRead = undefined;
+        for (const send of entry.waiters) send(result);
+        entry.waiters.clear();
+      };
+      kernelRead = runKernelRead(() =>
+        options.kernelOwner!.readSnapshot!(selection),
+      ).then(
+        (snapshot) => finish({ status: "observed", snapshot }),
+        (error) =>
+          finish({
+            status:
+              error instanceof SnapshotChanged
+                ? "resync-required"
+                : error instanceof KernelReadBusy
+                  ? "busy"
+                  : "read-unavailable",
+          }),
+      );
     }
-    if (!(await authenticated(request)))
-      return reply.code(401).send({ error: "Login required" });
-    if (busy) return { status: "busy" };
-    if (!snapshotAvailable()) return { status: "unavailable" };
-    return changed
-      ? { status: "resync-required" }
-      : snapshot
-        ? { status: "observed", snapshot }
-        : { status: "read-unavailable" };
+    const { waiters } = snapshotRead;
+    let send!: (result: SnapshotResult | null) => void;
+    const promise = new Promise<SnapshotResult | null>((resolve) => {
+      send = resolve;
+    });
+    const detach = () => {
+      waiters.delete(send);
+      send(null);
+    };
+    waiters.add(send);
+    reply.raw.once("close", detach);
+    const result = await promise;
+    reply.raw.off("close", detach);
+    if (!result || !liveResponse(reply)) return reply;
+    const authorized = await authenticated(request);
+    if (!liveResponse(reply)) return reply;
+    if (!authorized) return reply.code(401).send({ error: "Login required" });
+    const current = snapshotStatus();
+    return current === "ready" ? result : { status: current };
   });
   await app.register(fastifyStatic, {
     root: resolve(options.staticDirectory ?? "dist"),

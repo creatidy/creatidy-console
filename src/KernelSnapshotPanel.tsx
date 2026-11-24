@@ -21,6 +21,7 @@ type Snapshot = {
   commandCoverage: { sampled: number; total: number; complete: boolean };
 };
 type Window = Pick<Snapshot, "epoch" | "sequence" | "startPage" | "nextPage">;
+const disconnectedMessage = "The configured Kernel snapshot channel is closed.";
 
 export default function KernelSnapshotPanel({
   expired,
@@ -82,7 +83,9 @@ export default function KernelSnapshotPanel({
           if (current !== generation.current) return;
           if (controller.signal.aborted || session?.authenticated !== true)
             hide();
-          else if (session.snapshotAvailable !== true)
+          else if (session.snapshotStatus === "disconnected")
+            hide(disconnectedMessage);
+          else if (session.snapshotStatus !== "ready")
             hide("Kernel snapshot capability is no longer available.");
           else if (
             document.visibilityState === "visible" &&
@@ -152,9 +155,11 @@ export default function KernelSnapshotPanel({
             ? "The snapshot changed during the read. Request a fresh snapshot; the missed interval remains unknown."
             : result.status === "busy"
               ? "Another snapshot read is in progress. Try again."
-              : result.status === "unavailable"
-                ? "Kernel snapshots require a local Console and a configured read capability."
-                : "Kernel snapshot unavailable; the read could not be completed.",
+              : result.status === "disconnected"
+                ? disconnectedMessage
+                : result.status === "unavailable"
+                  ? "Kernel snapshots require a local Console and a configured read capability."
+                  : "Kernel snapshot unavailable; the read could not be completed.",
         );
         return;
       }
@@ -176,9 +181,13 @@ export default function KernelSnapshotPanel({
         controller.signal.aborted
       )
         return;
-      if (validated.snapshotAvailable !== true) {
+      if (validated.snapshotStatus !== "ready") {
         resetWindow();
-        setMessage("Kernel snapshot capability is no longer available.");
+        setMessage(
+          validated.snapshotStatus === "disconnected"
+            ? disconnectedMessage
+            : "Kernel snapshot capability is no longer available.",
+        );
         return;
       }
       const next = result.snapshot as Snapshot;
@@ -267,9 +276,9 @@ export default function KernelSnapshotPanel({
             displayed.
           </p>
           <p>
-            Progress since the preceding observation: {snapshot.history}.
-            Progress is a bounded hint, not durable history; a gap remains
-            unfilled by this snapshot.
+            Progress continuity for this descriptor: {snapshot.history}.
+            Progress is a bounded hint, not durable history; earlier gaps and
+            unknown intervals remain visible after later reads.
           </p>
           <ul>
             {Object.entries(snapshot.counts).map(([name, count]) => (

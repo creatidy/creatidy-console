@@ -619,12 +619,12 @@ it.skipIf(!existsSync(chrome))(
       let busyLaterPage = true;
       let holdLaterPage = true;
       const sessionCheckPath = "**/api/kernel/session-check";
-      let snapshotAvailable = true;
+      let snapshotStatus = "ready";
       await page.route(sessionCheckPath, async (route) => {
         const response = await route.fetch();
         await route.fulfill({
           response,
-          json: { ...(await response.json()), snapshotAvailable },
+          json: { ...(await response.json()), snapshotStatus },
         });
       });
       const laterRequest = Promise.withResolvers();
@@ -633,6 +633,8 @@ it.skipIf(!existsSync(chrome))(
         snapshotReads++;
         const pageNumber = route.request().postDataJSON()?.page ?? 0;
         visitedPages.push(pageNumber);
+        if (snapshotStatus === "disconnected")
+          return route.fulfill({ json: { status: "disconnected" } });
         if (pageNumber === 10 && busyLaterPage) {
           busyLaterPage = false;
           return route.fulfill({ json: { status: "busy" } });
@@ -654,7 +656,7 @@ it.skipIf(!existsSync(chrome))(
               startPage: pageNumber,
               nextPage: { 0: 3, 3: 8, 8: 10 }[pageNumber] ?? null,
               status: "active",
-              history: "initial",
+              history: "gap",
               counts: {
                 work_units: { sampled: pageNumber ? 1 : 24, total: 25 },
               },
@@ -670,6 +672,13 @@ it.skipIf(!existsSync(chrome))(
       expect(snapshotReads).toBe(0);
       await page.getByRole("button", { name: "Read snapshot" }).click();
       await page.getByText("work_units: 25 total; 24 sampled").waitFor();
+      expect
+        .soft(
+          await page
+            .getByText(/Progress continuity for this descriptor: gap/)
+            .count(),
+        )
+        .toBe(1);
       expect(snapshotReads).toBe(1);
       expect(await page.evaluate(() => window.ownerInjected)).toBeUndefined();
       await page.getByRole("button", { name: "Next pages" }).click();
@@ -677,6 +686,13 @@ it.skipIf(!existsSync(chrome))(
       await page
         .getByText("Showing up to eight pages starting at producer page 3.")
         .waitFor();
+      expect
+        .soft(
+          await page
+            .getByText(/Progress continuity for this descriptor: gap/)
+            .count(),
+        )
+        .toBe(1);
       expect(snapshotReads).toBe(2);
       for (const [button, pageNumber, outcome] of [
         ["Next pages", 8, "observed"],
@@ -766,16 +782,19 @@ it.skipIf(!existsSync(chrome))(
         await page.getByText("work_units: 25 total; 24 sampled").count(),
       ).toBe(1);
       const readsBeforeClosure = snapshotReads;
-      snapshotAvailable = false;
+      snapshotStatus = "disconnected";
       await page.clock.fastForward(10000);
       const unavailable = page.getByText(
-        "Kernel snapshot capability is no longer available.",
+        "The configured Kernel snapshot channel is closed.",
       );
       await unavailable.waitFor({ timeout: 3000 });
       expect(await page.getByText("Sampled work units").count()).toBe(0);
       expect(snapshotReads).toBe(readsBeforeClosure);
+      await page.getByRole("button", { name: "Read snapshot" }).click();
+      await unavailable.waitFor();
+      expect(snapshotReads).toBe(readsBeforeClosure + 1);
       await page.getByRole("heading", { name: "Your console" }).waitFor();
-      snapshotAvailable = true;
+      snapshotStatus = "ready";
       await page.route("**/api/kernel/session-check", (route) =>
         route.fulfill({ status: 401, json: { error: "Login required" } }),
       );
