@@ -97,8 +97,6 @@ try {
   ) {
     throw new Error("Kernel owner approval and disposition require loopback");
   }
-  if (kernelOwner?.readSnapshot && (!loopback || !localOrigin))
-    throw new Error("Kernel snapshots require loopback");
   const stateDirectory =
     process.env.CONSOLE_STATE_DIR ??
     join(homedir(), ".local", "share", "creatidy-console");

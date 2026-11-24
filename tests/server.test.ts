@@ -33,6 +33,7 @@ const password = "synthetic-owner-password";
 async function fixture(
   clock = () => Date.now(),
   kernelOwner?: import("../server/app.ts").AppOptions["kernelOwner"],
+  beforeListen?: (app: Awaited<ReturnType<typeof createApp>>) => void,
 ) {
   const dir = mkdtempSync(join(tmpdir(), "console-test-"));
   directories.push(dir);
@@ -70,6 +71,9 @@ async function fixture(
         }
       : {}),
   });
+  beforeListen?.(app);
+  if (kernelOwner?.readSnapshot)
+    await app.listen({ host: "127.0.0.1", port: 0 });
   return { app, dir, assets };
 }
 
@@ -308,7 +312,6 @@ describe("authenticated application", () => {
         payload: { password },
       });
       const cookie = String(login.headers["set-cookie"]).split(";")[0]!;
-      await app.listen({ host: "127.0.0.1", port: 0 });
       const address = app.server.address();
       if (!address || typeof address === "string")
         throw new Error("No local test port");
@@ -674,22 +677,27 @@ describe("authenticated application", () => {
         proposalDigest: "a".repeat(64),
         text: "synthetic scope",
       }));
-      const { app } = await fixture(() => Date.now(), {
-        scope: "program",
-        readProposal: () =>
-          new Promise((resolve) => {
-            release = () =>
-              resolve({ digest: "a".repeat(64), text: "synthetic" });
-            started();
-          }),
-        readSnapshot,
-        readApprovalScope,
-        close: () => {},
-      });
       const url = `/api/kernel/${operation}`;
-      app.addHook("preHandler", async (request) => {
-        if (request.url === url && ++arrivals === 3) setImmediate(arrived);
-      });
+      const { app } = await fixture(
+        () => Date.now(),
+        {
+          scope: "program",
+          readProposal: () =>
+            new Promise((resolve) => {
+              release = () =>
+                resolve({ digest: "a".repeat(64), text: "synthetic" });
+              started();
+            }),
+          readSnapshot,
+          readApprovalScope,
+          close: () => {},
+        },
+        (app) => {
+          app.addHook("preHandler", async (request) => {
+            if (request.url === url && ++arrivals === 3) setImmediate(arrived);
+          });
+        },
+      );
       try {
         await app.inject({
           method: "POST",
@@ -787,20 +795,25 @@ describe("authenticated application", () => {
         correlations: [],
         commandCoverage: { sampled: 0, total: 0, complete: true },
       }));
-      const { app } = await fixture(() => Date.now(), {
-        scope: "program",
-        readProposal: () =>
-          new Promise((resolve) => {
-            release = () =>
-              resolve({ digest: "a".repeat(64), text: "synthetic" });
-            started();
-          }),
-        readSnapshot,
-        close: () => {},
-      });
-      app.addHook("onRequest", async (request) => {
-        if (request.url === "/api/kernel/snapshot") snapshotArrived();
-      });
+      const { app } = await fixture(
+        () => Date.now(),
+        {
+          scope: "program",
+          readProposal: () =>
+            new Promise((resolve) => {
+              release = () =>
+                resolve({ digest: "a".repeat(64), text: "synthetic" });
+              started();
+            }),
+          readSnapshot,
+          close: () => {},
+        },
+        (app) => {
+          app.addHook("onRequest", async (request) => {
+            if (request.url === "/api/kernel/snapshot") snapshotArrived();
+          });
+        },
+      );
       try {
         await app.inject({
           method: "POST",

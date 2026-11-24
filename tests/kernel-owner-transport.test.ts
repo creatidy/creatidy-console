@@ -707,6 +707,9 @@ it("distinguishes bounded continuity from a persistent progress gap", async () =
   });
   const channel = createLocalOwnerTransport(client, "program");
   expect((await channel.readSnapshot()).history).toBe("initial");
+  await expect(
+    channel.readSnapshot({ page: 0, epoch: "a".repeat(32), sequence: "2" }),
+  ).rejects.toThrow("Snapshot changed during pagination");
   expect((await channel.readSnapshot()).history).toBe("continuous");
   expect((await channel.readSnapshot()).history).toBe("gap");
   expect((await channel.readSnapshot()).history).toBe("gap");

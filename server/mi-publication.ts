@@ -682,7 +682,7 @@ function cutFrom(publication: Obj): Cut | null {
   result.producedAt = producedAt;
   return result;
 }
-function health(value: unknown, cut: Cut | null): void {
+export function validateMiHealth(value: unknown, cut: Cut | null): string {
   const row = fields(value, {
     state: (v) => {
       choice(v, ["valid", "missing", "invalid", "unsupported"]);
@@ -700,7 +700,7 @@ function health(value: unknown, cut: Cut | null): void {
       row.correlation !== "unavailable"
     )
       fail();
-    return;
+    return row.state as string;
   }
   const data = fields(row.data, {
     schema: (v) => {
@@ -761,6 +761,7 @@ function health(value: unknown, cut: Cut | null): void {
       ? "matched"
       : "mismatch";
   if (row.correlation !== expected) fail();
+  return "valid";
 }
 function facts(value: unknown, cut: Cut | null): void {
   const root = fields(value, {
@@ -938,7 +939,7 @@ function verify(input: string): Verified {
   const cut = cutFrom(
     record(root.publication, ["state", "reference", "artifact", "diagnostics"]),
   );
-  health(root.health, cut);
+  validateMiHealth(root.health, cut);
   facts(root.facts, cut);
   const history = fields(root.history, {
     scope: (v) => {

@@ -984,9 +984,10 @@ it.skipIf(!existsSync(chrome))(
         discoveries: [],
       };
       let heldRefresh;
-      const heldRouterRefresh = new Promise((resolve) => {
-        heldRefresh = resolve;
-      });
+      const holdRouterRefresh = () =>
+        new Promise((resolve) => {
+          heldRefresh = resolve;
+        });
       upstream = createHttpServer((request, response) => {
         calls++;
         if (upstreamMode === "hold") {
@@ -1098,7 +1099,9 @@ it.skipIf(!existsSync(chrome))(
         0,
       );
       await page.unroute("**/api/kernel/session-check");
-      await page.getByRole("button", { name: "Retry Router status" }).click();
+      await page
+        .getByRole("button", { name: "Retry Router status" })
+        .evaluate((button) => button.click());
       await page.getByText("m".repeat(64), { exact: false }).waitFor();
       expect(calls).toBe(observedCalls);
       await page.route("**/api/kernel/session-check", (route) =>
@@ -1181,68 +1184,94 @@ it.skipIf(!existsSync(chrome))(
       await page.getByText("m".repeat(64), { exact: false }).waitFor();
       // The real POST reaches Console, but the browser stops waiting before
       // the synthetic producer replies. The recovery GET still has old facts.
-      upstreamMode = "hold";
-      await page.evaluate(() => {
-        const original = window.fetch;
-        window.routerRefreshWaiting = false;
-        window.restoreRouterFetch = () => {
-          window.fetch = original;
-        };
-        window.fetch = (input, options) => {
-          if (input !== "/api/router/refresh") return original(input, options);
-          window.routerRefreshWaiting = true;
-          return new Promise((_, reject) =>
-            options.signal.addEventListener(
-              "abort",
-              () => reject(options.signal.reason),
-              { once: true },
-            ),
-          );
-        };
-      });
-      await page.getByRole("button", { name: "Refresh Router" }).click();
-      await page.waitForFunction(() => window.routerRefreshWaiting, {
-        timeout: 3000,
-      });
-      const refreshResponse = page.request.post(
-        `${origin}/api/router/refresh`,
-        {
-          headers: { origin },
-          data: {},
-          timeout: 5000,
-        },
-      );
-      const heldResponse = await Promise.race([
-        heldRouterRefresh,
-        refreshResponse.then(() => {
-          throw new Error("Refresh was not held by the fixture");
-        }),
-      ]);
-      const delayedCalls = calls;
-      try {
+      for (const finalStatus of ["connected", "denied"]) {
+        const heldRouterRefresh = holdRouterRefresh();
+        upstreamMode = "hold";
+        await page.evaluate(() => {
+          const original = window.fetch;
+          window.routerRefreshWaiting = false;
+          window.restoreRouterFetch = () => {
+            window.fetch = original;
+          };
+          window.fetch = (input, options) => {
+            if (input !== "/api/router/refresh")
+              return original(input, options);
+            window.routerRefreshWaiting = true;
+            return new Promise((_, reject) =>
+              options.signal.addEventListener(
+                "abort",
+                () => reject(options.signal.reason),
+                { once: true },
+              ),
+            );
+          };
+        });
+        await page.getByRole("button", { name: "Refresh Router" }).click();
+        await page.waitForFunction(() => window.routerRefreshWaiting, {
+          timeout: 3000,
+        });
+        const refreshResponse = page.request.post(
+          `${origin}/api/router/refresh`,
+          {
+            headers: { origin },
+            data: {},
+            timeout: 5000,
+          },
+        );
+        const heldResponse = await Promise.race([
+          heldRouterRefresh,
+          refreshResponse.then(() => {
+            throw new Error("Refresh was not held by the fixture");
+          }),
+        ]);
+        const delayedCalls = calls;
+        try {
+          await page.clock.fastForward(10001);
+          // Re-establish a cached nonempty view before delivering delayed denial.
+          await page
+            .getByText("Last-known data follows; it may be stale.")
+            .waitFor({ timeout: 3000 });
+          await page
+            .getByText("m".repeat(64), { exact: false })
+            .waitFor({ timeout: 3000 });
+        } finally {
+          if (finalStatus === "denied") heldResponse.writeHead(401).end();
+          else
+            heldResponse
+              .writeHead(200, { "content-type": "application/json" })
+              .end(
+                JSON.stringify({
+                  schema_version: 1,
+                  cursor: position,
+                  events: [],
+                  resync: null,
+                  resync_reason: null,
+                  provenance_current: true,
+                }),
+              );
+        }
+        expect((await (await refreshResponse).json()).status).toBe(finalStatus);
         await page.clock.fastForward(10001);
-        // Re-establish a cached nonempty view before delivering delayed denial.
-        await page
-          .getByText("Last-known data follows; it may be stale.")
-          .waitFor({ timeout: 3000 });
-        await page
-          .getByText("m".repeat(64), { exact: false })
-          .waitFor({ timeout: 3000 });
-      } finally {
-        heldResponse.writeHead(401).end();
+        if (finalStatus === "connected") {
+          await page
+            .getByText(/Last Router refresh succeeded/)
+            .waitFor({ timeout: 3000 });
+          await page
+            .getByText("m".repeat(64), { exact: false })
+            .waitFor({ timeout: 3000 });
+        } else {
+          await page
+            .getByText(
+              "Observer access was denied or revoked. Cached facts were cleared.",
+            )
+            .waitFor({ timeout: 3000 });
+          expect(
+            await page.getByText("resource-a", { exact: false }).count(),
+          ).toBe(0);
+        }
+        expect(calls).toBe(delayedCalls);
+        await page.evaluate(() => window.restoreRouterFetch());
       }
-      expect((await (await refreshResponse).json()).status).toBe("denied");
-      await page.clock.fastForward(10001);
-      await page
-        .getByText(
-          "Observer access was denied or revoked. Cached facts were cleared.",
-        )
-        .waitFor({ timeout: 3000 });
-      expect(await page.getByText("resource-a", { exact: false }).count()).toBe(
-        0,
-      );
-      expect(calls).toBe(delayedCalls);
-      await page.evaluate(() => window.restoreRouterFetch());
       upstreamMode = "connected";
       await page.getByRole("button", { name: "Refresh Router" }).click();
       await page.getByText("m".repeat(64), { exact: false }).waitFor();

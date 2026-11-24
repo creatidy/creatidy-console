@@ -1,5 +1,6 @@
 import { parseOwnerJson } from "./kernel-owner-v1.ts";
 import { miInstance } from "./mi-text.ts";
+import { validateMiHealth } from "./mi-publication.ts";
 
 // A deliberately limited consumer of mi.operator-working/1. This does not
 // activate publications or implement the producer's complete receiver.
@@ -105,20 +106,7 @@ export function inspectEmptyMiSnapshot(text: string):
         : diagnostics.length === 0)
     )
       throw new Error("invalid");
-    const health = object(root.health, [
-      "state",
-      "sha256",
-      "data",
-      "correlation",
-    ]);
-    if (
-      typeof health.state !== "string" ||
-      !["missing", "invalid", "unsupported"].includes(health.state) ||
-      health.sha256 !== null ||
-      health.data !== null ||
-      health.correlation !== "unavailable"
-    )
-      return { status: "unsupported" };
+    const health = validateMiHealth(root.health, null);
     const facts = object(root.facts, [
       "latest",
       "future",
@@ -179,7 +167,7 @@ export function inspectEmptyMiSnapshot(text: string):
       status: "empty",
       instance,
       evaluatedAt: root.evaluated_at,
-      health: health.state as string,
+      health,
     };
   } catch {
     return { status: "invalid" };

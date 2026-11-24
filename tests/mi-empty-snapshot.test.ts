@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { inspectEmptyMiSnapshot } from "../server/mi-empty-snapshot.ts";
+import { createHash } from "node:crypto";
 
 function emptySnapshot() {
   return {
@@ -108,12 +109,12 @@ describe("bounded offline MI empty snapshots", () => {
           health: { ...emptySnapshot().health, state: ["missing"] },
         }),
       ),
-    ).toEqual({ status: "unsupported" });
+    ).toEqual({ status: "invalid" });
     expect(inspectEmptyMiSnapshot(" ".repeat(256 * 1024 + 1))).toEqual({
       status: "invalid",
     });
   });
-  it("does not activate a publication or unvalidated health data", () => {
+  it("does not activate a publication or accept unvalidated health data", () => {
     const available = emptySnapshot();
     available.publication.state = "available";
     expect(inspectEmptyMiSnapshot(JSON.stringify(available))).toEqual({
@@ -122,11 +123,42 @@ describe("bounded offline MI empty snapshots", () => {
     const health = emptySnapshot();
     health.health.state = "valid";
     expect(inspectEmptyMiSnapshot(JSON.stringify(health))).toEqual({
-      status: "unsupported",
+      status: "invalid",
     });
   });
   it("distinguishes producer-reported invalid and unsupported states from malformed input", () => {
-    const base = emptySnapshot();
+    const data = {
+      active: null,
+      adapter: "synthetic",
+      attempted_at: "2026-01-03T00:00:00Z",
+      diagnostic: null,
+      freshness_policy: "consumer-owned",
+      last_successful_publication_at: null,
+      phase: "complete",
+      remediation: null,
+      schema: "mi.source-refresh-working/1",
+      sources: [],
+      succeeded: true,
+    };
+    const health = {
+      state: "valid",
+      data,
+      sha256: createHash("sha256").update(JSON.stringify(data)).digest("hex"),
+      correlation: "unavailable",
+    };
+    const base = { ...emptySnapshot(), health };
+    expect(inspectEmptyMiSnapshot(JSON.stringify(base))).toMatchObject({
+      status: "empty",
+      health: "valid",
+    });
+    for (const malformed of [
+      { ...health, correlation: "matched" },
+      { ...health, sha256: "0".repeat(64) },
+    ]) {
+      expect(
+        inspectEmptyMiSnapshot(JSON.stringify({ ...base, health: malformed })),
+      ).toEqual({ status: "invalid" });
+    }
     for (const [state, expected] of [
       ["invalid", "producer-invalid"],
       ["unsupported", "producer-unsupported"],

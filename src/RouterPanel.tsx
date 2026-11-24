@@ -25,13 +25,14 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
   const currentView = useRef<RouterView | null>(null);
   const generation = useRef(0);
   const active = useRef<AbortController | null>(null);
-  const uncertainRefresh = useRef(false);
+  const uncertainObservation = useRef<string | null>(null);
 
   async function load(refresh = false) {
     if (document.visibilityState !== "visible") return;
     generation.current++;
     active.current?.abort();
     const current = generation.current;
+    const previousObservation = currentView.current?.observation;
     const controller = new AbortController();
     active.current = controller;
     const deadlines: ReturnType<typeof setTimeout>[] = [];
@@ -86,8 +87,12 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
         next = await read();
       }
       if (!currentRequest() || !next) return;
-      if (refresh) uncertainRefresh.current = refreshFailed;
-      if (!next.facts) uncertainRefresh.current = false;
+      if (refresh)
+        uncertainObservation.current = refreshFailed
+          ? (previousObservation ?? next.observation)
+          : null;
+      if (!next.facts || next.observation !== uncertainObservation.current)
+        uncertainObservation.current = null;
       if (next.facts || next.origin || next.gap) {
         const signal = bounded();
         const session = await fetch("/api/kernel/session-check", {
@@ -107,7 +112,7 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
         signal.throwIfAborted();
       }
       if (!currentRequest() || document.visibilityState !== "visible") return;
-      if (uncertainRefresh.current && next.status === "connected") {
+      if (uncertainObservation.current && next.status === "connected") {
         next = {
           ...next,
           status: "disconnected",

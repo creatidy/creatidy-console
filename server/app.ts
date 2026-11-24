@@ -158,7 +158,7 @@ export async function createApp(options: AppOptions) {
   const cookieName =
     origin.protocol === "https:" ? "__Host-console" : "console";
   const routerObserver = createRouterObserver(options.stateDirectory);
-  function localMiOrigin() {
+  function localConsoleOrigin() {
     const listener = app.server.address();
     return listener &&
       typeof listener !== "string" &&
@@ -171,7 +171,7 @@ export async function createApp(options: AppOptions) {
     request,
     reply,
   ) => {
-    if (!localMiOrigin())
+    if (!localConsoleOrigin())
       return reply
         .code(403)
         .send({ error: "Offline MI inspection requires a local Console" });
@@ -317,7 +317,7 @@ export async function createApp(options: AppOptions) {
   }
   app.get("/api/session", async (request) => {
     const signedIn = await authenticated(request);
-    const miInspectionOrigin = signedIn && localMiOrigin();
+    const miInspectionOrigin = signedIn && localConsoleOrigin();
     return {
       configured: Boolean(owner()),
       authenticated: signedIn,
@@ -1263,7 +1263,8 @@ export async function createApp(options: AppOptions) {
   app.post("/api/kernel/snapshot", async (request, reply) => {
     if (!(await authenticated(request)))
       return reply.code(401).send({ error: "Login required" });
-    if (!options.kernelOwner?.readSnapshot) return { status: "unavailable" };
+    if (!localConsoleOrigin() || !options.kernelOwner?.readSnapshot)
+      return { status: "unavailable" };
     if (
       !request.body ||
       typeof request.body !== "object" ||

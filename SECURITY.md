@@ -66,14 +66,16 @@ arbitrary dispatcher, browser-selected principal, active SQLite peer or new
 authentication system follows from this decision.
 
 Snapshot reads require both a loopback listener and a loopback Console browser
-origin. They expose bounded work-unit, attempt, decision and correlation records
-and collection coverage, not full commands or complete history; oversized
-records are omitted. Opaque runtime handle values are not sent to the browser,
-and neither their presence nor absence proves effect settlement. Reads use the
-same supervisor provision and do not independently authenticate producer
-identity. Progress continuity is a bounded in-memory hint between observations;
-a snapshot cannot restore missing history, and a Console restart forgets the
-preceding observation.
+origin. A valid read-only descriptor does not prevent HTTPS startup outside that
+topology; only the new snapshot route is unavailable there. Snapshots expose
+bounded work-unit, attempt, decision and correlation records and collection
+coverage, not full commands or complete history; oversized records are omitted.
+Opaque runtime handle values are not sent to the browser, and neither their
+presence nor absence proves effect settlement. Reads use the same supervisor
+provision and do not independently authenticate producer identity. Progress
+continuity is a bounded in-memory hint between observations; a snapshot cannot
+restore missing history, and a Console restart forgets the preceding
+observation.
 
 While Router facts, the proposal or a snapshot are visible, Console checks the
 existing session without extending its idle or absolute expiry. The views hide

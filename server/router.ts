@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { readRouterConfig, type RouterConfig } from "./router-config.ts";
@@ -309,6 +309,7 @@ export function createRouterObserver(directory: string) {
   let fingerprint: string | null = null;
   let configurationGeneration = 0;
   let position: unknown;
+  let observation: string | null = null;
   let facts: Projection | null = null;
   let status: RouterStatus = "unconfigured";
   let gap: string | null = null;
@@ -326,6 +327,7 @@ export function createRouterObserver(directory: string) {
       if (status !== "configuration_error") configurationGeneration++;
       status = "configuration_error";
       facts = null;
+      observation = null;
       position = undefined;
       gap = null;
       origin = null;
@@ -339,6 +341,7 @@ export function createRouterObserver(directory: string) {
       configurationGeneration++;
       fingerprint = next;
       facts = null;
+      observation = null;
       position = undefined;
       gap = null;
       status = config ? "configured" : "unconfigured";
@@ -353,6 +356,7 @@ export function createRouterObserver(directory: string) {
       origin,
       facts,
       gap,
+      observation: facts ? observation : null,
       last_known: status === "disconnected" && facts !== null,
     };
   }
@@ -528,6 +532,7 @@ export function createRouterObserver(directory: string) {
       if (configuration() === null || configurationGeneration !== generation)
         return view();
       facts = nextFacts;
+      observation = randomUUID();
       position = nextPosition;
       gap = nextGap;
       status = "connected";

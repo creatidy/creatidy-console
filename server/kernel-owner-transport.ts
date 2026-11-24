@@ -455,7 +455,7 @@ export function createLocalOwnerTransport(
             (selection.epoch !== current.epoch ||
               selection.sequence !== current.sequence)
           ) {
-            priorHistoryGap = true;
+            // A caller's stale selection is not evidence of a producer gap.
             throw new SnapshotChanged("Snapshot changed during pagination");
           }
           if (
