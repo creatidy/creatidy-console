@@ -59,7 +59,10 @@ try {
       },
       readProposal: transport.readProposal,
       ...(transport.snapshotSupported
-        ? { readSnapshot: transport.readSnapshot }
+        ? {
+            readSnapshot: transport.readSnapshot,
+            snapshotAvailable: transport.snapshotAvailable,
+          }
         : {}),
       readApprovalScope: transport.readApprovalScope,
       readRevision: transport.readRevision,

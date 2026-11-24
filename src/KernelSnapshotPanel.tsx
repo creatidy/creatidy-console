@@ -38,7 +38,9 @@ export default function KernelSnapshotPanel({
   const hasSnapshot = useRef(false);
 
   useEffect(() => {
-    const hide = () => {
+    const hide = (
+      message = "Snapshot hidden. Request another snapshot to view current data.",
+    ) => {
       generation.current++;
       active.current?.abort();
       active.current = null;
@@ -48,9 +50,7 @@ export default function KernelSnapshotPanel({
       setPreviousWindows([]);
       setVisible(false);
       setLoading(false);
-      setMessage(
-        "Snapshot hidden. Request another snapshot to view current data.",
-      );
+      setMessage(message);
     };
     const visibility = () => {
       if (document.visibilityState !== "visible") hide();
@@ -78,10 +78,12 @@ export default function KernelSnapshotPanel({
           hide();
           expired();
         } else {
-          const authenticated =
-            response.ok && (await response.json()).authenticated === true;
+          const session = response.ok ? await response.json() : null;
           if (current !== generation.current) return;
-          if (!authenticated) hide();
+          if (controller.signal.aborted || session?.authenticated !== true)
+            hide();
+          else if (session.snapshotAvailable !== true)
+            hide("Kernel snapshot capability is no longer available.");
           else if (
             document.visibilityState === "visible" &&
             !controller.signal.aborted
@@ -165,8 +167,8 @@ export default function KernelSnapshotPanel({
       if (current !== generation.current) return;
       controller.signal.throwIfAborted();
       if (session.status === 401) return expired();
-      if (!session.ok || (await session.json()).authenticated !== true)
-        throw new Error();
+      const validated = session.ok ? await session.json() : null;
+      if (validated?.authenticated !== true) throw new Error();
       controller.signal.throwIfAborted();
       if (
         current !== generation.current ||
@@ -174,6 +176,11 @@ export default function KernelSnapshotPanel({
         controller.signal.aborted
       )
         return;
+      if (validated.snapshotAvailable !== true) {
+        resetWindow();
+        setMessage("Kernel snapshot capability is no longer available.");
+        return;
+      }
       const next = result.snapshot as Snapshot;
       if (
         page !== undefined &&

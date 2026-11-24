@@ -362,6 +362,7 @@ export function createLocalOwnerTransport(
   return Object.freeze({
     close,
     snapshotSupported,
+    snapshotAvailable: () => snapshotSupported && !closed && !socket.destroyed,
     async readSnapshot(selection?: {
       page: number;
       epoch: string;

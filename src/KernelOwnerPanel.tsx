@@ -8,6 +8,7 @@ export default function KernelOwnerPanel({ expired }: { expired: () => void }) {
     | "connected"
     | "unsupported"
     | "invalid"
+    | "busy"
   >("checking");
   const [proposal, setProposal] = useState<{
     scope: string;
@@ -23,6 +24,7 @@ export default function KernelOwnerPanel({ expired }: { expired: () => void }) {
   const [scopeStatus, setScopeStatus] = useState("");
   const scopeGeneration = useRef(0);
   const scopeRequest = useRef<AbortController | undefined>(undefined);
+  const retryProposal = useRef<(() => void) | undefined>(undefined);
 
   useEffect(() => {
     const hide = () => {
@@ -149,12 +151,18 @@ export default function KernelOwnerPanel({ expired }: { expired: () => void }) {
       const timeout = setTimeout(() => active.abort(), 11000);
       try {
         if (!cached) {
+          setStatus("checking");
           const response = await fetch("/api/kernel/owner", {
             cache: "no-store",
             signal,
           });
           if (response.status === 401) {
             if (current === generation) expired();
+            return;
+          }
+          if (current !== generation || signal.aborted) return;
+          if (response.status === 503) {
+            setStatus("busy");
             return;
           }
           if (!response.ok) throw new Error();
@@ -231,9 +239,11 @@ export default function KernelOwnerPanel({ expired }: { expired: () => void }) {
       else hide();
     };
     document.addEventListener("visibilitychange", visibility);
+    retryProposal.current = () => void check();
     void check();
     return () => {
       hide();
+      retryProposal.current = undefined;
       document.removeEventListener("visibilitychange", visibility);
     };
   }, []);
@@ -252,8 +262,15 @@ export default function KernelOwnerPanel({ expired }: { expired: () => void }) {
                 ? "Console does not support this Kernel proposal format. No owner commands are available."
                 : status === "invalid"
                   ? "Kernel returned an invalid or oversized proposal response. No owner commands are available."
-                  : "Kernel proposal unavailable: the channel disconnected or refused the read. No owner commands are available."}
+                  : status === "busy"
+                    ? "Kernel read busy. Retry the proposal when the current read finishes."
+                    : "Kernel proposal unavailable: the channel disconnected or refused the read. No owner commands are available."}
       </p>
+      {(status === "busy" || status === "disconnected") && (
+        <button type="button" onClick={() => retryProposal.current?.()}>
+          Retry Kernel proposal
+        </button>
+      )}
       {proposal && status === "connected" && visible && (
         <>
           <p>Scope: {proposal.scope}</p>

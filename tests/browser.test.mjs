@@ -618,6 +618,15 @@ it.skipIf(!existsSync(chrome))(
       const visitedPages = [];
       let busyLaterPage = true;
       let holdLaterPage = true;
+      const sessionCheckPath = "**/api/kernel/session-check";
+      let snapshotAvailable = true;
+      await page.route(sessionCheckPath, async (route) => {
+        const response = await route.fetch();
+        await route.fulfill({
+          response,
+          json: { ...(await response.json()), snapshotAvailable },
+        });
+      });
       const laterRequest = Promise.withResolvers();
       const releaseLaterRequest = Promise.withResolvers();
       await page.route("**/api/kernel/snapshot", async (route) => {
@@ -756,6 +765,17 @@ it.skipIf(!existsSync(chrome))(
       expect(
         await page.getByText("work_units: 25 total; 24 sampled").count(),
       ).toBe(1);
+      const readsBeforeClosure = snapshotReads;
+      snapshotAvailable = false;
+      await page.clock.fastForward(10000);
+      const unavailable = page.getByText(
+        "Kernel snapshot capability is no longer available.",
+      );
+      await unavailable.waitFor({ timeout: 3000 });
+      expect(await page.getByText("Sampled work units").count()).toBe(0);
+      expect(snapshotReads).toBe(readsBeforeClosure);
+      await page.getByRole("heading", { name: "Your console" }).waitFor();
+      snapshotAvailable = true;
       await page.route("**/api/kernel/session-check", (route) =>
         route.fulfill({ status: 401, json: { error: "Login required" } }),
       );
@@ -814,8 +834,14 @@ it.skipIf(!existsSync(chrome))(
       }
       await page.getByRole("heading", { name: "Your console" }).waitFor();
       let proposalReads = 0;
+      let ownerContended = true;
       await page.route("**/api/kernel/owner", (route) => {
         proposalReads++;
+        if (ownerContended)
+          return route.fulfill({
+            status: 503,
+            json: { error: "Kernel read busy" },
+          });
         return route.fulfill({
           json: {
             status: "connected",
@@ -829,6 +855,14 @@ it.skipIf(!existsSync(chrome))(
       });
       await page.setViewportSize({ width: 360, height: 800 });
       await page.reload();
+      await page
+        .getByText(/Kernel proposal unavailable|Kernel read busy/)
+        .waitFor();
+      ownerContended = false;
+      const retryProposal = page.getByRole("button", {
+        name: "Retry Kernel proposal",
+      });
+      await retryProposal.click();
       await page
         .getByText(
           "Verified proposal received when this view opened; it may have changed. Reload to recheck. Approval requires a fresh review.",
@@ -975,7 +1009,7 @@ it.skipIf(!existsSync(chrome))(
       await page.clock.fastForward(10000);
       await page.getByText(hostile, { exact: false }).first().waitFor();
       expect(checks).toBe(2);
-      expect(proposalReads).toBe(1);
+      expect(proposalReads).toBe(2);
       await page.unroute("**/api/kernel/session-check");
       let releaseCheck;
       let checkStarted;

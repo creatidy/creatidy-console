@@ -55,6 +55,7 @@ export interface AppOptions {
     approvalScopeSupported?: boolean;
     approvalSupported?: boolean;
     readProposal: () => Promise<{ digest: string; text: string }>;
+    snapshotAvailable?: () => boolean;
     readSnapshot?: (selection?: {
       page: number;
       epoch: string;
@@ -168,6 +169,12 @@ export async function createApp(options: AppOptions) {
       ? origin.origin
       : null;
   }
+  const snapshotAvailable = () =>
+    Boolean(
+      localConsoleOrigin() &&
+      options.kernelOwner?.readSnapshot &&
+      (options.kernelOwner.snapshotAvailable?.() ?? true),
+    );
   const admitMiInspection: import("fastify").onRequestAsyncHookHandler = async (
     request,
     reply,
@@ -252,7 +259,7 @@ export async function createApp(options: AppOptions) {
     return reply.send(
       request.routeOptions.url === "/api/router"
         ? routerObserver.view()
-        : { authenticated: true },
+        : { authenticated: true, snapshotAvailable: snapshotAvailable() },
     );
   });
   await app.register(session, {
@@ -515,7 +522,7 @@ export async function createApp(options: AppOptions) {
     if (!ownerChannel || ownerChannel.proposalSupported === false)
       return { status: "unavailable", actions: [] };
     const key = sessionKey(request);
-    if (!proposalReads.has(key) && readQueueFull())
+    if (!proposalReads.has(key) && (readQueueFull() || snapshotReads.size > 0))
       return reply.code(503).send({ error: "Kernel read busy" });
     let proposal: { digest: string; text: string } | undefined;
     let failure = "disconnected";
@@ -551,9 +558,19 @@ export async function createApp(options: AppOptions) {
     ) {
       try {
         approve =
-          (await readApprovalScope(request, ownerChannel.readApprovalScope))
-            .proposalDigest === proposal.digest;
-      } catch {
+          (
+            await readApprovalScope(
+              request,
+              ownerChannel.readApprovalScope,
+              true,
+            )
+          ).proposalDigest === proposal.digest;
+      } catch (error) {
+        if (error instanceof KernelReadBusy) {
+          if (!(await authenticated(request)))
+            return reply.code(401).send({ error: "Login required" });
+          return reply.code(503).send({ error: "Kernel read busy" });
+        }
         // An otherwise supported proposal need not have a usable approval scope.
       }
       if (!(await authenticated(request)))
@@ -572,11 +589,13 @@ export async function createApp(options: AppOptions) {
     read: NonNullable<
       NonNullable<AppOptions["kernelOwner"]>["readApprovalScope"]
     >,
+    skipSnapshotQueue = false,
   ) {
     const key = sessionKey(request);
     let pending = approvalScopeReads.get(key);
     if (!pending) {
-      if (readQueueFull()) throw new KernelReadBusy();
+      if (readQueueFull() || (skipSnapshotQueue && snapshotReads.size > 0))
+        throw new KernelReadBusy();
       pending = serializeKernelRead(request, read);
       approvalScopeReads.set(key, pending);
     }
@@ -1266,8 +1285,7 @@ export async function createApp(options: AppOptions) {
   app.post("/api/kernel/snapshot", async (request, reply) => {
     if (!(await authenticated(request)))
       return reply.code(401).send({ error: "Login required" });
-    if (!localConsoleOrigin() || !options.kernelOwner?.readSnapshot)
-      return { status: "unavailable" };
+    if (!snapshotAvailable()) return { status: "unavailable" };
     if (
       !request.body ||
       typeof request.body !== "object" ||
@@ -1329,6 +1347,7 @@ export async function createApp(options: AppOptions) {
     if (!(await authenticated(request)))
       return reply.code(401).send({ error: "Login required" });
     if (busy) return { status: "busy" };
+    if (!snapshotAvailable()) return { status: "unavailable" };
     return changed
       ? { status: "resync-required" }
       : snapshot

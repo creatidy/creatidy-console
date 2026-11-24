@@ -906,7 +906,7 @@ describe("authenticated application", () => {
       }
     },
   );
-  it("protects snapshot reads and discards observations after logout", async () => {
+  it("protects held snapshots and distinguishes descriptor state, busy and logout", async () => {
     let release!: (value: {
       scope: string;
       epoch: string;
@@ -934,10 +934,16 @@ describe("authenticated application", () => {
           started();
         }),
     );
+    let snapshotAvailable = true;
+    const readProposal = vi.fn(async () => ({
+      digest: "a".repeat(64),
+      text: "synthetic",
+    }));
     const { app } = await fixture(() => Date.now(), {
       scope: "program",
-      readProposal: async () => ({ digest: "a".repeat(64), text: "synthetic" }),
+      readProposal,
       readSnapshot,
+      snapshotAvailable: () => snapshotAvailable,
       close: () => {},
     });
     try {
@@ -1000,6 +1006,51 @@ describe("authenticated application", () => {
         payload: {},
       });
       await waiting;
+      const second = await app.inject({
+        method: "POST",
+        url: "/api/login",
+        headers,
+        payload: { password },
+      });
+      const secondAuth = {
+        ...headers,
+        cookie: String(second.headers["set-cookie"]).split(";")[0]!,
+      };
+      const loadProposal = () =>
+        app.inject({
+          method: "GET",
+          url: "/api/kernel/owner",
+          headers: secondAuth,
+        });
+      const firstProposal = loadProposal();
+      let deadline: ReturnType<typeof setTimeout> | undefined;
+      const busy = await Promise.race([
+        firstProposal.then((response) => response.statusCode),
+        new Promise<number>((resolve) => {
+          deadline = setTimeout(() => resolve(0), 250);
+        }),
+      ]);
+      clearTimeout(deadline);
+      expect.soft(busy).toBe(503);
+      expect(readProposal).not.toHaveBeenCalled();
+      const check = () =>
+        app.inject({
+          method: "GET",
+          url: "/api/kernel/session-check",
+          headers: secondAuth,
+        });
+      expect((await check()).json()).toEqual({
+        authenticated: true,
+        snapshotAvailable: true,
+      });
+      snapshotAvailable = false;
+      const closed = await check();
+      expect(closed.json()).toEqual({
+        authenticated: true,
+        snapshotAvailable: false,
+      });
+      expect(closed.headers["set-cookie"]).toBeUndefined();
+      expect(readSnapshot).toHaveBeenCalledOnce();
       await app.inject({
         method: "POST",
         url: "/api/logout",
@@ -1023,8 +1074,10 @@ describe("authenticated application", () => {
         commandCoverage: { sampled: 0, total: 0, complete: true },
       });
       const result = await pending;
+      await firstProposal;
       expect(result.statusCode).toBe(401);
       expect(result.body).not.toContain("synthetic-private-scope");
+      expect((await loadProposal()).json().status).toBe("connected");
     } finally {
       await app.close();
     }
@@ -2755,7 +2808,10 @@ describe("authenticated application", () => {
           headers: { ...headers, cookie },
         });
         expect(passive.statusCode).toBe(200);
-        expect(passive.json()).toEqual({ authenticated: true });
+        expect(passive.json()).toEqual({
+          authenticated: true,
+          snapshotAvailable: false,
+        });
         expect(passive.headers["set-cookie"]).toBeUndefined();
         expect(state.db.prepare("SELECT * FROM sessions").get()).toEqual({
           ...row,

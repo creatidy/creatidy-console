@@ -295,11 +295,14 @@ function snapshot() {
 }
 
 it("reads a bounded snapshot without exposing command data", async () => {
+  let peer!: Socket;
   const item = snapshot();
-  const { client, requests } = await pair((socket) =>
-    socket.write(response(item)),
-  );
+  const { client, requests } = await pair((socket) => {
+    peer = socket;
+    socket.write(response(item));
+  });
   const channel = createLocalOwnerTransport(client, "program");
+  expect(channel.snapshotAvailable()).toBe(true);
   const result = await channel.readSnapshot();
   expect(requests).toEqual([{ version: 1, action: "snapshot", page: 0 }]);
   expect(result).toEqual({
@@ -324,7 +327,11 @@ it("reads a bounded snapshot without exposing command data", async () => {
     commandCoverage: { sampled: 0, total: 0, complete: true },
   });
   expect(result).not.toHaveProperty("commands");
-  channel.close();
+  const revoked = new Promise<void>((resolve) => client.once("close", resolve));
+  peer.end();
+  await revoked;
+  expect(channel.snapshotAvailable()).toBe(false);
+  expect(requests).toHaveLength(1);
 });
 
 it("rejects inconsistent snapshot scope or coverage", async () => {
