@@ -617,13 +617,22 @@ it.skipIf(!existsSync(chrome))(
       let snapshotReads = 0;
       const visitedPages = [];
       let busyLaterPage = true;
-      await page.route("**/api/kernel/snapshot", (route) => {
+      let holdLaterPage = true;
+      const laterRequest = Promise.withResolvers();
+      const releaseLaterRequest = Promise.withResolvers();
+      await page.route("**/api/kernel/snapshot", async (route) => {
         snapshotReads++;
         const pageNumber = route.request().postDataJSON()?.page ?? 0;
         visitedPages.push(pageNumber);
         if (pageNumber === 10 && busyLaterPage) {
           busyLaterPage = false;
           return route.fulfill({ json: { status: "busy" } });
+        }
+        if (pageNumber === 10 && holdLaterPage) {
+          holdLaterPage = false;
+          laterRequest.resolve(route.request().postDataJSON());
+          await releaseLaterRequest.promise;
+          return route.abort();
         }
         return route.fulfill({
           json: {
@@ -660,22 +669,41 @@ it.skipIf(!existsSync(chrome))(
         .getByText("Showing up to eight pages starting at producer page 3.")
         .waitFor();
       expect(snapshotReads).toBe(2);
-      for (const [button, pageNumber, busy] of [
-        ["Next pages", 8, false],
-        ["Next pages", 10, true],
-        ["Next pages", 10, false],
-        ["Previous pages", 8, false],
+      for (const [button, pageNumber, outcome] of [
+        ["Next pages", 8, "observed"],
+        ["Next pages", 10, "busy"],
+        ["Next pages", 10, "timeout"],
+        ["Next pages", 10, "observed"],
+        ["Previous pages", 8, "observed"],
       ]) {
+        const control = page.getByRole("button", { name: button });
+        if (outcome === "timeout") {
+          await control.focus();
+          await control.press("Enter");
+          try {
+            expect(await laterRequest.promise).toEqual({
+              page: 10,
+              epoch: "a".repeat(32),
+              sequence: "3",
+            });
+            await page.clock.fastForward(15000);
+            await page.getByText(/Kernel snapshot read timed out/).waitFor();
+            expect(await control.isEnabled()).toBe(true);
+            expect(await page.getByText("Sampled work units").count()).toBe(0);
+          } finally {
+            releaseLaterRequest.resolve();
+          }
+          continue;
+        }
         const sampled = page.waitForResponse(
           (response) => response.url().endsWith("/api/kernel/snapshot"),
           { timeout: 3000 },
         );
-        const control = page.getByRole("button", { name: button });
         await control.focus();
         await control.press("Enter");
         await sampled;
         expect.soft(visitedPages.at(-1)).toBe(pageNumber);
-        if (busy) {
+        if (outcome === "busy") {
           await page
             .getByText(/Another snapshot read is in progress/)
             .waitFor();

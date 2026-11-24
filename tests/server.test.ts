@@ -648,7 +648,7 @@ describe("authenticated application", () => {
     }
   });
   it.each(["snapshot", "approval-scope"] as const)(
-    "does not let a revoked session cancel another session's queued %s",
+    "isolates queued %s and does not queue a selected page behind a foreign read",
     async (operation) => {
       let release!: () => void;
       let started!: () => void;
@@ -660,12 +660,12 @@ describe("authenticated application", () => {
       const bothArrived = new Promise<void>((resolve) => {
         arrived = resolve;
       });
-      const readSnapshot = vi.fn(async () => ({
+      const readSnapshot = vi.fn(async (selection?: { page: number }) => ({
         scope: "program",
         epoch: "a".repeat(32),
         sequence: "0",
         revision: null,
-        startPage: 0,
+        startPage: selection?.page ?? 0,
         nextPage: null,
         status: "absent",
         history: "initial" as const,
@@ -698,7 +698,12 @@ describe("authenticated application", () => {
         },
         (app) => {
           app.addHook("preHandler", async (request) => {
-            if (request.url === url && ++arrivals === 3) setImmediate(arrived);
+            if (
+              request.url === url &&
+              (request.body as { page?: number } | null)?.page === undefined &&
+              ++arrivals === 3
+            )
+              setImmediate(arrived);
           });
         },
       );
@@ -735,6 +740,28 @@ describe("authenticated application", () => {
           headers: first,
         });
         await waiting;
+        const selection = { page: 10, epoch: "a".repeat(32), sequence: "0" };
+        const readPage = () =>
+          app.inject({
+            method: "POST",
+            url,
+            headers: second,
+            payload: selection,
+          });
+        let contended: ReturnType<typeof readPage> | undefined;
+        if (operation === "snapshot") {
+          contended = readPage();
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          const promise = new Promise<string>((resolve) => {
+            timer = setTimeout(() => resolve("queued"), 250);
+          });
+          const result = await Promise.race([
+            contended.then((response) => response.json().status as string),
+            promise,
+          ]);
+          clearTimeout(timer);
+          expect.soft(result).toBe("busy");
+        }
         const read = (requestHeaders: typeof first) =>
           operation === "snapshot"
             ? app.inject({
@@ -757,6 +784,7 @@ describe("authenticated application", () => {
           payload: {},
         });
         release();
+        await contended;
         expect((await proposal).statusCode).toBe(401);
         expect((await revoked).statusCode).toBe(401);
         const result = (await active).json();
@@ -767,6 +795,13 @@ describe("authenticated application", () => {
         expect(
           operation === "snapshot" ? readSnapshot : readApprovalScope,
         ).toHaveBeenCalledOnce();
+        if (operation === "snapshot") {
+          expect((await readPage()).json()).toMatchObject({
+            status: "observed",
+            snapshot: { startPage: 10 },
+          });
+          expect(readSnapshot).toHaveBeenLastCalledWith(selection);
+        }
       } finally {
         await app.close();
       }

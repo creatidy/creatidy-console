@@ -504,6 +504,8 @@ export async function createApp(options: AppOptions) {
   >();
   const readQueueFull = () =>
     proposalReads.size + snapshotReads.size + approvalScopeReads.size >= 16;
+  const readsPending = () =>
+    proposalReads.size + snapshotReads.size + approvalScopeReads.size > 0;
   const sessionKey = (request: import("fastify").FastifyRequest) =>
     JSON.stringify([request.session.sessionStoreId, request.session.sessionId]);
   app.get("/api/kernel/owner", async (request, reply) => {
@@ -1298,6 +1300,9 @@ export async function createApp(options: AppOptions) {
     const session = sessionKey(request);
     const existing = snapshotReads.get(session);
     if ((existing && existing.key !== key) || (!existing && readQueueFull()))
+      return { status: "busy" };
+    // A selected page should retry rather than wait behind other reads.
+    if (selection && !existing && (ownerBusy() || readsPending()))
       return { status: "busy" };
     let snapshot;
     let changed = false;

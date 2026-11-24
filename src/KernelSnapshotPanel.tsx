@@ -113,7 +113,7 @@ export default function KernelSnapshotPanel({
     const current = generation.current;
     const controller = new AbortController();
     active.current = controller;
-    const deadline = setTimeout(() => controller.abort(), 10000);
+    let deadline = setTimeout(() => controller.abort(), 12000);
     hasSnapshot.current = false;
     setSnapshot(undefined);
     function resetWindow() {
@@ -133,9 +133,11 @@ export default function KernelSnapshotPanel({
         signal: controller.signal,
       });
       if (current !== generation.current) return;
+      controller.signal.throwIfAborted();
       if (response.status === 401) return expired();
       if (!response.ok) throw new Error();
       const result = await response.json();
+      controller.signal.throwIfAborted();
       if (
         current !== generation.current ||
         document.visibilityState !== "visible"
@@ -154,14 +156,18 @@ export default function KernelSnapshotPanel({
         );
         return;
       }
+      clearTimeout(deadline);
+      deadline = setTimeout(() => controller.abort(), 5000);
       const session = await fetch("/api/kernel/session-check", {
         cache: "no-store",
         signal: controller.signal,
       });
       if (current !== generation.current) return;
+      controller.signal.throwIfAborted();
       if (session.status === 401) return expired();
       if (!session.ok || (await session.json()).authenticated !== true)
         throw new Error();
+      controller.signal.throwIfAborted();
       if (
         current !== generation.current ||
         document.visibilityState !== "visible" ||
@@ -195,8 +201,12 @@ export default function KernelSnapshotPanel({
       setMessage("Snapshot observed. It may have changed since this read.");
     } catch {
       if (current === generation.current) {
-        resetWindow();
-        setMessage("Kernel snapshot unavailable.");
+        if (controller.signal.aborted) {
+          setMessage("Kernel snapshot read timed out. Try again.");
+        } else {
+          resetWindow();
+          setMessage("Kernel snapshot unavailable.");
+        }
       }
     } finally {
       clearTimeout(deadline);
