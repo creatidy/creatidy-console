@@ -26,6 +26,7 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
   const generation = useRef(0);
   const active = useRef<AbortController | null>(null);
   const uncertainObservation = useRef<string | null>(null);
+  const retryCache = useRef(false);
 
   async function load(refresh = false) {
     if (document.visibilityState !== "visible") return;
@@ -61,6 +62,7 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
       if (!currentRequest()) return null;
       signal.throwIfAborted();
       if (response.status === 401) {
+        retryCache.current = false;
         currentView.current = null;
         setView(null);
         expired();
@@ -104,6 +106,7 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
         if (!currentRequest()) return;
         signal.throwIfAborted();
         if (session.status === 401) {
+          retryCache.current = false;
           currentView.current = null;
           setView(null);
           expired();
@@ -122,6 +125,7 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
         };
       }
       currentView.current = next;
+      retryCache.current = false;
       setView(next);
       setError(
         refreshFailed
@@ -131,6 +135,7 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
       setVisible(true);
     } catch {
       if (currentRequest()) {
+        retryCache.current = true;
         currentView.current = null;
         setView(null);
         setError(
@@ -152,6 +157,7 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
       active.current?.abort();
       active.current = null;
       currentView.current = null;
+      retryCache.current = false;
       setView(null);
       setVisible(false);
       setPending(false);
@@ -164,10 +170,10 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
     const timer = setInterval(() => {
       if (
         document.visibilityState !== "visible" ||
-        !currentView.current ||
-        (!currentView.current.facts &&
-          !currentView.current.origin &&
-          !currentView.current.gap) ||
+        (!retryCache.current &&
+          !currentView.current?.facts &&
+          !currentView.current?.origin &&
+          !currentView.current?.gap) ||
         active.current
       )
         return;

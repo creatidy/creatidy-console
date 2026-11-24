@@ -1293,9 +1293,13 @@ it.skipIf(!existsSync(chrome))(
         0,
       );
       await page.unroute("**/api/kernel/session-check");
-      await page
-        .getByRole("button", { name: "Retry Router status" })
-        .evaluate((button) => button.click());
+      const recovery = page.waitForResponse(`${origin}/api/router`, {
+        timeout: 2500,
+      });
+      await page.clock.fastForward(10000);
+      const recovered = await recovery;
+      expect(recovered.status()).toBe(200);
+      expect(await recovered.headerValue("set-cookie")).toBeNull();
       await page.getByText("m".repeat(64), { exact: false }).waitFor();
       expect(calls).toBe(observedCalls);
       await page.route("**/api/kernel/session-check", (route) =>

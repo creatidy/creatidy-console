@@ -5,6 +5,7 @@ import {
   mkdirSync,
   readFileSync,
   rmSync,
+  renameSync,
   symlinkSync,
   writeFileSync,
   chmodSync,
@@ -717,9 +718,9 @@ describe("Router observer", () => {
     }
   });
 
-  it.each([false, true])(
-    "clears facts on denial and fences removed configuration even if restored (%s)",
-    async (restore) => {
+  it.each(["removed", "restored", "replaced"])(
+    "clears facts on denial and fences old in-flight work when configuration is %s",
+    async (change) => {
       const fixture = await upstream();
       const dir = directory();
       writeConfig(dir, fixture.origin);
@@ -740,19 +741,35 @@ describe("Router observer", () => {
             setTimeout(() => reject(new Error("Fixture timed out")), 3000),
           ),
         ]);
-        rmSync(join(dir, "router.json"));
-        expect(observer.view().status).toBe("unconfigured");
-        if (restore) {
-          writeConfig(dir, fixture.origin);
-          expect(observer.view()).toMatchObject({
-            status: "configured",
-            facts: null,
-          });
+        const path = join(dir, "router.json");
+        if (change === "replaced") {
+          const replacement = join(dir, "replacement.json");
+          writeFileSync(replacement, readFileSync(path), { mode: 0o600 });
+          renameSync(replacement, path);
+        } else {
+          rmSync(path);
+          expect(observer.view().status).toBe("unconfigured");
+          if (change === "restored") writeConfig(dir, fixture.origin);
         }
+        const configured = change !== "removed";
+        const expected = configured ? "configured" : "unconfigured";
+        expect
+          .soft(observer.view())
+          .toMatchObject({ status: expected, facts: null });
+        const callsBeforeReplacementRefresh = fixture.calls.length;
+        const replacement = configured ? observer.refresh() : null;
         fixture.release();
         const result = await pending;
-        expect(result.status).toBe(restore ? "configured" : "unconfigured");
-        expect(result.facts).toBeNull();
+        expect.soft(result.status).toBe(expected);
+        expect.soft(result.facts).toBeNull();
+        if (replacement) {
+          expect((await replacement).status).toBe("connected");
+          expect(
+            fixture.calls
+              .slice(callsBeforeReplacementRefresh)
+              .map(({ method, url }) => [method, url]),
+          ).toEqual([["GET", "/observer/v1/snapshot"]]);
+        }
       } finally {
         fixture.release();
       }
