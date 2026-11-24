@@ -1,10 +1,4 @@
-import {
-  constants,
-  closeSync,
-  fstatSync,
-  openSync,
-  readFileSync,
-} from "node:fs";
+import { constants, closeSync, fstatSync, openSync, readSync } from "node:fs";
 import { join } from "node:path";
 
 export interface RouterConfig {
@@ -28,11 +22,13 @@ export function validateRouterOrigin(value: string) {
 }
 
 export function readRouterConfig(directory: string): RouterConfig | null {
+  const maxBytes = 16384;
   let fd: number;
   try {
     fd = openSync(
       join(directory, "router.json"),
-      constants.O_RDONLY | constants.O_NOFOLLOW,
+      // A FIFO must not block the event loop before fstat can reject it.
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
     );
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
@@ -43,13 +39,22 @@ export function readRouterConfig(directory: string): RouterConfig | null {
     if (
       !info.isFile() ||
       info.nlink !== 1n ||
-      info.size > 16384n ||
+      info.size > BigInt(maxBytes) ||
       (info.mode & 0o077n) !== 0n ||
       (process.getuid && info.uid !== BigInt(process.getuid()))
     )
       throw new Error("Unsafe Router configuration");
+    // Enforce the byte limit at read time too, in case the file grew after fstat.
+    const bytes = Buffer.alloc(maxBytes + 1);
+    let end = 0;
+    while (end < bytes.length) {
+      const count = readSync(fd, bytes, end, bytes.length - end, null);
+      if (count === 0) break;
+      end += count;
+    }
+    if (end > maxBytes) throw new Error("Unsafe Router configuration");
     const config = JSON.parse(
-      readFileSync(fd, "utf8"),
+      bytes.toString("utf8", 0, end),
     ) as Partial<RouterConfig>;
     if (
       typeof config.origin !== "string" ||

@@ -993,6 +993,58 @@ describe("Router observer", () => {
     }
   });
 
+  it("rejects a non-regular config on passive reconciliation without blocking Console", async () => {
+    const fixture = await upstream();
+    const dir = directory();
+    writeConfig(dir, fixture.origin);
+    const state = openState(dir);
+    state.db
+      .prepare("INSERT INTO owner (id, password_hash) VALUES (1, ?)")
+      .run(await hash(password));
+    state.db.close();
+    // Isolate the synchronous file open so the regression fails by a bounded
+    // child timeout, not by locking up the test runner or the fixture server.
+    const script = `
+      import { execFileSync } from "node:child_process";
+      import { renameSync } from "node:fs";
+      import { join } from "node:path";
+      import { createApp } from "./server/app.ts";
+      import assert from "node:assert/strict";
+      const [dir, origin, password] = process.argv.slice(1);
+      const app = await createApp({ stateDirectory: dir, origin });
+      try {
+        const headers = { host: new URL(origin).host, origin };
+        const post = (url, payload) => app.inject({ method: "POST", url, headers, payload });
+        const login = await post("/api/login", { password });
+        assert.equal(login.statusCode, 200);
+        headers.cookie = String(login.headers["set-cookie"]).split(";")[0];
+        assert.equal((await post("/api/router/refresh", {})).json().status, "connected");
+        const fifo = join(dir, "replacement");
+        execFileSync("mkfifo", ["-m", "600", fifo]);
+        renameSync(fifo, join(dir, "router.json"));
+        const response = await app.inject({ method: "GET", url: "/api/router", headers });
+        assert.equal(response.json().status, "configuration_error");
+        assert.equal(response.json().facts, null);
+        assert.equal(response.headers["set-cookie"], undefined);
+        const session = await app.inject({ method: "GET", url: "/api/kernel/session-check", headers });
+        assert.equal(session.json().authenticated, true);
+        assert.equal((await post("/api/logout", {})).statusCode, 200);
+      } finally { await app.close(); }
+    `;
+    await run(
+      process.execPath,
+      ["--input-type=module", "-e", script, dir, origin, password],
+      {
+        env: { PATH: process.env.PATH ?? "", HOME: dir, TMPDIR: dir },
+        timeout: 4000,
+        killSignal: "SIGKILL",
+      },
+    );
+    expect(fixture.calls.map(({ method, url }) => [method, url])).toEqual([
+      ["GET", "/observer/v1/snapshot"],
+    ]);
+  });
+
   it("does not return an in-flight observation or queue replacement work across logout", async () => {
     const fixture = await upstream();
     const replacement = await upstream();

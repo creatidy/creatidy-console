@@ -65,18 +65,27 @@ cannot be proved.
 2. Preserve the producer-issued cursor. Change the resource's enabled state
    through the supported administrator operation. Replay the original cursor
    using `POST /observer/v1/replay`, verify actual events and advancing sequence
-   numbers, then refresh Console and retain its current cursor. The sequence is
-   inspected here only as acceptance evidence; Console treats cursors as opaque.
-3. Keep that baseline cursor unchanged. Alternate genuine enabled-state changes
-   and use a separate verification cursor to check that semantic events actually
-   advance; no-op updates and timestamp-only changes must not be counted as
-   events. Exceed the producer's 256-event retained window only within the newly
-   approved limit, without changing retention settings or writing its database.
-4. Replay the preserved cursor, record the producer's actual reason and resync
-   snapshot, and compare it with a fresh producer snapshot. Refresh Console and
-   verify its explicit gap notice and reconstructed current facts; never
-   describe the missing intermediate history as recovered. Revoke the observer
-   and verify denial, clearing, and credential isolation.
+   numbers. Pause producer mutations. Through a separately authorized
+   observer-scoped client, capture a producer snapshot and cursor immediately
+   before and after one explicit Console refresh. Require unchanged producer
+   epoch, sequence, and provenance across the two producer reads and matching
+   visible facts in Console. Retain the independent client's cursor privately as
+   the baseline for the stable cut. Console's cursor remains opaque and
+   server-private; this checks agreement on the observed cut, not cursor
+   equality with Console.
+3. Leave Console unrefreshed and keep the independent baseline cursor unchanged.
+   Alternate genuine enabled-state changes and use a separate verification
+   cursor to check that semantic events actually advance; no-op updates and
+   timestamp-only changes must not be counted as events. Exceed the producer's
+   256-event retained window only within the newly approved limit, without
+   changing retention settings or writing its database.
+4. Replay the independent baseline and compare the producer-reported reason and
+   resync snapshot with a fresh producer snapshot. This establishes retention
+   loss for the independent baseline. Separately refresh Console and require its
+   explicit gap notice and current facts matching the producer snapshot. This
+   tests recovery from Console's own parked observation, not reconstruction of
+   missing intermediate history. Revoke Console's observer credential and verify
+   denial, clearing, and credential isolation.
 5. Check browser login status and authenticated UI separately from response-body
    capture. An ordinary authenticated HTTP client can inspect the login JSON; a
    failed optional browser body capture must be reported separately and must not
