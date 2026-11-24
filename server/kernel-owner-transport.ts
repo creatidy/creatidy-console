@@ -25,7 +25,11 @@ const CHUNK_LIMIT = 16 * 1024;
 
 export class SnapshotChanged extends Error {}
 export class InvalidOwnerResponse extends Error {}
+export class UnsupportedKernelSnapshotVersion extends InvalidOwnerResponse {}
 class OwnerChannelUnavailable extends Error {}
+
+export type KernelSnapshotStatus =
+  "ready" | "unavailable" | "disconnected" | "unsupported";
 
 export type KernelDecision = {
   source: string;
@@ -61,6 +65,27 @@ function payload(frame: Buffer): unknown {
   return parseOwnerJson(
     new TextDecoder("utf-8", { fatal: true }).decode(frame.subarray(4)),
   );
+}
+
+function checkSnapshotVersion(value: unknown) {
+  if (!value || typeof value !== "object" || !("version" in value)) return;
+  const version = value.version;
+  if (
+    (typeof version === "number" &&
+      Number.isSafeInteger(version) &&
+      version > 1) ||
+    (typeof version === "bigint" && version > 1n)
+  ) {
+    throw new UnsupportedKernelSnapshotVersion(
+      "Unsupported Kernel snapshot contract version",
+    );
+  }
+}
+
+function snapshotEnvelope(frame: Buffer) {
+  const value = payload(frame);
+  checkSnapshotVersion(value);
+  return record(value, ["version", "ok", "result"]);
 }
 
 // Kernel's domain identifiers use Python str.strip(): NEL and these C0
@@ -420,7 +445,9 @@ export function createLocalOwnerTransport(
           const frame = await sample(
             requestFrame({ version: 1, action: "snapshot", page }),
           );
-          const envelope = record(payload(frame), ["version", "ok", "result"]);
+          const envelope = snapshotEnvelope(frame);
+          if (envelope.version === 1 && envelope.ok === true)
+            checkSnapshotVersion(envelope.result);
           const snapshot = record(envelope.result, [
             "version",
             "producer",
@@ -762,7 +789,7 @@ export function createLocalOwnerTransport(
           eventFrame.writeUInt32BE(eventBody.length);
           eventBody.copy(eventFrame, 4);
           const frame = await sample(eventFrame);
-          const envelope = record(payload(frame), ["version", "ok", "result"]);
+          const envelope = snapshotEnvelope(frame);
           const batch = record(envelope.result, ["events", "position", "gap"]);
           const end = record(batch.position, ["producer", "scope", "sequence"]);
           if (

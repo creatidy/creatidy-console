@@ -3,11 +3,12 @@ import RouterPanel from "./RouterPanel";
 import KernelOwnerPanel from "./KernelOwnerPanel";
 import KernelSnapshotPanel from "./KernelSnapshotPanel";
 import MiSnapshotPanel from "./MiSnapshotPanel";
+import type { KernelSnapshotStatus } from "../server/kernel-owner-transport";
 
 type Session = {
   configured: boolean;
   authenticated: boolean;
-  kernelSnapshotStatus?: "ready" | "disconnected" | "unavailable";
+  kernelSnapshotStatus?: KernelSnapshotStatus;
   miInspectionOrigin?: string;
 };
 

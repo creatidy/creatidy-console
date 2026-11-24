@@ -12,28 +12,47 @@ function fact(value: string | null | undefined) {
   return value === "" ? "(empty string)" : (value ?? "unavailable");
 }
 
+function Reference({ value }: { value: string | null | undefined }) {
+  // Quoted form marks boundaries and makes tabs, line breaks and invisible characters explicit.
+  const exact =
+    value == null
+      ? "unavailable"
+      : JSON.stringify(value).replace(/[\p{White_Space}\p{Cf}]/gu, (char) =>
+          char === " "
+            ? char
+            : char
+                .split("")
+                .map(
+                  (unit) =>
+                    `\\u${unit.charCodeAt(0).toString(16).padStart(4, "0")}`,
+                )
+                .join(""),
+        );
+  return <code className="kernel-reference">{exact}</code>;
+}
+
 function Decision({ record }: { record: KernelDecision }) {
   return (
     <li>
       <strong>{fact(record.status)}</strong> ({record.applicability}); source:{" "}
-      <code>{record.source}</code>; attempt: <code>{fact(record.attempt)}</code>
-      .
+      <code>{record.source}</code>; attempt:{" "}
+      <Reference value={record.attempt} />.
       {record.decisionId !== undefined && (
         <>
           {" "}
-          Decision: <code>{fact(record.decisionId)}</code>.
+          Decision: <Reference value={record.decisionId} />.
         </>
       )}
       {record.reviewOperationId !== undefined && (
         <>
           {" "}
-          Review operation: <code>{fact(record.reviewOperationId)}</code>.
+          Review operation: <Reference value={record.reviewOperationId} />.
         </>
       )}
       {record.commandId !== undefined && (
         <>
           {" "}
-          Command: <code>{fact(record.commandId)}</code>.
+          Command: <Reference value={record.commandId} />.
         </>
       )}
     </li>
@@ -43,10 +62,10 @@ function Decision({ record }: { record: KernelDecision }) {
 function Correlation({ record }: { record: KernelCorrelation }) {
   return (
     <li>
-      Attempt: <code>{record.attempt}</code>; workspace reference:{" "}
-      <code>{fact(record.workspaceReference)}</code>; candidate head:{" "}
+      Attempt: <Reference value={record.attempt} />; workspace reference:{" "}
+      <Reference value={record.workspaceReference} />; candidate head:{" "}
       <code>{fact(record.candidateHead)}</code>; candidate scope:{" "}
-      <code>{fact(record.candidateScope)}</code>; runtime handle:{" "}
+      <Reference value={record.candidateScope} />; runtime handle:{" "}
       {record.runtimeHandlePresent ? "present, hidden" : "unavailable"}.
     </li>
   );
@@ -75,8 +94,8 @@ function LineageRecords({ snapshot }: { snapshot: Snapshot }) {
     const outcomes = decisions.filter((row) => row.attempt === id);
     return (
       <li key={index}>
-        Attempt <code>{id}</code>: {status}; work unit: <code>{unit}</code>;
-        actor: <code>{actor}</code>.
+        Attempt <Reference value={id} />: {status}; work unit:{" "}
+        <Reference value={unit} />; actor: <Reference value={actor} />.
         {references.length ? (
           <ul>
             {references.map((record, index) => (
@@ -111,9 +130,9 @@ function LineageRecords({ snapshot }: { snapshot: Snapshot }) {
           const unitAttempts = attempts.filter(([, unit]) => unit === id);
           return (
             <li key={index}>
-              Work unit <code>{id}</code>: {status}; active attempt:{" "}
-              <code>{fact(active)}</code>; recorded satisfaction reference:{" "}
-              <code>{fact(satisfaction)}</code>.
+              Work unit <Reference value={id} />: {status}; active attempt:{" "}
+              <Reference value={active} />; recorded satisfaction reference:{" "}
+              <Reference value={satisfaction} />.
               {unitAttempts.length ? (
                 <ul>{unitAttempts.map(attemptFact)}</ul>
               ) : (
@@ -215,7 +234,7 @@ export default function KernelLineage({
         {visible ? (
           <>
             <p>
-              Scope: <code>{snapshot.scope}</code>; Program specification
+              Scope: <Reference value={snapshot.scope} />; Program specification
               SHA-256: <code>{fact(snapshot.specDigest)}</code>.
             </p>
             <p>
@@ -239,7 +258,8 @@ export default function KernelLineage({
               Kernel sampled {snapshot.commandCoverage.sampled} of{" "}
               {snapshot.commandCoverage.total} command records; full commands
               are not shown. IDs are matched only within this Kernel
-              observation.
+              observation. References use quoted text to preserve exact
+              characters.
             </p>
             <p>
               Attempt links are not candidate verdicts. This snapshot does not

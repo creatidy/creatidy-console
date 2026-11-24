@@ -129,3 +129,7 @@ summary:focus-visible {
   border-inline-start: 0.25rem solid #225c86;
   padding-inline-start: 0.75rem;
 }
+
+.kernel-reference {
+  white-space: break-spaces;
+}

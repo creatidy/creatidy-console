@@ -19,8 +19,10 @@ import {
 import {
   InvalidOwnerResponse,
   SnapshotChanged,
+  UnsupportedKernelSnapshotVersion,
   type KernelDecision,
   type KernelCorrelation,
+  type KernelSnapshotStatus,
 } from "./kernel-owner-transport.ts";
 import type { OwnerPairing } from "./kernel-owner-greeting.ts";
 import { UnsupportedOwnerPayload } from "./kernel-owner-proposal.ts";
@@ -170,9 +172,11 @@ export async function createApp(options: AppOptions) {
       ? origin.origin
       : null;
   }
-  const snapshotStatus = () => {
+  let snapshotVersionUnsupported = false;
+  const snapshotStatus = (): KernelSnapshotStatus => {
     const channel = options.kernelOwner;
     if (!localConsoleOrigin() || !channel?.readSnapshot) return "unavailable";
+    if (snapshotVersionUnsupported) return "unsupported";
     return channel.snapshotAvailable?.() === false ? "disconnected" : "ready";
   };
   const admitMiInspection: import("fastify").onRequestAsyncHookHandler = async (
@@ -1361,7 +1365,9 @@ export async function createApp(options: AppOptions) {
         options.kernelOwner!.readSnapshot!(selection),
       ).then(
         (snapshot) => finish({ status: "observed", snapshot }),
-        (error) =>
+        (error) => {
+          if (error instanceof UnsupportedKernelSnapshotVersion)
+            snapshotVersionUnsupported = true;
           finish({
             status:
               error instanceof SnapshotChanged
@@ -1369,7 +1375,8 @@ export async function createApp(options: AppOptions) {
                 : error instanceof KernelReadBusy
                   ? "busy"
                   : "read-unavailable",
-          }),
+          });
+        },
       );
     }
     const { waiters } = snapshotRead;

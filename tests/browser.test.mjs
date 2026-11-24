@@ -156,6 +156,24 @@ it.skipIf(!existsSync(chrome))(
         .getByText(/No supported local Kernel snapshot capability/)
         .waitFor();
       await page.getByText("No offline file inspected.").waitFor();
+      const switchVisibility = (value) =>
+        page.evaluate((value) => {
+          Object.defineProperty(document, "visibilityState", {
+            configurable: true,
+            value,
+          });
+          document.dispatchEvent(new Event("visibilitychange"));
+        }, value);
+      await switchVisibility("hidden");
+      await switchVisibility("visible");
+      expect(
+        await page
+          .getByText(/No supported local Kernel snapshot capability/)
+          .isVisible(),
+      ).toBe(true);
+      await page.evaluate(() =>
+        Reflect.deleteProperty(document, "visibilityState"),
+      );
       const remote = await browser.newPage();
       const remoteOrigin = "https://console.example.invalid";
       const remoteUploads = [];
@@ -641,8 +659,8 @@ it.skipIf(!existsSync(chrome))(
         snapshotReads++;
         const pageNumber = route.request().postDataJSON()?.page ?? 0;
         visitedPages.push(pageNumber);
-        if (snapshotStatus === "disconnected")
-          return route.fulfill({ json: { status: "disconnected" } });
+        if (snapshotStatus !== "ready")
+          return route.fulfill({ json: { status: snapshotStatus } });
         if (pageNumber === 10 && busyLaterPage) {
           busyLaterPage = false;
           return route.fulfill({ json: { status: "busy" } });
@@ -670,11 +688,12 @@ it.skipIf(!existsSync(chrome))(
                 work_units: { sampled: pageNumber ? 1 : 24, total: 25 },
               },
               workUnits: [
-                [hostile, "pending", "Attempt-A", "satisfaction-id"],
+                [hostile, "pending", "Attempt A", "satisfaction-id"],
                 null,
               ],
               attempts: [
-                ["Attempt-A", hostile, "prepared", "synthetic-actor"],
+                ["Attempt A", hostile, "prepared", "synthetic-actor"],
+                ["Attempt  A", hostile, "prepared", "synthetic-actor"],
                 ["Attempt-B", "out-of-window", "prepared", "synthetic-actor"],
               ],
               decisions: [
@@ -682,27 +701,27 @@ it.skipIf(!existsSync(chrome))(
                   source: "product-review",
                   status: "owner_decision_needed",
                   applicability: "pending",
-                  attempt: "Attempt-A",
+                  attempt: "Attempt A",
                   decisionId: "exact-decision",
                 },
                 {
                   source: "product-review-operation",
                   status: "review_unknown",
                   applicability: "pending",
-                  attempt: "attempt-a",
+                  attempt: "attempt a",
                   decisionId: "unmatched-decision",
                 },
                 {
                   source: "product-review",
                   status: "owner_decision_needed",
                   applicability: "historical",
-                  attempt: "Attempt-A",
+                  attempt: "Attempt A",
                   decisionId: "historical-decision",
                 },
               ],
               correlations: [
                 {
-                  attempt: "Attempt-A",
+                  attempt: "Attempt A",
                   workspaceReference: "file:///synthetic/local",
                   candidateHead: "c".repeat(40),
                   candidateScope: "candidate-scope",
@@ -728,7 +747,7 @@ it.skipIf(!existsSync(chrome))(
       );
       expect(await workUnitCoverage.isVisible()).toBe(false);
       await lineage.press("Enter");
-      await page.getByText("exact-decision", { exact: true }).waitFor();
+      await page.getByText('"exact-decision"', { exact: true }).waitFor();
       const linkedUnit = page
         .getByRole("listitem")
         .filter({ hasText: /^Work unit / });
@@ -738,7 +757,21 @@ it.skipIf(!existsSync(chrome))(
         "unmatched-decision",
       );
       expect(await linkedUnit.textContent()).not.toContain("out-of-window");
-      await page.getByText("unmatched-decision", { exact: true }).waitFor();
+      const linkedAttempts = linkedUnit.locator(":scope > ul > li");
+      const id = (index) =>
+        linkedAttempts.nth(index).locator(":scope > code").first();
+      expect(await id(0).textContent()).toBe('"Attempt A"');
+      expect(await id(1).textContent()).toBe('"Attempt  A"');
+      expect(
+        await id(1).evaluate((node) => getComputedStyle(node).whiteSpace),
+      ).toBe("break-spaces");
+      expect(await linkedAttempts.nth(0).textContent()).toContain(
+        '"exact-decision"',
+      );
+      expect(await linkedAttempts.nth(1).textContent()).not.toContain(
+        '"exact-decision"',
+      );
+      await page.getByText('"unmatched-decision"', { exact: true }).waitFor();
       await page.getByText(/Oversized records omitted: 1 work units/).waitFor();
       expect(await page.locator('a[href^="file:"]').count()).toBe(0);
       expect(
@@ -870,6 +903,19 @@ it.skipIf(!existsSync(chrome))(
       await page.getByRole("button", { name: "Read snapshot" }).click();
       await unavailable.waitFor();
       expect(snapshotReads).toBe(readsBeforeClosure + 1);
+      await switchVisibility("hidden");
+      await switchVisibility("visible");
+      expect(await unavailable.isVisible()).toBe(true);
+      await page.evaluate(() =>
+        Reflect.deleteProperty(document, "visibilityState"),
+      );
+      snapshotStatus = "unsupported";
+      await page.getByRole("button", { name: "Read snapshot" }).click();
+      await page
+        .getByText(/Kernel snapshot contract version is unsupported/)
+        .waitFor();
+      expect(await unavailable.count()).toBe(0);
+      expect(await lineage.count()).toBe(0);
       await page.getByRole("heading", { name: "Your console" }).waitFor();
       snapshotStatus = "ready";
       await page.route("**/api/kernel/session-check", (route) =>

@@ -1,36 +1,50 @@
 import { useEffect, useRef, useState } from "react";
 import KernelLineage, { type Snapshot } from "./KernelLineage";
+import type { KernelSnapshotStatus } from "../server/kernel-owner-transport";
 
 type Window = Pick<Snapshot, "epoch" | "sequence" | "startPage" | "nextPage">;
-const disconnectedMessage = "The configured Kernel snapshot channel is closed.";
+const capabilityMessages: Record<KernelSnapshotStatus, string> = {
+  ready:
+    "No snapshot requested. Read the local snapshot to inspect recorded work.",
+  unavailable:
+    "Optional. No supported local Kernel snapshot capability is configured for this connection.",
+  disconnected: "The configured Kernel snapshot channel is closed.",
+  unsupported:
+    "The Kernel snapshot contract version is unsupported. Console closed the channel and did not accept any facts from the read.",
+};
+const hiddenMessage =
+  "Snapshot hidden. Request another snapshot to view current data.";
+
+function unavailableStatus(
+  value: unknown,
+): value is Exclude<KernelSnapshotStatus, "ready"> {
+  return (
+    value === "unavailable" ||
+    value === "disconnected" ||
+    value === "unsupported"
+  );
+}
 
 export default function KernelSnapshotPanel({
   expired,
   initialStatus,
 }: {
   expired: () => void;
-  initialStatus: "ready" | "unavailable" | "disconnected" | undefined;
+  initialStatus: KernelSnapshotStatus | undefined;
 }) {
   const [snapshot, setSnapshot] = useState<Snapshot>();
   const [window, setWindow] = useState<Window>();
   const [previousWindows, setPreviousWindows] = useState<number[]>([]);
   const [visible, setVisible] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState(
-    initialStatus === "unavailable"
-      ? "Optional. No supported local Kernel snapshot capability is configured for this connection."
-      : initialStatus === "disconnected"
-        ? disconnectedMessage
-        : "No snapshot requested. Read the local snapshot to inspect recorded work.",
-  );
+  const [capability, setCapability] = useState(initialStatus);
+  const [message, setMessage] = useState<string | null>(null);
   const generation = useRef(0);
   const active = useRef<AbortController | null>(null);
   const hasSnapshot = useRef(false);
 
   useEffect(() => {
-    const hide = (
-      message = "Snapshot hidden. Request another snapshot to view current data.",
-    ) => {
+    const hide = () => {
       generation.current++;
       active.current?.abort();
       active.current = null;
@@ -40,10 +54,12 @@ export default function KernelSnapshotPanel({
       setPreviousWindows([]);
       setVisible(false);
       setLoading(false);
-      setMessage(message);
     };
     const visibility = () => {
-      if (document.visibilityState !== "visible") hide();
+      if (document.visibilityState !== "visible") {
+        if (hasSnapshot.current || active.current) setMessage(hiddenMessage);
+        hide();
+      }
     };
     document.addEventListener("visibilitychange", visibility);
     const timer = setInterval(async () => {
@@ -70,20 +86,27 @@ export default function KernelSnapshotPanel({
         } else {
           const session = response.ok ? await response.json() : null;
           if (current !== generation.current) return;
-          if (controller.signal.aborted || session?.authenticated !== true)
+          if (controller.signal.aborted || session?.authenticated !== true) {
+            setMessage(hiddenMessage);
             hide();
-          else if (session.snapshotStatus === "disconnected")
-            hide(disconnectedMessage);
-          else if (session.snapshotStatus !== "ready")
-            hide("Kernel snapshot capability is no longer available.");
-          else if (
+          } else if (unavailableStatus(session.snapshotStatus)) {
+            setCapability(session.snapshotStatus);
+            setMessage(null);
+            hide();
+          } else if (session.snapshotStatus !== "ready") {
+            setMessage(hiddenMessage);
+            hide();
+          } else if (
             document.visibilityState === "visible" &&
             !controller.signal.aborted
           )
             setVisible(true);
         }
       } catch {
-        if (current === generation.current) hide();
+        if (current === generation.current) {
+          setMessage(hiddenMessage);
+          hide();
+        }
       } finally {
         clearTimeout(deadline);
         if (active.current === controller) active.current = null;
@@ -139,17 +162,18 @@ export default function KernelSnapshotPanel({
         return;
       if (result.status !== "observed") {
         if (result.status !== "busy") resetWindow();
-        setMessage(
-          result.status === "resync-required"
-            ? "The snapshot changed during the read. Request a fresh snapshot; the missed interval remains unknown."
-            : result.status === "busy"
-              ? "Another snapshot read is in progress. Try again."
-              : result.status === "disconnected"
-                ? disconnectedMessage
-                : result.status === "unavailable"
-                  ? "Kernel snapshots require a local Console and a configured read capability."
-                  : "Kernel snapshot unavailable; the read could not be completed.",
-        );
+        if (unavailableStatus(result.status)) {
+          setCapability(result.status);
+          setMessage(null);
+        } else {
+          setMessage(
+            result.status === "resync-required"
+              ? "The snapshot changed during the read. Request a fresh snapshot; the missed interval remains unknown."
+              : result.status === "busy"
+                ? "Another snapshot read is in progress. Try again."
+                : "Kernel snapshot unavailable; the read could not be completed.",
+          );
+        }
         return;
       }
       clearTimeout(deadline);
@@ -172,11 +196,10 @@ export default function KernelSnapshotPanel({
         return;
       if (validated.snapshotStatus !== "ready") {
         resetWindow();
-        setMessage(
-          validated.snapshotStatus === "disconnected"
-            ? disconnectedMessage
-            : "Kernel snapshot capability is no longer available.",
-        );
+        if (unavailableStatus(validated.snapshotStatus)) {
+          setCapability(validated.snapshotStatus);
+          setMessage(null);
+        } else setMessage("Kernel snapshot capability is no longer available.");
         return;
       }
       const next = result.snapshot as Snapshot;
@@ -203,6 +226,7 @@ export default function KernelSnapshotPanel({
       });
       hasSnapshot.current = true;
       setVisible(true);
+      setCapability("ready");
       setMessage("Snapshot observed. It may have changed since this read.");
     } catch {
       if (current === generation.current) {
@@ -225,7 +249,9 @@ export default function KernelSnapshotPanel({
   return (
     <section aria-labelledby="kernel-snapshot-heading">
       <h2 id="kernel-snapshot-heading">Kernel snapshot</h2>
-      <p role="status">{message}</p>
+      <p role="status">
+        {message ?? capabilityMessages[capability ?? "ready"]}
+      </p>
       <button type="button" disabled={loading} onClick={() => void refresh()}>
         Read snapshot
       </button>

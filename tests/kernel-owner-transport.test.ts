@@ -2079,6 +2079,64 @@ async function loginOwner(
   return { ...headers, cookie };
 }
 
+it.each([
+  [
+    "future payload",
+    response({ version: 2, private: "synthetic-hidden" }),
+    "unsupported",
+  ],
+  [
+    "future envelope",
+    frame({ version: 2, other: "synthetic-hidden" }),
+    "unsupported",
+  ],
+  [
+    "invalid version type",
+    response({ ...snapshot(), version: "2" }),
+    "disconnected",
+  ],
+  ["ordinary closure", null, "disconnected"],
+] as const)(
+  "distinguishes %s at the authenticated snapshot boundary",
+  async (_name, bytes, status) => {
+    const { client, requests } = await pair((socket) => {
+      if (bytes) socket.write(bytes);
+      else socket.end();
+    });
+    const transport = createLocalOwnerTransport(client, "program");
+    const { app, headers } = await ownerApp({
+      scope: "program",
+      readProposal: transport.readProposal,
+      readSnapshot: transport.readSnapshot,
+      snapshotAvailable: transport.snapshotAvailable,
+      close: transport.close,
+    });
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const auth = await loginOwner(app, headers);
+    const read = () =>
+      app.inject({
+        method: "POST",
+        url: "/api/kernel/snapshot",
+        headers: auth,
+        payload: {},
+      });
+    expect((await read()).json()).toEqual({ status });
+    expect(transport.snapshotAvailable()).toBe(false);
+    const check = await app.inject({
+      method: "GET",
+      url: "/api/kernel/session-check",
+      headers: auth,
+    });
+    expect(check.json()).toEqual({
+      authenticated: true,
+      snapshotStatus: status,
+    });
+    expect(check.headers["set-cookie"]).toBeUndefined();
+    expect((await read()).json()).toEqual({ status });
+    expect(requests).toEqual([{ version: 1, action: "snapshot", page: 0 }]);
+  },
+);
+
 it("requires a literal action when reading stored command history", async () => {
   const { app, dir, headers } = await ownerApp({
     scope: "program",
