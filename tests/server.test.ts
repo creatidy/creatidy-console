@@ -103,6 +103,7 @@ describe("authenticated application", () => {
       sequence: "0",
       revision: null,
       startPage: 0,
+      nextPage: null,
       status: "absent",
       history: "initial" as const,
       counts: {},
@@ -258,6 +259,7 @@ describe("authenticated application", () => {
           sequence: string;
           revision: null;
           startPage: number;
+          nextPage: number | null;
           status: string;
           history: "initial";
           counts: Record<string, never>;
@@ -278,6 +280,7 @@ describe("authenticated application", () => {
               sequence: "0",
               revision: null,
               startPage: 0,
+              nextPage: null,
               status: "absent",
               history: "initial",
               counts: {},
@@ -663,6 +666,7 @@ describe("authenticated application", () => {
         sequence: "0",
         revision: null,
         startPage: 0,
+        nextPage: null,
         status: "absent",
         history: "initial" as const,
         counts: {},
@@ -786,6 +790,7 @@ describe("authenticated application", () => {
         sequence: "0",
         revision: null,
         startPage: 0,
+        nextPage: null,
         status: "absent",
         history: "initial" as const,
         counts: {},
@@ -873,6 +878,7 @@ describe("authenticated application", () => {
       sequence: string;
       revision: string | null;
       startPage: number;
+      nextPage: number | null;
       status: string;
       history: "initial" | "continuous" | "gap" | "unknown";
       counts: Record<string, { sampled: number; total: number }>;
@@ -971,6 +977,7 @@ describe("authenticated application", () => {
         sequence: "0",
         revision: null,
         startPage: 0,
+        nextPage: null,
         status: "absent",
         history: "initial",
         counts: {},

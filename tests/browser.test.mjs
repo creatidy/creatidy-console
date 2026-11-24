@@ -453,13 +453,43 @@ it.skipIf(!existsSync(chrome))(
           .getByText(/Neither file nor reference is authenticated/)
           .count(),
       ).toBe(1);
-      await page
-        .getByText("Untrusted evidence records and reported rights")
-        .click();
+      const disclosure = page.getByText(
+        "Untrusted evidence records and reported rights",
+      );
+      await disclosure.click();
       expect(await page.getByText(/synthetic-source/).count()).toBeGreaterThan(
         0,
       );
       expect(await page.evaluate(() => window.miInjected)).toBeUndefined();
+      let disclosureCheckStarted;
+      let releaseDisclosureCheck;
+      const startedDisclosureCheck = new Promise((resolve) => {
+        disclosureCheckStarted = resolve;
+      });
+      const heldDisclosureCheck = new Promise((resolve) => {
+        releaseDisclosureCheck = resolve;
+      });
+      await page.route("**/api/kernel/session-check", async (route) => {
+        disclosureCheckStarted();
+        await heldDisclosureCheck;
+        await route.fallback();
+      });
+      try {
+        await disclosure.focus();
+        await page.clock.fastForward(10000);
+        await startedDisclosureCheck;
+        await disclosure.waitFor({ state: "detached" });
+      } finally {
+        releaseDisclosureCheck();
+      }
+      await disclosure.waitFor();
+      await page.unroute("**/api/kernel/session-check");
+      expect(
+        await disclosure.evaluate((node) => ({
+          open: node.parentElement.open,
+          focused: document.activeElement === node,
+        })),
+      ).toEqual({ open: true, focused: true });
       await page
         .getByLabel("Previous offline snapshot (optional, maximum 256 KiB)")
         .setInputFiles(file);
@@ -486,6 +516,9 @@ it.skipIf(!existsSync(chrome))(
         .getByText(/Unverified file instance: other-instance/)
         .waitFor();
       await page.getByText(/Earlier history: unavailable/).waitFor();
+      expect(await disclosure.evaluate((node) => node.parentElement.open)).toBe(
+        false,
+      );
       await page.reload();
       await page.getByRole("heading", { name: "Your console" }).waitFor();
       expect(await page.getByText(/Comparison of supplied files/).count()).toBe(
@@ -594,10 +627,11 @@ it.skipIf(!existsSync(chrome))(
               sequence: "3",
               revision: "4",
               startPage: pageNumber,
-              status: "running",
+              nextPage: pageNumber === 0 ? 3 : null,
+              status: "active",
               history: "initial",
               counts: {
-                work_units: { sampled: pageNumber ? 1 : 64, total: 65 },
+                work_units: { sampled: pageNumber ? 1 : 24, total: 25 },
               },
               workUnits: [[hostile, "pending", null, null], null],
               attempts: [],
@@ -610,11 +644,14 @@ it.skipIf(!existsSync(chrome))(
       });
       expect(snapshotReads).toBe(0);
       await page.getByRole("button", { name: "Read snapshot" }).click();
-      await page.getByText("work_units: 65 total; 64 sampled").waitFor();
+      await page.getByText("work_units: 25 total; 24 sampled").waitFor();
       expect(snapshotReads).toBe(1);
       expect(await page.evaluate(() => window.ownerInjected)).toBeUndefined();
       await page.getByRole("button", { name: "Next pages" }).click();
-      await page.getByText("work_units: 65 total; 1 sampled").waitFor();
+      await page.getByText("work_units: 25 total; 1 sampled").waitFor();
+      await page
+        .getByText("Showing up to eight pages starting at producer page 3.")
+        .waitFor();
       expect(snapshotReads).toBe(2);
       await page.evaluate(() => {
         const original = window.fetch.bind(window);
@@ -640,14 +677,14 @@ it.skipIf(!existsSync(chrome))(
         () => typeof window.releaseOldKernelCheck === "function",
       );
       await page.getByRole("button", { name: "Read snapshot" }).click();
-      await page.getByText("work_units: 65 total; 64 sampled").waitFor();
+      await page.getByText("work_units: 25 total; 24 sampled").waitFor();
       await page.evaluate(async () => {
         window.releaseOldKernelCheck();
         await Promise.resolve();
         await Promise.resolve();
       });
       expect(
-        await page.getByText("work_units: 65 total; 64 sampled").count(),
+        await page.getByText("work_units: 25 total; 24 sampled").count(),
       ).toBe(1);
       await page.route("**/api/kernel/session-check", (route) =>
         route.fulfill({ status: 401, json: { error: "Login required" } }),
@@ -655,7 +692,7 @@ it.skipIf(!existsSync(chrome))(
       await page.getByRole("button", { name: "Read snapshot" }).click();
       await page.getByRole("heading", { name: "Sign in" }).waitFor();
       expect(
-        await page.getByText("work_units: 65 total; 64 sampled").count(),
+        await page.getByText("work_units: 25 total; 24 sampled").count(),
       ).toBe(0);
       await page.unroute("**/api/kernel/session-check");
       await page.unroute("**/api/kernel/snapshot");

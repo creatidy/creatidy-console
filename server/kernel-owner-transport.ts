@@ -79,6 +79,24 @@ function matchesSnapshotScope(value: unknown, scope: string) {
   );
 }
 
+function programHeader(snapshot: Record<string, unknown>) {
+  const { status, program_revision: value, spec_digest: specDigest } = snapshot;
+  if (status === "absent" && value === null && specDigest === null)
+    return { revision: null, status, specDigest };
+  if (
+    typeof status !== "string" ||
+    !["draft", "active", "paused", "completed", "cancelled"].includes(status) ||
+    typeof specDigest !== "string" ||
+    !/^[0-9a-f]{64}$/.test(specDigest) ||
+    (typeof value !== "number" && typeof value !== "bigint")
+  )
+    throw new Error("Invalid owner snapshot");
+  const revision = BigInt(value);
+  if (revision < 0n || revision > 9223372036854775807n)
+    throw new Error("Invalid owner revision");
+  return { revision: revision.toString(), status, specDigest };
+}
+
 function requestFrame(value: unknown): Buffer {
   const bytes = Buffer.from(ownerJson(value));
   if (!bytes.length || bytes.length > 65536)
@@ -226,10 +244,7 @@ export function createLocalOwnerTransport(
     });
   }
 
-  async function operation<T>(run: () => Promise<T>): Promise<T> {
-    if (closed || busy)
-      throw new OwnerChannelUnavailable("Owner channel unavailable");
-    busy = true;
+  async function withinDeadline<T>(run: () => Promise<T>): Promise<T> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       return await Promise.race([
@@ -241,6 +256,20 @@ export function createLocalOwnerTransport(
           }, timeoutMs);
         }),
       ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  async function operation<T>(
+    run: () => Promise<T>,
+    deadline = true,
+  ): Promise<T> {
+    if (closed || busy)
+      throw new OwnerChannelUnavailable("Owner channel unavailable");
+    busy = true;
+    try {
+      return await (deadline ? withinDeadline(run) : run());
     } catch (error) {
       if (
         error instanceof SnapshotChanged ||
@@ -257,7 +286,6 @@ export function createLocalOwnerTransport(
         "Owner channel unavailable: invalid producer response",
       );
     } finally {
-      if (timer) clearTimeout(timer);
       busy = false;
       if (socket.readableLength) close();
     }
@@ -350,6 +378,11 @@ export function createLocalOwnerTransport(
       )
         throw new Error("Invalid snapshot selection");
       return operation(async () => {
+        // Don't start another exchange after the sampling budget. A frame
+        // already in flight still has a hard deadline and must drain safely.
+        const sampleUntil = performance.now() + timeoutMs;
+        const sample = (frame: Buffer) =>
+          withinDeadline(() => exchange(frame, RESPONSE_LIMIT));
         const names = [
           "work_units",
           "attempts",
@@ -372,17 +405,19 @@ export function createLocalOwnerTransport(
               sequence: string;
               revision: string | null;
               status: string;
+              specDigest: string | null;
             }
           | undefined;
         const startPage = selection?.page ?? 0;
+        let nextPage: number | null = null;
         for (
           let page = startPage;
           page < startPage + 8 && page <= 1000000;
           page++
         ) {
-          const frame = await exchange(
+          if (page !== startPage && performance.now() >= sampleUntil) break;
+          const frame = await sample(
             requestFrame({ version: 1, action: "snapshot", page }),
-            RESPONSE_LIMIT,
           );
           const envelope = record(payload(frame), ["version", "ok", "result"]);
           const snapshot = record(envelope.result, [
@@ -431,27 +466,17 @@ export function createLocalOwnerTransport(
             (typeof position.sequence !== "number" &&
               typeof position.sequence !== "bigint") ||
             BigInt(position.sequence) < 0n ||
-            BigInt(position.sequence) > 9223372036854775807n ||
-            typeof snapshot.status !== "string" ||
-            !snapshot.status.trim() ||
-            snapshot.status.length > 256 ||
-            (snapshot.program_revision !== null &&
-              ((typeof snapshot.program_revision !== "number" &&
-                typeof snapshot.program_revision !== "bigint") ||
-                BigInt(snapshot.program_revision) < 0n))
+            BigInt(position.sequence) > 9223372036854775807n
           )
             throw new Error("Invalid snapshot");
           const current = {
             epoch: snapshot.producer,
             sequence: String(position.sequence),
-            revision:
-              snapshot.program_revision === null
-                ? null
-                : String(snapshot.program_revision),
-            status: snapshot.status,
+            ...programHeader(snapshot),
           };
           if (
             selection &&
+            !identity &&
             (selection.epoch !== current.epoch ||
               selection.sequence !== current.sequence)
           ) {
@@ -463,7 +488,8 @@ export function createLocalOwnerTransport(
             (identity.epoch !== current.epoch ||
               identity.sequence !== current.sequence ||
               identity.revision !== current.revision ||
-              identity.status !== current.status)
+              identity.status !== current.status ||
+              identity.specDigest !== current.specDigest)
           ) {
             priorHistoryGap = true;
             throw new SnapshotChanged("Snapshot changed during pagination");
@@ -715,13 +741,18 @@ export function createLocalOwnerTransport(
               counts.decisions!.total &&
             startPage * 8 + counts.correlations!.sampled >=
               counts.correlations!.total
-          )
+          ) {
+            nextPage = null;
             break;
+          }
+          nextPage = page < 1000000 ? page + 1 : null;
         }
         if (!identity) throw new Error("Snapshot unavailable");
         let history: "initial" | "continuous" | "gap" | "unknown" =
           priorHistoryGap ? "gap" : "initial";
-        if (lastPosition) {
+        const skippedProgress =
+          lastPosition !== undefined && performance.now() >= sampleUntil;
+        if (lastPosition && !skippedProgress) {
           // Sequence is an int64; validated decimal text avoids JS rounding.
           const eventBody = Buffer.from(
             `{"version":1,"action":"events","after":{"producer":${JSON.stringify(lastPosition.producer)},"scope":${JSON.stringify(lastPosition.scope)},"sequence":${lastPosition.sequence}},"limit":${eventLimit}}`,
@@ -729,7 +760,7 @@ export function createLocalOwnerTransport(
           const eventFrame = Buffer.alloc(eventBody.length + 4);
           eventFrame.writeUInt32BE(eventBody.length);
           eventBody.copy(eventFrame, 4);
-          const frame = await exchange(eventFrame, RESPONSE_LIMIT);
+          const frame = await sample(eventFrame);
           const envelope = record(payload(frame), ["version", "ok", "result"]);
           const batch = record(envelope.result, ["events", "position", "gap"]);
           const end = record(batch.position, ["producer", "scope", "sequence"]);
@@ -806,20 +837,27 @@ export function createLocalOwnerTransport(
             : priorHistoryUnknown
               ? "unknown"
               : "continuous";
+        } else if (skippedProgress) {
+          history = priorHistoryGap ? "gap" : "unknown";
         } else if (seenSnapshot) {
           priorHistoryUnknown = true;
           history = priorHistoryGap ? "gap" : "unknown";
         }
-        lastPosition = {
-          producer: identity.epoch,
-          scope: cursorScope,
-          sequence: identity.sequence,
-        };
+        if (!skippedProgress)
+          lastPosition = {
+            producer: identity.epoch,
+            scope: cursorScope,
+            sequence: identity.sequence,
+          };
         seenSnapshot = true;
         return {
           scope,
-          ...identity,
+          epoch: identity.epoch,
+          sequence: identity.sequence,
+          revision: identity.revision,
+          status: identity.status,
           startPage,
+          nextPage,
           counts,
           workUnits,
           attempts,
@@ -828,7 +866,7 @@ export function createLocalOwnerTransport(
           commandCoverage: commandCoverage!,
           history,
         };
-      });
+      }, false);
     },
     historyVersion,
     proposalSupported: supported("proposal-chunk"),
@@ -970,30 +1008,13 @@ export function createLocalOwnerTransport(
           snapshot.page !== 0
         )
           throw new Error("Invalid owner snapshot");
-        if (
-          snapshot.status === "absent" &&
-          snapshot.program_revision === null &&
-          snapshot.spec_digest === null
-        )
+        const header = programHeader(snapshot);
+        if (header.revision === null)
           return { revision: "-1", status: "absent" };
-        if (
-          typeof snapshot.status !== "string" ||
-          !["draft", "active", "paused", "completed", "cancelled"].includes(
-            snapshot.status,
-          ) ||
-          typeof snapshot.spec_digest !== "string" ||
-          !/^[0-9a-f]{64}$/.test(snapshot.spec_digest) ||
-          (typeof snapshot.program_revision !== "number" &&
-            typeof snapshot.program_revision !== "bigint")
-        )
-          throw new Error("Invalid owner snapshot");
-        const revision = BigInt(snapshot.program_revision);
-        if (revision < 0n || revision > 9223372036854775807n)
-          throw new Error("Invalid owner revision");
         return {
-          revision: revision.toString(),
-          status: snapshot.status,
-          specDigest: snapshot.spec_digest,
+          revision: header.revision,
+          status: header.status,
+          specDigest: header.specDigest!,
         };
       });
     },

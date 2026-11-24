@@ -272,7 +272,7 @@ function snapshot() {
     scope: "program",
     program_revision: 4,
     spec_digest: "b".repeat(64),
-    status: "running",
+    status: "active",
     work_units: [] as unknown[],
     attempts: [] as unknown[],
     reservations: [],
@@ -308,7 +308,8 @@ it("reads a bounded snapshot without exposing command data", async () => {
     sequence: "3",
     revision: "4",
     startPage: 0,
-    status: "running",
+    nextPage: null,
+    status: "active",
     history: "initial",
     counts: Object.fromEntries(
       Object.keys(item.coverage).map((name) => [
@@ -339,6 +340,21 @@ it("rejects inconsistent snapshot scope or coverage", async () => {
   await expect(
     createLocalOwnerTransport(second.client, "program").readSnapshot(),
   ).rejects.toThrow();
+});
+
+it.each([
+  { status: "running" },
+  { program_revision: null },
+  { program_revision: -1 },
+  { spec_digest: null },
+  { spec_digest: "invalid" },
+  { status: "absent" },
+])("refuses a non-producer Program header (%#)", async (overrides) => {
+  const { client } = await pair((socket) =>
+    socket.write(response({ ...snapshot(), ...overrides })),
+  );
+  const channel = createLocalOwnerTransport(client, "program");
+  await expect(channel.readSnapshot()).rejects.toThrow();
 });
 
 it.each([
@@ -653,35 +669,75 @@ it("combines stable pages and reports bounded incomplete coverage", async () => 
   channel.close();
 });
 
-it("rejects pages from different producer positions", async () => {
-  let completed = false;
-  const { client } = await pair((socket, request) => {
-    const page = request.page as number;
-    const item = snapshot();
-    if (completed) {
+it.each(["position", "digest"])(
+  "rejects mixed pages when %s changes",
+  async (changed) => {
+    let completed = false;
+    const { client } = await pair((socket, request) => {
+      const page = request.page as number;
+      const item = snapshot();
+      if (completed) {
+        socket.write(response(item));
+        return;
+      }
+      item.page = page;
+      item.work_units = Array.from({ length: page ? 1 : 8 }, (_, index) => [
+        `work-${page * 8 + index}`,
+        "ready",
+        null,
+        null,
+      ]);
+      item.coverage.work_units = [page * 8, 9, page === 1];
+      if (page) {
+        if (changed === "position") item.position.sequence++;
+        else item.spec_digest = "c".repeat(64);
+        completed = true;
+      }
       socket.write(response(item));
-      return;
-    }
-    item.page = page;
-    item.work_units = Array.from({ length: page ? 1 : 8 }, (_, index) => [
-      `work-${page * 8 + index}`,
-      "ready",
-      null,
-      null,
-    ]);
-    item.coverage.work_units = [page * 8, 9, page === 1];
-    if (page) {
-      item.position.sequence++;
-      completed = true;
+    });
+    const channel = createLocalOwnerTransport(client, "program");
+    await expect(channel.readSnapshot()).rejects.toThrow(
+      "Snapshot changed during pagination",
+    );
+    expect((await channel.readSnapshot()).history).toBe("gap");
+    channel.close();
+  },
+);
+
+it("bounds slow snapshot sampling at complete frames and keeps the same descriptor", async () => {
+  const { client, requests } = await pair((socket, request) => {
+    const item = { ...snapshot(), status: "active" };
+    if (typeof request.page === "number") {
+      vi.advanceTimersByTime(600);
+      item.page = request.page;
+      item.work_units = Array.from({ length: 8 }, (_, i) => [
+        `work-${item.page * 8 + i}`,
+        "ready",
+        null,
+        null,
+      ]);
+      item.coverage.work_units = [item.page * 8, 64, item.page === 7];
     }
     socket.write(response(item));
   });
-  const channel = createLocalOwnerTransport(client, "program");
-  await expect(channel.readSnapshot()).rejects.toThrow(
-    "Snapshot changed during pagination",
-  );
-  expect((await channel.readSnapshot()).history).toBe("gap");
-  channel.close();
+  const channel = createTransport(client, "program", 1000, [
+    "snapshot",
+    "events",
+  ]);
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+  try {
+    const window = await channel.readSnapshot();
+    expect(window.workUnits).toHaveLength(16);
+    expect(window.nextPage).toBe(2);
+    expect(await channel.readRevision()).toMatchObject({
+      revision: "4",
+      status: "active",
+    });
+    expect(requests.map(({ page }) => page)).toEqual([0, 1, undefined]);
+  } finally {
+    vi.useRealTimers();
+    channel.close();
+  }
 });
 
 it("distinguishes bounded continuity from a persistent progress gap", async () => {

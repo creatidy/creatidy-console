@@ -10,6 +10,7 @@ type Snapshot = {
   sequence: string;
   revision: string | null;
   startPage: number;
+  nextPage: number | null;
   status: string;
   history: "initial" | "continuous" | "gap" | "unknown";
   counts: Record<string, { sampled: number; total: number }>;
@@ -129,7 +130,7 @@ export default function KernelSnapshotPanel({
             : result.status === "busy"
               ? "Another snapshot read is in progress. Try again."
               : result.status === "unavailable"
-                ? "No Kernel capability is configured."
+                ? "Kernel snapshots require a local Console and a configured read capability."
                 : "Kernel snapshot unavailable; the read could not be completed.",
         );
         return;
@@ -209,20 +210,10 @@ export default function KernelSnapshotPanel({
           </button>
           <button
             type="button"
-            onClick={() =>
-              void refresh(Math.min(1000000, snapshot.startPage + 8))
-            }
-            disabled={
-              loading ||
-              snapshot.startPage >= 1000000 ||
-              (snapshot.startPage + 8) * 8 >=
-                Math.max(
-                  snapshot.counts.work_units?.total ?? 0,
-                  snapshot.counts.attempts?.total ?? 0,
-                  snapshot.counts.decisions?.total ?? 0,
-                  snapshot.counts.correlations?.total ?? 0,
-                )
-            }
+            onClick={() => {
+              if (snapshot.nextPage !== null) void refresh(snapshot.nextPage);
+            }}
+            disabled={loading || snapshot.nextPage === null}
           >
             Next pages
           </button>

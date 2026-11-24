@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { isLoopbackOrigin } from "../server/loopback.ts";
 import type { ExpectedMiReference } from "../server/mi-publication";
 
@@ -40,11 +40,26 @@ export default function MiSnapshotPanel({
   );
   const previousInput = useRef<HTMLInputElement>(null);
   const [visible, setVisible] = useState(false);
+  const [evidenceOpen, setEvidenceOpen] = useState(false);
+  const evidenceSummary = useRef<HTMLElement>(null);
+  const restoreEvidenceFocus = useRef(false);
   const [message, setMessage] = useState("No offline file inspected.");
   const generation = useRef(0);
   const active = useRef<AbortController | null>(null);
   const hasSnapshot = useRef(false);
   const inspecting = useRef(false);
+
+  useLayoutEffect(() => {
+    if (!visible || !restoreEvidenceFocus.current) return;
+    restoreEvidenceFocus.current = false;
+    if (document.activeElement === document.body)
+      evidenceSummary.current?.focus({ preventScroll: true });
+  }, [visible]);
+
+  function resetDisclosure() {
+    restoreEvidenceFocus.current = false;
+    setEvidenceOpen(false);
+  }
 
   useEffect(() => {
     const hide = () => {
@@ -54,6 +69,7 @@ export default function MiSnapshotPanel({
       inspecting.current = false;
       setSnapshot(undefined);
       setPublication(undefined);
+      resetDisclosure();
       setPrevious(undefined);
       if (previousInput.current) previousInput.current.value = "";
       setVisible(false);
@@ -72,7 +88,11 @@ export default function MiSnapshotPanel({
         return;
       const current = generation.current;
       const controller = new AbortController();
+      active.current = controller;
       const deadline = setTimeout(() => controller.abort(), 5000);
+      restoreEvidenceFocus.current =
+        evidenceSummary.current !== null &&
+        document.activeElement === evidenceSummary.current;
       setVisible(false);
       try {
         const response = await fetch("/api/kernel/session-check", {
@@ -98,6 +118,7 @@ export default function MiSnapshotPanel({
         if (current === generation.current) hide();
       } finally {
         clearTimeout(deadline);
+        if (active.current === controller) active.current = null;
       }
     }, 10000);
     return () => {
@@ -111,6 +132,7 @@ export default function MiSnapshotPanel({
     if (!local || document.visibilityState !== "visible") return;
     generation.current++;
     active.current?.abort();
+    restoreEvidenceFocus.current = false;
     const current = generation.current;
     const controller = new AbortController();
     active.current = controller;
@@ -189,6 +211,7 @@ export default function MiSnapshotPanel({
         hasSnapshot.current = false;
         setSnapshot(undefined);
         setPublication(undefined);
+        resetDisclosure();
         return expired();
       }
       if (!response.ok) throw new Error();
@@ -225,6 +248,7 @@ export default function MiSnapshotPanel({
         hasSnapshot.current = false;
         setSnapshot(undefined);
         setPublication(undefined);
+        resetDisclosure();
         return expired();
       }
       if (!session.ok || (await session.json()).authenticated !== true)
@@ -242,6 +266,7 @@ export default function MiSnapshotPanel({
         setSnapshot(undefined);
         setPublication(result as Publication);
       }
+      resetDisclosure();
       hasSnapshot.current = true;
       displayed = true;
       setVisible(true);
@@ -269,6 +294,7 @@ export default function MiSnapshotPanel({
               hasSnapshot.current = false;
               setSnapshot(undefined);
               setPublication(undefined);
+              resetDisclosure();
               expired();
             } else {
               const authenticated =
@@ -284,6 +310,7 @@ export default function MiSnapshotPanel({
                 hasSnapshot.current = false;
                 setSnapshot(undefined);
                 setPublication(undefined);
+                resetDisclosure();
               }
             }
           } catch {
@@ -291,6 +318,7 @@ export default function MiSnapshotPanel({
               hasSnapshot.current = false;
               setSnapshot(undefined);
               setPublication(undefined);
+              resetDisclosure();
             }
           } finally {
             clearTimeout(recheckDeadline);
@@ -444,8 +472,13 @@ export default function MiSnapshotPanel({
           </p>
           <h4>Reported projection</h4>
           <pre>{JSON.stringify(publication.reportedFacts, null, 2)}</pre>
-          <details>
-            <summary>Untrusted evidence records and reported rights</summary>
+          <details
+            open={evidenceOpen}
+            onToggle={(event) => setEvidenceOpen(event.currentTarget.open)}
+          >
+            <summary ref={evidenceSummary}>
+              Untrusted evidence records and reported rights
+            </summary>
             <p>
               These records are claims in the selected file, not proof of source
               truth, freshness, authenticity or permission to redistribute.

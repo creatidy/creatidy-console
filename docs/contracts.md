@@ -408,12 +408,14 @@ source revision `1bcb052e527933b7b2f419ac76017f2d20e88a1e`, specifically
 decisions and correlation references retain producer facts; they are not a
 cross-product join or an owner-action queue. Opaque runtime handles are not
 displayed and do not establish effect settlement. Each request samples at most
-eight pages with explicit collection and command coverage; navigation retains
-the observed epoch and sequence and requires resynchronization when that
-position changes. Oversized records are explicitly omitted. Progress state is
-process-local: gaps and unknown intervals remain visible and a new snapshot does
-not restore missing history. These synthetic checks are not installed/live
-Kernel conformance or verified producer identity.
+eight pages with explicit collection and command coverage. Slow reads stop at
+complete frame boundaries and continue from the first unsampled page; a stalled
+in-flight frame still closes the descriptor. Navigation retains the observed
+epoch and sequence and requires resynchronization when that position changes.
+Oversized records are explicitly omitted. Progress state is process-local: gaps
+and unknown intervals remain visible and a new snapshot does not restore missing
+history. These synthetic checks are not installed/live Kernel conformance or
+verified producer identity.
 
 One isolated source-checkout exercise used 512 synthetic work units and 300
 test-injected progress hints against that Kernel revision. Console retained 64

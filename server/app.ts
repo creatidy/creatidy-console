@@ -65,6 +65,7 @@ export interface AppOptions {
       sequence: string;
       revision: string | null;
       startPage: number;
+      nextPage: number | null;
       status: string;
       history: "initial" | "continuous" | "gap" | "unknown";
       counts: Record<string, { sampled: number; total: number }>;
