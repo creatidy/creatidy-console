@@ -4,7 +4,11 @@ import KernelOwnerPanel from "./KernelOwnerPanel";
 import KernelSnapshotPanel from "./KernelSnapshotPanel";
 import MiSnapshotPanel from "./MiSnapshotPanel";
 
-type Session = { configured: boolean; authenticated: boolean };
+type Session = {
+  configured: boolean;
+  authenticated: boolean;
+  miInspectionOrigin?: string;
+};
 
 export default function App() {
   const [session, setSession] = useState<Session | null>(null);
@@ -152,7 +156,10 @@ export default function App() {
             <>
               <KernelOwnerPanel expired={() => invalidate(true)} />
               <KernelSnapshotPanel expired={() => invalidate(true)} />
-              <MiSnapshotPanel expired={() => invalidate(true)} />
+              <MiSnapshotPanel
+                destination={session.miInspectionOrigin}
+                expired={() => invalidate(true)}
+              />
             </>
           )}
           <p>Model Intelligence is not configured by this view.</p>

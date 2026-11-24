@@ -7,6 +7,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { unlinkSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { createRequire } from "node:module";
+import { isLoopbackListener, isLoopbackOrigin } from "./loopback.ts";
 import { openState } from "./state.ts";
 import { createRouterObserver } from "./router.ts";
 import { inspectEmptyMiSnapshot } from "./mi-empty-snapshot.ts";
@@ -111,10 +112,7 @@ export async function createApp(options: AppOptions) {
     origin.username ||
     origin.password ||
     (origin.protocol !== "https:" &&
-      !(
-        origin.protocol === "http:" &&
-        ["127.0.0.1", "[::1]", "localhost"].includes(origin.hostname)
-      ))
+      !(origin.protocol === "http:" && isLoopbackOrigin(origin)))
   ) {
     throw new Error("Origin must be exact HTTPS or loopback HTTP");
   }
@@ -160,6 +158,26 @@ export async function createApp(options: AppOptions) {
   const cookieName =
     origin.protocol === "https:" ? "__Host-console" : "console";
   const routerObserver = createRouterObserver(options.stateDirectory);
+  function localMiOrigin() {
+    const listener = app.server.address();
+    return listener &&
+      typeof listener !== "string" &&
+      isLoopbackListener(listener.address) &&
+      isLoopbackOrigin(origin)
+      ? origin.origin
+      : null;
+  }
+  const admitMiInspection: import("fastify").onRequestAsyncHookHandler = async (
+    request,
+    reply,
+  ) => {
+    if (!localMiOrigin())
+      return reply
+        .code(403)
+        .send({ error: "Offline MI inspection requires a local Console" });
+    if (!(await authenticated(request)))
+      return reply.code(401).send({ error: "Login required" });
+  };
   await app.register(cookie);
   app.addHook("onRequest", async (request, reply) => {
     reply
@@ -184,8 +202,8 @@ export async function createApp(options: AppOptions) {
       return reply.code(403).send({ error: "Request origin denied" });
     }
   });
-  // Bypass the session plugin's rolling/expired-cookie handling for this
-  // read-only check. Use its pinned decoder and the same signed generation.
+  // Passive session checks and Router reconciliation must not renew sessions.
+  // Use the pinned decoder and the same signed generation without touching it.
   const Session = createRequire(import.meta.url)(
     "@fastify/session/lib/session",
   ) as {
@@ -198,7 +216,8 @@ export async function createApp(options: AppOptions) {
   app.addHook("onRequest", async (request, reply) => {
     if (
       request.method !== "GET" ||
-      request.routeOptions.url !== "/api/kernel/session-check"
+      (request.routeOptions.url !== "/api/kernel/session-check" &&
+        request.routeOptions.url !== "/api/router")
     )
       return;
     const cookieValue = request.cookies[cookieName];
@@ -229,7 +248,11 @@ export async function createApp(options: AppOptions) {
       expiryTime <= Date.now()
     )
       return reply.code(401).send({ error: "Login required" });
-    return reply.send({ authenticated: true });
+    return reply.send(
+      request.routeOptions.url === "/api/router"
+        ? routerObserver.view()
+        : { authenticated: true },
+    );
   });
   await app.register(session, {
     secret: String(signing),
@@ -292,10 +315,15 @@ export async function createApp(options: AppOptions) {
       throw error;
     }
   }
-  app.get("/api/session", async (request) => ({
-    configured: Boolean(owner()),
-    authenticated: await authenticated(request),
-  }));
+  app.get("/api/session", async (request) => {
+    const signedIn = await authenticated(request);
+    const miInspectionOrigin = signedIn && localMiOrigin();
+    return {
+      configured: Boolean(owner()),
+      authenticated: signedIn,
+      ...(miInspectionOrigin ? { miInspectionOrigin } : {}),
+    };
+  });
   app.post<{ Body: { token?: unknown; password?: unknown } }>(
     "/api/bootstrap",
     async (request, reply) => {
@@ -416,11 +444,9 @@ export async function createApp(options: AppOptions) {
       return reply.code(401).send({ error: "Login required" });
     return { message: "Console session authenticated." };
   });
-  app.get("/api/router", async (request, reply) => {
-    if (!(await authenticated(request)))
-      return reply.code(401).send({ error: "Login required" });
-    return routerObserver.view();
-  });
+  app.get("/api/router", async (_request, reply) =>
+    reply.code(401).send({ error: "Login required" }),
+  );
   app.post("/api/router/refresh", async (request, reply) => {
     if (!(await authenticated(request)))
       return reply.code(401).send({ error: "Login required" });
@@ -469,6 +495,14 @@ export async function createApp(options: AppOptions) {
       >;
     }
   >();
+  const approvalScopeReads = new Map<
+    string,
+    ReturnType<
+      NonNullable<NonNullable<AppOptions["kernelOwner"]>["readApprovalScope"]>
+    >
+  >();
+  const readQueueFull = () =>
+    proposalReads.size + snapshotReads.size + approvalScopeReads.size >= 16;
   const sessionKey = (request: import("fastify").FastifyRequest) =>
     JSON.stringify([request.session.sessionStoreId, request.session.sessionId]);
   app.get("/api/kernel/owner", async (request, reply) => {
@@ -478,10 +512,7 @@ export async function createApp(options: AppOptions) {
     if (!ownerChannel || ownerChannel.proposalSupported === false)
       return { status: "unavailable", actions: [] };
     const key = sessionKey(request);
-    if (
-      !proposalReads.has(key) &&
-      proposalReads.size + snapshotReads.size >= 16
-    )
+    if (!proposalReads.has(key) && readQueueFull())
       return reply.code(503).send({ error: "Kernel read busy" });
     let proposal: { digest: string; text: string } | undefined;
     let failure = "disconnected";
@@ -533,22 +564,24 @@ export async function createApp(options: AppOptions) {
       text: proposal.text,
     };
   });
-  let approvalScopeRead:
-    | ReturnType<
-        NonNullable<NonNullable<AppOptions["kernelOwner"]>["readApprovalScope"]>
-      >
-    | undefined;
   async function readApprovalScope(
     request: import("fastify").FastifyRequest,
     read: NonNullable<
       NonNullable<AppOptions["kernelOwner"]>["readApprovalScope"]
     >,
   ) {
-    const pending = (approvalScopeRead ??= serializeKernelRead(request, read));
+    const key = sessionKey(request);
+    let pending = approvalScopeReads.get(key);
+    if (!pending) {
+      if (readQueueFull()) throw new KernelReadBusy();
+      pending = serializeKernelRead(request, read);
+      approvalScopeReads.set(key, pending);
+    }
     try {
       return await pending;
     } finally {
-      if (approvalScopeRead === pending) approvalScopeRead = undefined;
+      if (approvalScopeReads.get(key) === pending)
+        approvalScopeReads.delete(key);
     }
   }
   app.get("/api/kernel/approval-scope", async (request, reply) => {
@@ -1152,10 +1185,8 @@ export async function createApp(options: AppOptions) {
   });
   app.post(
     "/api/mi/inspect-empty",
-    { bodyLimit: 512 * 1024 },
+    { bodyLimit: 512 * 1024, onRequest: admitMiInspection },
     async (request, reply) => {
-      if (!(await authenticated(request)))
-        return reply.code(401).send({ error: "Login required" });
       const body = request.body;
       if (
         !body ||
@@ -1173,10 +1204,8 @@ export async function createApp(options: AppOptions) {
   );
   app.post(
     "/api/mi/inspect-publication",
-    { bodyLimit: 1024 * 1024 },
+    { bodyLimit: 1024 * 1024, onRequest: admitMiInspection },
     async (request, reply) => {
-      if (!(await authenticated(request)))
-        return reply.code(401).send({ error: "Login required" });
       const body = request.body;
       if (!body || typeof body !== "object" || Array.isArray(body))
         return reply.code(400).send({ error: "Invalid request" });
@@ -1266,10 +1295,7 @@ export async function createApp(options: AppOptions) {
     const key = JSON.stringify(selection ?? null);
     const session = sessionKey(request);
     const existing = snapshotReads.get(session);
-    if (
-      (existing && existing.key !== key) ||
-      (!existing && proposalReads.size + snapshotReads.size >= 16)
-    )
+    if ((existing && existing.key !== key) || (!existing && readQueueFull()))
       return { status: "busy" };
     let snapshot;
     let changed = false;

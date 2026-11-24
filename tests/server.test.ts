@@ -346,6 +346,7 @@ describe("authenticated application", () => {
   });
   it("protects offline MI publication inspection and retained-file comparison", async () => {
     const { app } = await fixture();
+    await app.listen({ host: "127.0.0.1", port: 0 });
     const payload = {
       applicability: {
         scope: "synthetic",
@@ -497,6 +498,7 @@ describe("authenticated application", () => {
   });
   it("requires a session and same origin for offline MI inspection", async () => {
     const { app } = await fixture();
+    await app.listen({ host: "127.0.0.1", port: 0 });
     const empty = {
       schema: "mi.operator-working/1",
       product: "model-intelligence",
@@ -639,107 +641,125 @@ describe("authenticated application", () => {
       await app.close();
     }
   });
-  it("does not let a revoked session cancel another session's queued snapshot", async () => {
-    let release!: () => void;
-    let started!: () => void;
-    let arrivals = 0;
-    let arrived!: () => void;
-    const waiting = new Promise<void>((resolve) => {
-      started = resolve;
-    });
-    const bothArrived = new Promise<void>((resolve) => {
-      arrived = resolve;
-    });
-    const readSnapshot = vi.fn(async () => ({
-      scope: "program",
-      epoch: "a".repeat(32),
-      sequence: "0",
-      revision: null,
-      startPage: 0,
-      status: "absent",
-      history: "initial" as const,
-      counts: {},
-      workUnits: [],
-      attempts: [],
-      decisions: [],
-      correlations: [],
-      commandCoverage: { sampled: 0, total: 0, complete: true },
-    }));
-    const { app } = await fixture(() => Date.now(), {
-      scope: "program",
-      readProposal: () =>
-        new Promise((resolve) => {
-          release = () =>
-            resolve({ digest: "a".repeat(64), text: "synthetic" });
-          started();
-        }),
-      readSnapshot,
-      close: () => {},
-    });
-    app.addHook("onRequest", async (request) => {
-      if (request.url === "/api/kernel/snapshot" && ++arrivals === 2) arrived();
-    });
-    try {
-      await app.inject({
-        method: "POST",
-        url: "/api/bootstrap",
-        headers,
-        payload: { token, password },
+  it.each(["snapshot", "approval-scope"] as const)(
+    "does not let a revoked session cancel another session's queued %s",
+    async (operation) => {
+      let release!: () => void;
+      let started!: () => void;
+      let arrivals = 0;
+      let arrived!: () => void;
+      const waiting = new Promise<void>((resolve) => {
+        started = resolve;
       });
-      const firstLogin = await app.inject({
-        method: "POST",
-        url: "/api/login",
-        headers,
-        payload: { password },
+      const bothArrived = new Promise<void>((resolve) => {
+        arrived = resolve;
       });
-      const secondLogin = await app.inject({
-        method: "POST",
-        url: "/api/login",
-        headers,
-        payload: { password },
+      const readSnapshot = vi.fn(async () => ({
+        scope: "program",
+        epoch: "a".repeat(32),
+        sequence: "0",
+        revision: null,
+        startPage: 0,
+        status: "absent",
+        history: "initial" as const,
+        counts: {},
+        workUnits: [],
+        attempts: [],
+        decisions: [],
+        correlations: [],
+        commandCoverage: { sampled: 0, total: 0, complete: true },
+      }));
+      const readApprovalScope = vi.fn(async () => ({
+        digest: "b".repeat(64),
+        proposalDigest: "a".repeat(64),
+        text: "synthetic scope",
+      }));
+      const { app } = await fixture(() => Date.now(), {
+        scope: "program",
+        readProposal: () =>
+          new Promise((resolve) => {
+            release = () =>
+              resolve({ digest: "a".repeat(64), text: "synthetic" });
+            started();
+          }),
+        readSnapshot,
+        readApprovalScope,
+        close: () => {},
       });
-      const first = {
-        ...headers,
-        cookie: String(firstLogin.headers["set-cookie"]).split(";")[0]!,
-      };
-      const second = {
-        ...headers,
-        cookie: String(secondLogin.headers["set-cookie"]).split(";")[0]!,
-      };
-      const proposal = app.inject({
-        method: "GET",
-        url: "/api/kernel/owner",
-        headers: first,
+      const url = `/api/kernel/${operation}`;
+      app.addHook("preHandler", async (request) => {
+        if (request.url === url && ++arrivals === 3) setImmediate(arrived);
       });
-      await waiting;
-      const revoked = app.inject({
-        method: "POST",
-        url: "/api/kernel/snapshot",
-        headers: first,
-        payload: {},
-      });
-      const active = app.inject({
-        method: "POST",
-        url: "/api/kernel/snapshot",
-        headers: second,
-        payload: {},
-      });
-      await bothArrived;
-      await app.inject({
-        method: "POST",
-        url: "/api/logout",
-        headers: first,
-        payload: {},
-      });
-      release();
-      expect((await proposal).statusCode).toBe(401);
-      expect((await revoked).statusCode).toBe(401);
-      expect((await active).json().status).toBe("observed");
-      expect(readSnapshot).toHaveBeenCalledOnce();
-    } finally {
-      await app.close();
-    }
-  });
+      try {
+        await app.inject({
+          method: "POST",
+          url: "/api/bootstrap",
+          headers,
+          payload: { token, password },
+        });
+        const firstLogin = await app.inject({
+          method: "POST",
+          url: "/api/login",
+          headers,
+          payload: { password },
+        });
+        const secondLogin = await app.inject({
+          method: "POST",
+          url: "/api/login",
+          headers,
+          payload: { password },
+        });
+        const first = {
+          ...headers,
+          cookie: String(firstLogin.headers["set-cookie"]).split(";")[0]!,
+        };
+        const second = {
+          ...headers,
+          cookie: String(secondLogin.headers["set-cookie"]).split(";")[0]!,
+        };
+        const proposal = app.inject({
+          method: "GET",
+          url: "/api/kernel/owner",
+          headers: first,
+        });
+        await waiting;
+        const read = (requestHeaders: typeof first) =>
+          operation === "snapshot"
+            ? app.inject({
+                method: "POST",
+                url,
+                headers: requestHeaders,
+                payload: {},
+              })
+            : app.inject({ method: "GET", url, headers: requestHeaders });
+        const revoked = read(first);
+        const active = read(second);
+        const duplicate = read(second);
+        await bothArrived;
+        expect(readSnapshot).not.toHaveBeenCalled();
+        expect(readApprovalScope).not.toHaveBeenCalled();
+        await app.inject({
+          method: "POST",
+          url: "/api/logout",
+          headers: first,
+          payload: {},
+        });
+        release();
+        expect((await proposal).statusCode).toBe(401);
+        expect((await revoked).statusCode).toBe(401);
+        const result = (await active).json();
+        expect(result.status).toBe(
+          operation === "snapshot" ? "observed" : "connected",
+        );
+        expect((await duplicate).json()).toEqual(result);
+        expect(
+          operation === "snapshot" ? readSnapshot : readApprovalScope,
+        ).toHaveBeenCalledOnce();
+      } finally {
+        await app.close();
+      }
+    },
+  );
   it.each(["connected", "revoked"])(
     "serializes proposal and snapshot reads when %s",
     async (mode) => {
@@ -2739,15 +2759,17 @@ describe("authenticated application", () => {
         const initial = row();
         for (let i = 0; i < 3; i++) {
           now += 60_000;
-          const check = await app.inject({
-            method: "GET",
-            url: "/api/kernel/session-check",
-            headers: auth,
-          });
-          expect(check.statusCode).toBe(200);
-          expect(check.headers["set-cookie"]).toBeUndefined();
-          expect(check.headers["cache-control"]).toBe("no-store");
-          expect(row()).toEqual(initial);
+          for (const url of ["/api/kernel/session-check", "/api/router"]) {
+            const check = await app.inject({
+              method: "GET",
+              url,
+              headers: auth,
+            });
+            expect(check.statusCode).toBe(200);
+            expect(check.headers["set-cookie"]).toBeUndefined();
+            expect(check.headers["cache-control"]).toBe("no-store");
+            expect(row()).toEqual(initial);
+          }
         }
         if (mode === "idle") now += 28 * 60_000;
         if (mode === "absolute") {
@@ -2782,6 +2804,13 @@ describe("authenticated application", () => {
         });
         expect(denied.statusCode).toBe(401);
         expect(denied.headers["set-cookie"]).toBeUndefined();
+        const cached = await app.inject({
+          method: "GET",
+          url: "/api/router",
+          headers: auth,
+        });
+        expect(cached.statusCode).toBe(401);
+        expect(cached.headers["set-cookie"]).toBeUndefined();
         expect(
           (
             await app.inject({

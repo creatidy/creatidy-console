@@ -717,37 +717,47 @@ describe("Router observer", () => {
     }
   });
 
-  it("clears facts when provenance refresh is denied and when config is removed during replay", async () => {
-    const fixture = await upstream();
-    const dir = directory();
-    writeConfig(dir, fixture.origin);
-    const observer = createRouterObserver(dir);
-    expect((await observer.refresh()).status).toBe("connected");
-    fixture.setMode("provenance-denied");
-    const denied = await observer.refresh();
-    expect(denied.status).toBe("denied");
-    expect(denied.facts).toBeNull();
-    fixture.setMode("normal");
-    expect((await observer.refresh()).status).toBe("connected");
-    fixture.setMode("held");
-    const pending = observer.refresh();
-    try {
-      await Promise.race([
-        fixture.waiting,
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("Fixture timed out")), 3000),
-        ),
-      ]);
-      rmSync(join(dir, "router.json"));
-      expect(observer.view().status).toBe("unconfigured");
-      fixture.release();
-      const result = await pending;
-      expect(result.status).toBe("unconfigured");
-      expect(result.facts).toBeNull();
-    } finally {
-      fixture.release();
-    }
-  });
+  it.each([false, true])(
+    "clears facts on denial and fences removed configuration even if restored (%s)",
+    async (restore) => {
+      const fixture = await upstream();
+      const dir = directory();
+      writeConfig(dir, fixture.origin);
+      const observer = createRouterObserver(dir);
+      expect((await observer.refresh()).status).toBe("connected");
+      fixture.setMode("provenance-denied");
+      const denied = await observer.refresh();
+      expect(denied.status).toBe("denied");
+      expect(denied.facts).toBeNull();
+      fixture.setMode("normal");
+      expect((await observer.refresh()).status).toBe("connected");
+      fixture.setMode("held");
+      const pending = observer.refresh();
+      try {
+        await Promise.race([
+          fixture.waiting,
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("Fixture timed out")), 3000),
+          ),
+        ]);
+        rmSync(join(dir, "router.json"));
+        expect(observer.view().status).toBe("unconfigured");
+        if (restore) {
+          writeConfig(dir, fixture.origin);
+          expect(observer.view()).toMatchObject({
+            status: "configured",
+            facts: null,
+          });
+        }
+        fixture.release();
+        const result = await pending;
+        expect(result.status).toBe(restore ? "configured" : "unconfigured");
+        expect(result.facts).toBeNull();
+      } finally {
+        fixture.release();
+      }
+    },
+  );
 
   it("requires verified TLS for a loopback HTTPS observer", async () => {
     const dir = directory();

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { isLoopbackOrigin } from "../server/loopback.ts";
 import type { ExpectedMiReference } from "../server/mi-publication";
 
 type EmptySnapshot = { instance: string; evaluatedAt: string; health: string };
@@ -18,7 +19,16 @@ type Publication = {
   reportedEvidence: unknown;
 };
 
-export default function MiSnapshotPanel({ expired }: { expired: () => void }) {
+export default function MiSnapshotPanel({
+  destination,
+  expired,
+}: {
+  destination: string | undefined;
+  expired: () => void;
+}) {
+  const local =
+    destination === window.location.origin &&
+    isLoopbackOrigin(new URL(window.location.href));
   const [snapshot, setSnapshot] = useState<EmptySnapshot>();
   const [publication, setPublication] = useState<Publication>();
   const [digest, setDigest] = useState("");
@@ -98,6 +108,7 @@ export default function MiSnapshotPanel({ expired }: { expired: () => void }) {
   }, []);
 
   async function inspect(file: File, mode: "empty" | "publication") {
+    if (!local || document.visibilityState !== "visible") return;
     generation.current++;
     active.current?.abort();
     const current = generation.current;
@@ -168,6 +179,7 @@ export default function MiSnapshotPanel({ expired }: { expired: () => void }) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
           cache: "no-store",
+          redirect: "error",
           signal: controller.signal,
         },
       );
@@ -292,9 +304,25 @@ export default function MiSnapshotPanel({ expired }: { expired: () => void }) {
     }
   }
 
+  if (!local)
+    return (
+      <section aria-labelledby="mi-snapshot-heading">
+        <h2 id="mi-snapshot-heading">Model Intelligence offline file</h2>
+        <p>
+          Offline MI inspection is unavailable. Both file inspection modes
+          require a local Console connection.
+        </p>
+      </section>
+    );
+
   return (
     <section aria-labelledby="mi-snapshot-heading">
       <h2 id="mi-snapshot-heading">Model Intelligence offline file</h2>
+      <p>
+        Selected files are sent to the authenticated local Console at{" "}
+        <code>{destination}</code> for in-memory inspection. Console does not
+        retain them.
+      </p>
       <p>
         This offline inspector does not activate publications, verify publisher
         identity, establish source rights, or connect to Model Intelligence.

@@ -25,130 +25,116 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
   const currentView = useRef<RouterView | null>(null);
   const generation = useRef(0);
   const active = useRef<AbortController | null>(null);
-  const loading = useRef(false);
+  const uncertainRefresh = useRef(false);
 
   async function load(refresh = false) {
+    if (document.visibilityState !== "visible") return;
     generation.current++;
     active.current?.abort();
     const current = generation.current;
     const controller = new AbortController();
     active.current = controller;
-    const refreshDeadline = new AbortController();
-    const deadline = setTimeout(() => refreshDeadline.abort(), 10000);
-    const requestSignal = AbortSignal.any([
-      controller.signal,
-      refreshDeadline.signal,
-    ]);
-    const followupSignal = () =>
-      AbortSignal.any([controller.signal, AbortSignal.timeout(5000)]);
-    loading.current = true;
-    setVisible(false);
-    if (refresh) setPending(true);
-    try {
+    const deadlines: ReturnType<typeof setTimeout>[] = [];
+    const bounded = (ms = 5000) => {
+      const deadline = new AbortController();
+      deadlines.push(setTimeout(() => deadline.abort(), ms));
+      return AbortSignal.any([controller.signal, deadline.signal]);
+    };
+    const currentRequest = () => current === generation.current;
+    const read = async (post = false) => {
+      const signal = bounded(post ? 10000 : 5000);
       const response = await fetch(
-        refresh ? "/api/router/refresh" : "/api/router",
-        refresh
-          ? {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: "{}",
-              signal: requestSignal,
-            }
-          : { cache: "no-store", signal: requestSignal },
+        post ? "/api/router/refresh" : "/api/router",
+        {
+          cache: "no-store",
+          signal,
+          ...(post
+            ? {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: "{}",
+              }
+            : {}),
+        },
       );
-      if (current !== generation.current) return;
+      if (!currentRequest()) return null;
+      signal.throwIfAborted();
       if (response.status === 401) {
+        currentView.current = null;
+        setView(null);
         expired();
-        return;
+        return null;
       }
       if (!response.ok) throw new Error();
-      const next = (await response.json()) as RouterView;
-      if (current !== generation.current) return;
-      currentView.current = next;
-      setView(next);
-      setError("");
-    } catch {
-      if (current !== generation.current) return;
-      setError(
-        "Console could not retrieve Router status. Check the application connection.",
-      );
-      let recovered: RouterView | null = null;
-      if (refresh) {
-        // A lost refresh response can hide revocation or replacement. Use the
-        // server's current cached view, not the browser's previous copy.
-        try {
-          const response = await fetch("/api/router", {
-            cache: "no-store",
-            signal: followupSignal(),
-          });
-          if (current !== generation.current) return;
-          if (response.status === 401) expired();
-          else if (response.ok) {
-            const next = (await response.json()) as RouterView;
-            recovered =
-              next.status === "connected"
-                ? {
-                    ...next,
-                    status: "disconnected",
-                    last_known: next.facts !== null,
-                  }
-                : next;
-          }
-        } catch {
-          // No observable server state: keep the facts hidden.
-        }
+      const result = (await response.json()) as RouterView;
+      signal.throwIfAborted();
+      return result;
+    };
+    setVisible(false);
+    setPending(refresh);
+    try {
+      let next: RouterView | null;
+      let refreshFailed = false;
+      try {
+        next = await read(refresh);
+      } catch (error) {
+        if (!currentRequest()) return;
+        if (!refresh) throw error;
+        refreshFailed = true;
+        // The producer read can outlast the browser's request. Recover only
+        // the server's view and keep reconciling it while facts are displayed.
+        next = await read();
       }
-      if (current === generation.current) {
-        currentView.current = recovered;
-        setView(recovered);
-      }
-    } finally {
-      clearTimeout(deadline);
-      if (current === generation.current) {
-        if (
-          !currentView.current?.facts &&
-          !currentView.current?.origin &&
-          !currentView.current?.gap
-        ) {
-          loading.current = false;
-          if (refresh) setPending(false);
-          setVisible(true);
+      if (!currentRequest() || !next) return;
+      if (refresh) uncertainRefresh.current = refreshFailed;
+      if (!next.facts) uncertainRefresh.current = false;
+      if (next.facts || next.origin || next.gap) {
+        const signal = bounded();
+        const session = await fetch("/api/kernel/session-check", {
+          cache: "no-store",
+          signal,
+        });
+        if (!currentRequest()) return;
+        signal.throwIfAborted();
+        if (session.status === 401) {
+          currentView.current = null;
+          setView(null);
+          expired();
           return;
         }
-        const signal = followupSignal();
-        try {
-          const session = await fetch("/api/kernel/session-check", {
-            cache: "no-store",
-            signal,
-          });
-          if (current !== generation.current) return;
-          if (session.status === 401) {
-            currentView.current = null;
-            setView(null);
-            expired();
-          } else if (
-            session.ok &&
-            (await session.json()).authenticated === true &&
-            current === generation.current &&
-            !signal.aborted &&
-            document.visibilityState === "visible"
-          ) {
-            setVisible(true);
-          } else if (current === generation.current) {
-            currentView.current = null;
-            setView(null);
-          }
-        } catch {
-          if (current === generation.current) {
-            currentView.current = null;
-            setView(null);
-          }
-        } finally {
-          if (current === generation.current) {
-            loading.current = false;
-            if (refresh) setPending(false);
-          }
-        }
+        if (!session.ok || (await session.json()).authenticated !== true)
+          throw new Error();
+        signal.throwIfAborted();
+      }
+      if (!currentRequest() || document.visibilityState !== "visible") return;
+      if (uncertainRefresh.current && next.status === "connected") {
+        next = {
+          ...next,
+          status: "disconnected",
+          last_known: next.facts !== null,
+        };
+      }
+      currentView.current = next;
+      setView(next);
+      setError(
+        refreshFailed
+          ? "Console could not complete the Router refresh. Showing the server's cached status."
+          : "",
+      );
+      setVisible(true);
+    } catch {
+      if (currentRequest()) {
+        currentView.current = null;
+        setView(null);
+        setError(
+          "Console could not retrieve Router status. Check the application connection.",
+        );
+      }
+    } finally {
+      deadlines.forEach(clearTimeout);
+      if (currentRequest()) {
+        active.current = null;
+        setPending(false);
       }
     }
   }
@@ -157,7 +143,7 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
     const hide = () => {
       generation.current++;
       active.current?.abort();
-      loading.current = false;
+      active.current = null;
       currentView.current = null;
       setView(null);
       setVisible(false);
@@ -168,45 +154,17 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
       else void load();
     };
     document.addEventListener("visibilitychange", visibility);
-    const timer = setInterval(async () => {
+    const timer = setInterval(() => {
       if (
         document.visibilityState !== "visible" ||
         !currentView.current ||
         (!currentView.current.facts &&
           !currentView.current.origin &&
           !currentView.current.gap) ||
-        loading.current
+        active.current
       )
         return;
-      const current = generation.current;
-      const controller = new AbortController();
-      const deadline = setTimeout(() => controller.abort(), 5000);
-      setVisible(false);
-      try {
-        const response = await fetch("/api/kernel/session-check", {
-          cache: "no-store",
-          signal: controller.signal,
-        });
-        if (current !== generation.current) return;
-        if (response.status === 401) {
-          hide();
-          expired();
-        } else {
-          const authenticated =
-            response.ok && (await response.json()).authenticated === true;
-          if (current !== generation.current) return;
-          if (!authenticated) hide();
-          else if (
-            !controller.signal.aborted &&
-            document.visibilityState === "visible"
-          )
-            setVisible(true);
-        }
-      } catch {
-        if (current === generation.current) hide();
-      } finally {
-        clearTimeout(deadline);
-      }
+      void load();
     }, 10000);
     return () => {
       clearInterval(timer);

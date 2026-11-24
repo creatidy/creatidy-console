@@ -80,10 +80,13 @@ existing session without extending its idle or absolute expiry. The views hide
 their data while a check is pending and when the document is hidden;
 foregrounding requires a new check. External revocation is detected on the next
 check, not instantaneously, and browser scheduling or suspension can delay
-checks. This does not erase data already seen or copied by the user. The
-non-touch check uses the pinned `@fastify/session` internal cookie decoder and
-store generation verification; revalidate that coupling when the session
-dependency changes.
+checks. Router also reconciles visible observations with Console's cache-only
+view, including after a timed-out refresh. This detects producer denials that
+Console has learned about; it does not contact the producer or confirm ongoing
+producer authorization. This does not erase data already seen or copied by the
+user. The non-touch check uses the pinned `@fastify/session` internal cookie
+decoder and store generation verification; revalidate that coupling when the
+session dependency changes.
 
 Same-origin Console windows also send a payload-free BroadcastChannel signal
 after logout or an authentication denial, causing other windows to discard their
@@ -95,15 +98,19 @@ proposal view retries the non-touch check at a bounded interval while visible.
 
 The optional offline Model Intelligence file inspector accepts explicitly
 selected files of at most 256 KiB each and sends them only to the authenticated
-local Console server for an in-memory check. It does not retain the files, read
-arbitrary server paths, connect to MI or activate any publication. A nonempty
-file must match a separately supplied version, schema and digest; Console cannot
-verify how that reference was obtained. Structural checks and a comparison of
-two supplied files do not authenticate an instance or publisher, establish
-source truth or freshness, recover earlier history, or authorize data
-redistribution. The displayed result is hidden during session checks and removed
-on visibility loss, logout, expiry or reload. Unsupported valid encodings and
-oversized inputs are rejected rather than silently interpreted.
+local Console server for an in-memory check. Both a loopback listener and a
+matching loopback browser origin are required. The UI identifies the destination
+before selection, rejects redirects and does not offer either mode remotely. The
+server checks the boundary before parsing file payloads. Do not proxy this local
+listener to a remote client. Console does not retain the files, read arbitrary
+server paths, connect to MI or activate any publication. A nonempty file must
+match a separately supplied version, schema and digest; Console cannot verify
+how that reference was obtained. Structural checks and a comparison of two
+supplied files do not authenticate an instance or publisher, establish source
+truth or freshness, recover earlier history, or authorize data redistribution.
+The displayed result is hidden during session checks and removed on visibility
+loss, logout, expiry or reload. Unsupported valid encodings and oversized inputs
+are rejected rather than silently interpreted.
 
 The initial Router observer adapter accepts only explicitly configured literal
 loopback IP origins, not DNS names or arbitrary URLs. It does not follow

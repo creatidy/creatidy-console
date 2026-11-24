@@ -4,6 +4,7 @@
 // This module validates evidence; it does not authenticate a publisher or admit it.
 import { createHash } from "node:crypto";
 import { parseOwnerJson } from "./kernel-owner-v1.ts";
+import { miInstance, miText as text } from "./mi-text.ts";
 
 type Obj = Record<string, unknown>;
 type Check = (value: unknown) => void;
@@ -36,15 +37,6 @@ function record(value: unknown, fields: string[]): Obj {
 }
 function list(value: unknown): unknown[] {
   return Array.isArray(value) ? value : fail();
-}
-function text(value: unknown): string {
-  if (
-    typeof value !== "string" ||
-    !value.replace(/[\p{White_Space}\u001c-\u001f]/gu, "") ||
-    Buffer.from(value).toString("utf8") !== value
-  )
-    return fail();
-  return value;
 }
 function string(value: unknown): string {
   if (
@@ -925,7 +917,7 @@ function verify(input: string): Verified {
     product: (v) => {
       if (v !== "model-intelligence") fail();
     },
-    instance: text,
+    instance: miInstance,
     evaluated_at: (v) => {
       instant(v, true);
     },

@@ -151,6 +151,85 @@ it.skipIf(!existsSync(chrome))(
       ]);
       expect(loginResponse.status()).toBe(200);
       await page.getByRole("heading", { name: "Your console" }).waitFor();
+      const remote = await browser.newPage();
+      const remoteOrigin = "https://console.example.invalid";
+      const remoteUploads = [];
+      try {
+        await remote.route(`${remoteOrigin}/**`, async (route) => {
+          const { pathname } = new URL(route.request().url());
+          if (pathname === "/api/session") {
+            await route.fulfill({
+              json: {
+                configured: true,
+                authenticated: true,
+                miInspectionOrigin: remoteOrigin,
+              },
+            });
+          } else if (pathname.startsWith("/api/mi/inspect-")) {
+            remoteUploads.push(pathname);
+            await route.fulfill({ json: { status: "rejected" } });
+          } else if (pathname.startsWith("/api/")) {
+            await route.fulfill({ json: { status: "unavailable" } });
+          } else {
+            const asset = await fetch(`${origin}${pathname}`);
+            await route.fulfill({
+              status: asset.status,
+              contentType: asset.headers.get("content-type"),
+              body: Buffer.from(await asset.arrayBuffer()),
+            });
+          }
+        });
+        await remote.goto(remoteOrigin);
+        await remote.getByRole("heading", { name: "Your console" }).waitFor();
+        const file = {
+          name: "synthetic.json",
+          mimeType: "application/json",
+          buffer: Buffer.from("{}"),
+        };
+        const empty = remote.locator("#mi-snapshot-file");
+        const current = remote.locator("#mi-publication-file");
+        const previous = remote.locator("#mi-previous-file");
+        if ((await empty.count()) && (await empty.isEnabled())) {
+          const sent = remote.waitForResponse("**/api/mi/inspect-empty");
+          await empty.setInputFiles(file);
+          await sent;
+          await remote.getByText(/The file or reference is invalid/).waitFor();
+        }
+        if ((await current.count()) && (await current.isEnabled())) {
+          await remote.locator("#mi-digest").fill("a".repeat(64));
+          await remote.locator("#mi-previous-digest").fill("b".repeat(64));
+          for (const compare of [false, true]) {
+            if (compare) await previous.setInputFiles(file);
+            const sent = remote.waitForResponse(
+              "**/api/mi/inspect-publication",
+            );
+            await current.setInputFiles(file);
+            await sent;
+            await remote
+              .getByText(/The file or reference is invalid/)
+              .waitFor();
+          }
+        }
+        expect.soft(remoteUploads).toEqual([]);
+        expect
+          .soft(
+            await remote
+              .getByText(/Offline MI inspection is unavailable/)
+              .count(),
+          )
+          .toBe(1);
+        expect
+          .soft(await remote.locator('input[type="file"]:enabled').count())
+          .toBe(0);
+      } finally {
+        await remote.close();
+      }
+      await page
+        .getByText(/Selected files are sent to the authenticated local Console/)
+        .waitFor();
+      expect(
+        await page.locator("#mi-snapshot-heading + p code").textContent(),
+      ).toBe(origin);
       await page
         .getByRole("heading", { name: "Kernel owner actions" })
         .waitFor();
@@ -904,8 +983,16 @@ it.skipIf(!existsSync(chrome))(
         sources: [],
         discoveries: [],
       };
+      let heldRefresh;
+      const heldRouterRefresh = new Promise((resolve) => {
+        heldRefresh = resolve;
+      });
       upstream = createHttpServer((request, response) => {
         calls++;
+        if (upstreamMode === "hold") {
+          heldRefresh(response);
+          return;
+        }
         if (
           request.headers.authorization !== `Bearer ${key}` ||
           upstreamMode === "denied"
@@ -1034,6 +1121,15 @@ it.skipIf(!existsSync(chrome))(
         .getByText("Last-known data follows; it may be stale.")
         .waitFor();
       const beforeTimeouts = calls;
+      const cachedDisconnect = page.waitForResponse(`${origin}/api/router`);
+      await page.clock.fastForward(10000);
+      expect((await (await cachedDisconnect).json()).status).toBe(
+        "disconnected",
+      );
+      await page
+        .getByText("Last-known data follows; it may be stale.")
+        .waitFor();
+      expect(calls).toBe(beforeTimeouts);
       await page.evaluate(() => {
         const original = window.fetch;
         window.routerTimeouts = 0;
@@ -1080,6 +1176,97 @@ it.skipIf(!existsSync(chrome))(
       );
       expect(calls).toBe(deniedCalls);
       await page.evaluate(() => window.restoreRouterFetch());
+      upstreamMode = "connected";
+      await page.getByRole("button", { name: "Refresh Router" }).click();
+      await page.getByText("m".repeat(64), { exact: false }).waitFor();
+      // The real POST reaches Console, but the browser stops waiting before
+      // the synthetic producer replies. The recovery GET still has old facts.
+      upstreamMode = "hold";
+      await page.evaluate(() => {
+        const original = window.fetch;
+        window.routerRefreshWaiting = false;
+        window.restoreRouterFetch = () => {
+          window.fetch = original;
+        };
+        window.fetch = (input, options) => {
+          if (input !== "/api/router/refresh") return original(input, options);
+          window.routerRefreshWaiting = true;
+          return new Promise((_, reject) =>
+            options.signal.addEventListener(
+              "abort",
+              () => reject(options.signal.reason),
+              { once: true },
+            ),
+          );
+        };
+      });
+      await page.getByRole("button", { name: "Refresh Router" }).click();
+      await page.waitForFunction(() => window.routerRefreshWaiting, {
+        timeout: 3000,
+      });
+      const refreshResponse = page.request.post(
+        `${origin}/api/router/refresh`,
+        {
+          headers: { origin },
+          data: {},
+          timeout: 5000,
+        },
+      );
+      const heldResponse = await Promise.race([
+        heldRouterRefresh,
+        refreshResponse.then(() => {
+          throw new Error("Refresh was not held by the fixture");
+        }),
+      ]);
+      const delayedCalls = calls;
+      try {
+        await page.clock.fastForward(10001);
+        // Re-establish a cached nonempty view before delivering delayed denial.
+        await page
+          .getByText("Last-known data follows; it may be stale.")
+          .waitFor({ timeout: 3000 });
+        await page
+          .getByText("m".repeat(64), { exact: false })
+          .waitFor({ timeout: 3000 });
+      } finally {
+        heldResponse.writeHead(401).end();
+      }
+      expect((await (await refreshResponse).json()).status).toBe("denied");
+      await page.clock.fastForward(10001);
+      await page
+        .getByText(
+          "Observer access was denied or revoked. Cached facts were cleared.",
+        )
+        .waitFor({ timeout: 3000 });
+      expect(await page.getByText("resource-a", { exact: false }).count()).toBe(
+        0,
+      );
+      expect(calls).toBe(delayedCalls);
+      await page.evaluate(() => window.restoreRouterFetch());
+      upstreamMode = "connected";
+      await page.getByRole("button", { name: "Refresh Router" }).click();
+      await page.getByText("m".repeat(64), { exact: false }).waitFor();
+      const beforeInvalid = calls;
+      const configPath = join(state, "router.json");
+      const validConfig = readFileSync(configPath);
+      writeFileSync(configPath, "invalid");
+      await page.clock.fastForward(10001);
+      await page
+        .getByText(
+          "The local Router configuration is invalid or has unsafe permissions.",
+        )
+        .waitFor();
+      expect(await page.getByText("resource-a", { exact: false }).count()).toBe(
+        0,
+      );
+      expect(calls).toBe(beforeInvalid);
+      writeFileSync(configPath, validConfig);
+      await page.reload();
+      await page
+        .getByText(
+          "Configured, but not yet observed. Refresh to request a snapshot.",
+        )
+        .waitFor();
       upstreamMode = "unsupported";
       await page.getByRole("button", { name: "Refresh Router" }).click();
       await page

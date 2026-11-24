@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { createRequire } from "node:module";
 import type { AppOptions } from "./app.ts";
+import { isLoopbackListener, isLoopbackOrigin } from "./loopback.ts";
 
 let kernelOwner: AppOptions["kernelOwner"];
 let app: Awaited<ReturnType<typeof import("./app.ts").createApp>> | undefined;
@@ -85,10 +86,8 @@ try {
   const origin = process.env.CONSOLE_ORIGIN ?? "http://127.0.0.1:4173";
   const url = new URL(origin);
   const bind = process.env.CONSOLE_BIND_HOST ?? "127.0.0.1";
-  const loopback = ["127.0.0.1", "::1"].includes(bind);
-  const localOrigin = ["127.0.0.1", "[::1]", "localhost"].includes(
-    url.hostname,
-  );
+  const loopback = isLoopbackListener(bind);
+  const localOrigin = isLoopbackOrigin(url);
   if (url.protocol === "http:" && !loopback) {
     throw new Error("HTTP binding must be loopback");
   }

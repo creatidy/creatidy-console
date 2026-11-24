@@ -166,6 +166,27 @@ function editedCut(
 }
 
 describe("offline MI publication validation", () => {
+  it("accepts a producer-valid U+FEFF-only instance", () => {
+    const { snapshot, expected } = fixture();
+    expect(
+      inspectMiPublication(
+        JSON.stringify({ ...snapshot, instance: "\ufeff" }),
+        expected,
+      ),
+    ).toMatchObject({ status: "checked", reportedInstance: "\ufeff" });
+  });
+  it.each(["", " \u0085\u001f", "\ud800", "é".repeat(129)])(
+    "rejects blank, invalid UTF-8 or out-of-bounds instances (%#)",
+    (instance) => {
+      const { snapshot, expected } = fixture();
+      expect(
+        inspectMiPublication(
+          JSON.stringify({ ...snapshot, instance }),
+          expected,
+        ),
+      ).toMatchObject({ status: "rejected" });
+    },
+  );
   it("checks a bounded cut without claiming identity or history", () => {
     const { snapshot, expected } = fixture();
     const result = inspectMiPublication(JSON.stringify(snapshot), expected);

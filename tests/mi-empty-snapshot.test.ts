@@ -46,6 +46,23 @@ function emptySnapshot() {
 }
 
 describe("bounded offline MI empty snapshots", () => {
+  it("accepts a producer-valid U+FEFF-only instance", () => {
+    expect(
+      inspectEmptyMiSnapshot(
+        JSON.stringify({ ...emptySnapshot(), instance: "\ufeff" }),
+      ),
+    ).toMatchObject({ status: "empty", instance: "\ufeff" });
+  });
+  it.each(["", " \u0085\u001f", "\ud800", "é".repeat(129)])(
+    "rejects blank, invalid UTF-8 or out-of-bounds instances (%#)",
+    (instance) => {
+      expect(
+        inspectEmptyMiSnapshot(
+          JSON.stringify({ ...emptySnapshot(), instance }),
+        ),
+      ).toEqual({ status: "invalid" });
+    },
+  );
   it("accepts the exact empty shape without asserting producer identity", () => {
     expect(inspectEmptyMiSnapshot(JSON.stringify(emptySnapshot()))).toEqual({
       status: "empty",

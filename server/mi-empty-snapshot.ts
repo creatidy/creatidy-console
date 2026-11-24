@@ -1,4 +1,5 @@
 import { parseOwnerJson } from "./kernel-owner-v1.ts";
+import { miInstance } from "./mi-text.ts";
 
 // A deliberately limited consumer of mi.operator-working/1. This does not
 // activate publications or implement the producer's complete receiver.
@@ -62,15 +63,8 @@ export function inspectEmptyMiSnapshot(text: string):
       root.product !== "model-intelligence"
     )
       return { status: "unsupported" };
-    if (
-      typeof root.instance !== "string" ||
-      !root.instance.trim() ||
-      !root.instance.replace(/[\p{White_Space}\u001c-\u001f]/gu, "") ||
-      Buffer.byteLength(root.instance) > 256 ||
-      Buffer.from(root.instance).toString("utf8") !== root.instance ||
-      !utc(root.evaluated_at)
-    )
-      throw new Error("invalid");
+    const instance = miInstance(root.instance);
+    if (!utc(root.evaluated_at)) throw new Error("invalid");
     const caps = object(root.capabilities, ["reads", "commands", "replay"]);
     if (
       !Array.isArray(caps.reads) ||
@@ -183,7 +177,7 @@ export function inspectEmptyMiSnapshot(text: string):
       };
     return {
       status: "empty",
-      instance: root.instance,
+      instance,
       evaluatedAt: root.evaluated_at,
       health: health.state as string,
     };
