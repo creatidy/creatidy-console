@@ -696,29 +696,39 @@ it.skipIf(!existsSync(chrome))(
                 ["Attempt  A", hostile, "prepared", "synthetic-actor"],
                 ["Attempt-B", "out-of-window", "prepared", "synthetic-actor"],
               ],
-              decisions: [
-                {
-                  source: "product-review",
-                  status: "owner_decision_needed",
-                  applicability: "pending",
-                  attempt: "Attempt A",
-                  decisionId: "exact-decision",
-                },
-                {
-                  source: "product-review-operation",
-                  status: "review_unknown",
-                  applicability: "pending",
-                  attempt: "attempt a",
-                  decisionId: "unmatched-decision",
-                },
-                {
-                  source: "product-review",
-                  status: "owner_decision_needed",
-                  applicability: "historical",
-                  attempt: "Attempt A",
-                  decisionId: "historical-decision",
-                },
-              ],
+              decisions:
+                pageNumber === 3
+                  ? [null]
+                  : [
+                      {
+                        source: "product-review",
+                        status: "owner_decision_needed",
+                        applicability: "pending",
+                        attempt: "Attempt A",
+                        decisionId: "exact-decision",
+                      },
+                      {
+                        source: "product-review-operation",
+                        status: "review_unknown",
+                        applicability: "pending",
+                        attempt: "attempt a",
+                        decisionId: "unmatched-decision",
+                      },
+                      {
+                        source: "product-review",
+                        status: "owner_decision_needed",
+                        applicability: "historical",
+                        attempt: "Attempt A",
+                        decisionId: "historical-decision",
+                      },
+                      ...["Attempt A", "Attempt  A"].map((attempt) => ({
+                        source: "served-command",
+                        status: "rejected",
+                        applicability: "historical",
+                        attempt,
+                        commandId: "shared-command-key",
+                      })),
+                    ],
               correlations: [
                 {
                   attempt: "Attempt A",
@@ -771,6 +781,12 @@ it.skipIf(!existsSync(chrome))(
       expect(await linkedAttempts.nth(1).textContent()).not.toContain(
         '"exact-decision"',
       );
+      for (const row of await linkedAttempts.all()) {
+        expect(await row.textContent()).toContain(
+          'Recorded command key: "shared-command-key"',
+        );
+        await row.getByText(/Exact command correlation unavailable/).waitFor();
+      }
       await page.getByText('"unmatched-decision"', { exact: true }).waitFor();
       await page.getByText(/Oversized records omitted: 1 work units/).waitFor();
       expect(await page.locator('a[href^="file:"]').count()).toBe(0);
@@ -790,6 +806,10 @@ it.skipIf(!existsSync(chrome))(
       expect(snapshotReads).toBe(1);
       expect(await page.evaluate(() => window.ownerInjected)).toBeUndefined();
       await page.getByRole("button", { name: "Next pages" }).click();
+      await page
+        .getByText(/No pending owner decision in the readable records/)
+        .waitFor();
+      await page.getByText(/Unreadable decision records: 1\./).waitFor();
       await lineage.press("Enter");
       await page.getByText("work_units: 25 total; 1 sampled").waitFor();
       await page
@@ -1256,8 +1276,8 @@ it.skipIf(!existsSync(chrome))(
             origin: "source",
             enabled: true,
             worker_connected: null,
-            observed_at: null,
-            freshness: "never_observed",
+            observed_at: "2026-01-01T00:00:00.000Z",
+            freshness: "stale",
             health: null,
             availability: "unknown",
             quota_facts: [],
@@ -1357,6 +1377,11 @@ it.skipIf(!existsSync(chrome))(
       await page.getByRole("button", { name: "Refresh Router" }).click();
       const routerObservation = page.getByText("Inspect Router observations");
       await routerObservation.waitFor();
+      await page
+        .getByText(
+          "Resources reported stale at the last observation: 1 in the displayed sample.",
+        )
+        .waitFor();
       expect(
         await page.getByText("m".repeat(64), { exact: false }).isVisible(),
       ).toBe(false);

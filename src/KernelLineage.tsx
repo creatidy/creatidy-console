@@ -52,7 +52,9 @@ function Decision({ record }: { record: KernelDecision }) {
       {record.commandId !== undefined && (
         <>
           {" "}
-          Command: <Reference value={record.commandId} />.
+          Recorded command key: <Reference value={record.commandId} />. Exact
+          command correlation unavailable; the command actor binding is not
+          supplied.
         </>
       )}
     </li>
@@ -64,7 +66,7 @@ function Correlation({ record }: { record: KernelCorrelation }) {
     <li>
       Attempt: <Reference value={record.attempt} />; workspace reference:{" "}
       <Reference value={record.workspaceReference} />; candidate head:{" "}
-      <code>{fact(record.candidateHead)}</code>; candidate scope:{" "}
+      <Reference value={record.candidateHead} />; candidate scope:{" "}
       <Reference value={record.candidateScope} />; runtime handle:{" "}
       {record.runtimeHandlePresent ? "present, hidden" : "unavailable"}.
     </li>
@@ -196,6 +198,9 @@ export default function KernelLineage({
     (row) => row?.status === "review_unknown",
   ).length;
   const otherPending = pending.length - ownerDecisions - uncertainReviews;
+  const omittedDecisions = snapshot.decisions.filter(
+    (row) => row === null,
+  ).length;
   return (
     <>
       {visible && (
@@ -215,7 +220,9 @@ export default function KernelLineage({
               <strong>Attention in this sample:</strong>{" "}
               {ownerDecisions
                 ? `Pending owner-decision records: ${ownerDecisions}. `
-                : "No pending owner decision reported here. "}
+                : "No pending owner decision in the readable records. "}
+              {omittedDecisions > 0 &&
+                `Unreadable decision records: ${omittedDecisions}. Their status and applicability are unavailable. `}
               {uncertainReviews > 0 &&
                 `Pending review records with an unknown outcome: ${uncertainReviews}. `}
               {otherPending > 0 &&

@@ -148,6 +148,9 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
   }, []);
 
   const pending = activity === "refresh";
+  const staleResources =
+    view?.facts?.resources.filter((resource) => resource.freshness === "stale")
+      .length ?? 0;
   const canRefresh =
     view !== null &&
     view.status !== "unconfigured" &&
@@ -206,6 +209,12 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
                 : "Observed inventory"}
               : {view.facts.resource_count} resources, {view.facts.source_count}{" "}
               sources, {view.facts.discovery_count} discoveries.
+            </p>
+          )}
+          {staleResources > 0 && (
+            <p>
+              Resources reported stale at the last observation: {staleResources}{" "}
+              in the displayed sample.
             </p>
           )}
         </>
