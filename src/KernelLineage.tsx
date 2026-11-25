@@ -237,6 +237,12 @@ export default function KernelLineage({
                 "Kernel progress has a recorded gap. "}
               {snapshot.history === "unknown" &&
                 "Kernel progress continuity is unknown. "}
+              {(snapshot.authorityCutoff === "expired" ||
+                snapshot.authorityCutoff === "revoked") &&
+                `Kernel reported work authority ${snapshot.authorityCutoff} in this sample. `}
+              {(snapshot.authorityCutoff === "unknown" ||
+                snapshot.authorityCutoff == null) &&
+                "Kernel work-authority cutoff is unknown. "}
               This is not a complete action list or a grant to act.
             </p>
           )}

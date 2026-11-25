@@ -25,11 +25,18 @@ const CHUNK_LIMIT = 16 * 1024;
 
 export class SnapshotChanged extends Error {}
 export class InvalidOwnerResponse extends Error {}
-export class UnsupportedKernelSnapshotVersion extends InvalidOwnerResponse {}
+class UnsupportedKernelSnapshotVersion extends InvalidOwnerResponse {}
 class OwnerChannelUnavailable extends Error {}
 
 export type KernelSnapshotStatus =
   "ready" | "unavailable" | "disconnected" | "unsupported";
+const cutoffOrder = [
+  "not-expired-observed",
+  "unknown",
+  "expired",
+  "revoked",
+] as const;
+export type KernelAuthorityCutoff = (typeof cutoffOrder)[number];
 
 export type KernelDecision = {
   source: string;
@@ -82,10 +89,13 @@ function checkSnapshotVersion(value: unknown) {
   }
 }
 
-function snapshotEnvelope(frame: Buffer) {
+function snapshotEnvelope(frame: Buffer, includeSnapshotVersion = false) {
   const value = payload(frame);
   checkSnapshotVersion(value);
-  return record(value, ["version", "ok", "result"]);
+  const envelope = record(value, ["version", "ok", "result"]);
+  if (includeSnapshotVersion && envelope.version === 1 && envelope.ok === true)
+    checkSnapshotVersion(envelope.result);
+  return envelope;
 }
 
 // Kernel's domain identifiers use Python str.strip(): NEL and these C0
@@ -158,6 +168,7 @@ export function createLocalOwnerTransport(
   }
   let busy = false;
   let closed = false;
+  let snapshotVersionUnsupported = false;
   const supported = (name: string) =>
     operations === null ? name === "proposal-chunk" : operations.includes(name);
   // Snapshot and events are known reads of the original owner-served protocol.
@@ -301,6 +312,8 @@ export function createLocalOwnerTransport(
         error instanceof UnsupportedOwnerPayload
       )
         throw error;
+      if (error instanceof UnsupportedKernelSnapshotVersion)
+        snapshotVersionUnsupported = true;
       close();
       if (
         error instanceof OwnerChannelUnavailable ||
@@ -388,6 +401,7 @@ export function createLocalOwnerTransport(
     close,
     snapshotSupported,
     snapshotAvailable: () => snapshotSupported && !closed && !socket.destroyed,
+    snapshotVersionUnsupported: () => snapshotVersionUnsupported,
     async readSnapshot(selection?: {
       page: number;
       epoch: string;
@@ -436,6 +450,8 @@ export function createLocalOwnerTransport(
           | undefined;
         const startPage = selection?.page ?? 0;
         let nextPage: number | null = null;
+        // A stricter sampled cutoff is never hidden by a later page.
+        let cutoffIndex = 0;
         for (
           let page = startPage;
           page < startPage + 8 && page <= 1000000;
@@ -445,9 +461,7 @@ export function createLocalOwnerTransport(
           const frame = await sample(
             requestFrame({ version: 1, action: "snapshot", page }),
           );
-          const envelope = snapshotEnvelope(frame);
-          if (envelope.version === 1 && envelope.ok === true)
-            checkSnapshotVersion(envelope.result);
+          const envelope = snapshotEnvelope(frame, true);
           const snapshot = record(envelope.result, [
             "version",
             "producer",
@@ -497,6 +511,18 @@ export function createLocalOwnerTransport(
             BigInt(position.sequence) > 9223372036854775807n
           )
             throw new Error("Invalid snapshot");
+          const authority = snapshot.authority;
+          const cutoff =
+            authority && typeof authority === "object" && "cutoff" in authority
+              ? authority.cutoff
+              : undefined;
+          const observedCutoff = cutoffOrder.findIndex(
+            (value) => value === cutoff,
+          );
+          cutoffIndex = Math.max(
+            cutoffIndex,
+            observedCutoff === -1 ? 1 : observedCutoff,
+          );
           const current = {
             epoch: snapshot.producer,
             sequence: String(position.sequence),
@@ -887,6 +913,7 @@ export function createLocalOwnerTransport(
           sequence: identity.sequence,
           revision: identity.revision,
           specDigest: identity.specDigest,
+          authorityCutoff: cutoffOrder[cutoffIndex] ?? "unknown",
           status: identity.status,
           startPage,
           nextPage,
@@ -1005,7 +1032,7 @@ export function createLocalOwnerTransport(
           requestFrame({ version: 1, action: "snapshot" }),
           RESPONSE_LIMIT,
         );
-        const envelope = record(payload(frame), ["version", "ok", "result"]);
+        const envelope = snapshotEnvelope(frame, true);
         const snapshot = record(envelope.result, [
           "version",
           "producer",

@@ -647,13 +647,9 @@ it.skipIf(!existsSync(chrome))(
       const sessionCheckUrl = "/api/kernel/session-check?view=snapshot";
       const sessionCheckPath = /\/api\/kernel\/session-check\?view=snapshot$/;
       let snapshotStatus = "ready";
-      await page.route(sessionCheckPath, async (route) => {
-        const response = await route.fetch();
-        await route.fulfill({
-          response,
-          json: { ...(await response.json()), snapshotStatus },
-        });
-      });
+      await page.route(sessionCheckPath, (route) =>
+        route.fulfill({ json: { authenticated: true, snapshotStatus } }),
+      );
       const laterRequest = Promise.withResolvers();
       const releaseLaterRequest = Promise.withResolvers();
       await page.route("**/api/kernel/snapshot", async (route) => {
@@ -685,6 +681,7 @@ it.skipIf(!existsSync(chrome))(
               nextPage: { 0: 3, 3: 8, 8: 10 }[pageNumber] ?? null,
               status: "active",
               history: pageNumber === 3 ? "unknown" : "gap",
+              authorityCutoff: pageNumber === 3 ? "expired" : "unknown",
               counts: {
                 work_units: { sampled: pageNumber ? 1 : 24, total: 25 },
               },
@@ -835,6 +832,9 @@ it.skipIf(!existsSync(chrome))(
         .waitFor();
       await page.getByText(/Unreadable decision records: 1\./).waitFor();
       await page.getByText(/Kernel progress continuity is unknown/).waitFor();
+      await page
+        .getByText(/Kernel reported work authority expired in this sample/)
+        .waitFor();
       await lineage.press("Enter");
       await page.getByText("work_units: 25 total; 1 sampled").waitFor();
       await page

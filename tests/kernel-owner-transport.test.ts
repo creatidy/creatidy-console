@@ -311,6 +311,7 @@ it("reads a bounded snapshot without exposing command data", async () => {
     sequence: "3",
     revision: "4",
     specDigest: "b".repeat(64),
+    authorityCutoff: "unknown",
     startPage: 0,
     nextPage: null,
     status: "active",
@@ -334,6 +335,26 @@ it("reads a bounded snapshot without exposing command data", async () => {
   expect(channel.snapshotAvailable()).toBe(false);
   expect(requests).toHaveLength(1);
 });
+
+it.each([
+  ["expired", "expired"],
+  ["revoked", "revoked"],
+  ["not-expired-observed", "not-expired-observed"],
+  ["unknown", "unknown"],
+  [["expired"], "unknown"],
+])(
+  "projects only a recognized sampled authority cutoff (%j)",
+  async (cutoff, expected) => {
+    const item = { ...snapshot(), authority: { cutoff, observed_at: 5 } };
+    const { client } = await pair((socket) => socket.write(response(item)));
+    const result = await createLocalOwnerTransport(
+      client,
+      "program",
+    ).readSnapshot();
+    expect(result.authorityCutoff).toBe(expected);
+    expect(result).not.toHaveProperty("authority");
+  },
+);
 
 it("rejects inconsistent snapshot scope or coverage", async () => {
   const wrong = snapshot();
@@ -1594,6 +1615,7 @@ it.each(["kilo-pull", "codex", "kilo-pull+codex"])(
 );
 
 it.each([
+  { field: "version", value: 2 },
   ...enumTypes("active").map((value) => ({ field: "status", value })),
   ...enumTypes("codex").map((value) => ({ field: "harness", value })),
   { field: "trust", value: ["trusted_development"] },
@@ -1604,7 +1626,7 @@ it.each([
 ])(
   "rejects malformed approval evidence $field = $value before review or dispatch",
   async ({ field, value }) => {
-    const isSnapshot = field === "status";
+    const isSnapshot = field === "status" || field === "version";
     const profile = {
       ...JSON.parse(canonicalProfile),
       ...(isSnapshot ? {} : { [field]: value }),
@@ -1622,7 +1644,8 @@ it.each([
         socket.write(
           response({
             ...revisionSnapshot,
-            status: isSnapshot ? value : "active",
+            status: "active",
+            ...(isSnapshot ? { [field]: value } : {}),
             program_revision: 1,
             spec_digest: "a".repeat(64),
           }),
@@ -1645,6 +1668,9 @@ it.each([
       readProposal: channel.readProposal,
       readApprovalScope: channel.readApprovalScope,
       readRevision: channel.readRevision,
+      readSnapshot: channel.readSnapshot,
+      snapshotAvailable: channel.snapshotAvailable,
+      snapshotVersionUnsupported: channel.snapshotVersionUnsupported,
       canSend: channel.canSend,
       sendCommand: channel.sendCommand,
       close: channel.close,
@@ -1652,6 +1678,7 @@ it.each([
         return channel.approvalSupported;
       },
     });
+    if (field === "version") await app.listen({ host: "127.0.0.1", port: 0 });
     const auth = await loginOwner(app, headers);
     const review = await app.inject({
       method: "POST",
@@ -1662,6 +1689,24 @@ it.each([
     expect(review.statusCode, review.body).toBe(503);
     expect(review.json()).not.toHaveProperty("review");
     expect(client.destroyed).toBe(true);
+    if (field === "version") {
+      const status = await app.inject({
+        method: "GET",
+        url: "/api/kernel/session-check",
+        headers: auth,
+      });
+      expect(status.json()).toEqual({
+        authenticated: true,
+        snapshotStatus: "unsupported",
+      });
+      const read = await app.inject({
+        method: "POST",
+        url: "/api/kernel/snapshot",
+        headers: auth,
+        payload: {},
+      });
+      expect(read.json()).toEqual({ status: "unsupported" });
+    }
     const command = await app.inject({
       method: "POST",
       url: "/api/kernel/owner",
@@ -2109,6 +2154,7 @@ it.each([
       readProposal: transport.readProposal,
       readSnapshot: transport.readSnapshot,
       snapshotAvailable: transport.snapshotAvailable,
+      snapshotVersionUnsupported: transport.snapshotVersionUnsupported,
       close: transport.close,
     });
     await app.listen({ host: "127.0.0.1", port: 0 });
