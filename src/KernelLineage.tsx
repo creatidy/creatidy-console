@@ -17,16 +17,18 @@ function Reference({ value }: { value: string | null | undefined }) {
   const exact =
     value == null
       ? "unavailable"
-      : JSON.stringify(value).replace(/[\p{White_Space}\p{Cf}]/gu, (char) =>
-          char === " "
-            ? char
-            : char
-                .split("")
-                .map(
-                  (unit) =>
-                    `\\u${unit.charCodeAt(0).toString(16).padStart(4, "0")}`,
-                )
-                .join(""),
+      : JSON.stringify(value).replace(
+          /[\p{White_Space}\p{Cf}\p{Default_Ignorable_Code_Point}]/gu,
+          (char) =>
+            char === " "
+              ? char
+              : char
+                  .split("")
+                  .map(
+                    (unit) =>
+                      `\\u${unit.charCodeAt(0).toString(16).padStart(4, "0")}`,
+                  )
+                  .join(""),
         );
   return <code className="kernel-reference">{exact}</code>;
 }
@@ -216,8 +218,8 @@ export default function KernelLineage({
               "No Program in this scope."
             ) : (
               <>
-                Program status: <strong>{snapshot.status}</strong>; revision:{" "}
-                <code>{snapshot.revision}</code>.
+                Program status: <strong>{snapshot.status}</strong>; observed
+                aggregate revision: <code>{snapshot.revision}</code>.
               </>
             )}
           </p>
@@ -257,8 +259,9 @@ export default function KernelLineage({
         {visible ? (
           <>
             <p>
-              Scope: <Reference value={snapshot.scope} />; Program specification
-              SHA-256: <code>{fact(snapshot.specDigest)}</code>.
+              Scope: <Reference value={snapshot.scope} />; current specification
+              SHA-256 of the sampled Program:{" "}
+              <code>{fact(snapshot.specDigest)}</code>.
             </p>
             <p>
               Projection epoch: <code>{snapshot.epoch}</code>; sequence:{" "}
@@ -288,6 +291,10 @@ export default function KernelLineage({
               Attempt links are not candidate verdicts. This snapshot does not
               bind a review result to the candidate shown or verify current
               Forgejo state or external effect settlement.
+            </p>
+            <p>
+              The snapshot does not report the specification revision or digest
+              under which each attempt ran.
             </p>
             <LineageRecords snapshot={snapshot} />
             <p>

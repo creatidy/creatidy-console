@@ -692,6 +692,7 @@ it.skipIf(!existsSync(chrome))(
               attempts: [
                 ["Attempt A", hostile, "prepared", "synthetic-actor"],
                 ["Attempt  A", hostile, "prepared", "synthetic-actor"],
+                ["Attempt A\u034f", hostile, "prepared", "synthetic-actor"],
                 ["Attempt-B", "out-of-window", "prepared", "synthetic-actor"],
               ],
               decisions:
@@ -718,6 +719,13 @@ it.skipIf(!existsSync(chrome))(
                         applicability: "historical",
                         attempt: "Attempt A",
                         decisionId: "historical-decision",
+                      },
+                      {
+                        source: "product-review",
+                        status: "owner_decision_needed",
+                        applicability: "historical",
+                        attempt: "Attempt A\u034f",
+                        decisionId: "distinct-invisible-id-decision",
                       },
                       ...["Attempt A", "Attempt  A"].map((attempt) => ({
                         source: "served-command",
@@ -776,6 +784,15 @@ it.skipIf(!existsSync(chrome))(
       await page.getByText(/Kernel progress has a recorded gap/).waitFor();
       await lineage.press("Enter");
       await page.getByText('"exact-decision"', { exact: true }).waitFor();
+      await page.getByText(/observed aggregate revision: 4/).waitFor();
+      await page
+        .getByText(/current specification SHA-256 of the sampled Program/)
+        .waitFor();
+      await page
+        .getByText(
+          /does not report the specification revision or digest under which each attempt ran/,
+        )
+        .waitFor();
       const linkedUnit = page
         .getByRole("listitem")
         .filter({ hasText: /^Work unit / });
@@ -793,6 +810,7 @@ it.skipIf(!existsSync(chrome))(
         linkedAttempts.nth(index).locator(":scope > code").first();
       expect(await id(0).textContent()).toBe('"Attempt A"');
       expect(await id(1).textContent()).toBe('"Attempt  A"');
+      expect(await id(2).textContent()).toBe('"Attempt A\\u034f"');
       expect(
         await id(1).evaluate((node) => getComputedStyle(node).whiteSpace),
       ).toBe("break-spaces");
@@ -802,7 +820,13 @@ it.skipIf(!existsSync(chrome))(
       expect(await linkedAttempts.nth(1).textContent()).not.toContain(
         '"exact-decision"',
       );
-      for (const row of await linkedAttempts.all()) {
+      expect(await linkedAttempts.nth(0).textContent()).not.toContain(
+        '"distinct-invisible-id-decision"',
+      );
+      expect(await linkedAttempts.nth(2).textContent()).toContain(
+        '"distinct-invisible-id-decision"',
+      );
+      for (const row of (await linkedAttempts.all()).slice(0, 2)) {
         expect(await row.textContent()).toContain(
           'Recorded command key: "shared-command-key"',
         );
