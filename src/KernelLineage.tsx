@@ -13,22 +13,13 @@ function fact(value: string | null | undefined) {
 }
 
 function Reference({ value }: { value: string | null | undefined }) {
-  // Quoted form marks boundaries and makes tabs, line breaks and invisible characters explicit.
+  // ASCII-only JSON keeps visually equivalent Unicode spellings distinguishable.
   const exact =
     value == null
       ? "unavailable"
       : JSON.stringify(value).replace(
-          /[\p{White_Space}\p{Cf}\p{Default_Ignorable_Code_Point}]/gu,
-          (char) =>
-            char === " "
-              ? char
-              : char
-                  .split("")
-                  .map(
-                    (unit) =>
-                      `\\u${unit.charCodeAt(0).toString(16).padStart(4, "0")}`,
-                  )
-                  .join(""),
+          /[^\x20-\x7e]/g,
+          (unit) => `\\u${unit.charCodeAt(0).toString(16).padStart(4, "0")}`,
         );
   return <code className="kernel-reference">{exact}</code>;
 }

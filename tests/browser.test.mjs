@@ -693,6 +693,8 @@ it.skipIf(!existsSync(chrome))(
                 ["Attempt A", hostile, "prepared", "synthetic-actor"],
                 ["Attempt  A", hostile, "prepared", "synthetic-actor"],
                 ["Attempt A\u034f", hostile, "prepared", "synthetic-actor"],
+                ["Attempt \u00e9", hostile, "prepared", "synthetic-actor"],
+                ["Attempt e\u0301", hostile, "prepared", "synthetic-actor"],
                 ["Attempt-B", "out-of-window", "prepared", "synthetic-actor"],
               ],
               decisions:
@@ -727,6 +729,16 @@ it.skipIf(!existsSync(chrome))(
                         attempt: "Attempt A\u034f",
                         decisionId: "distinct-invisible-id-decision",
                       },
+                      ...[
+                        ["Attempt \u00e9", "composed-id-decision"],
+                        ["Attempt e\u0301", "decomposed-id-decision"],
+                      ].map(([attempt, decisionId]) => ({
+                        source: "product-review",
+                        status: "owner_decision_needed",
+                        applicability: "historical",
+                        attempt,
+                        decisionId,
+                      })),
                       ...["Attempt A", "Attempt  A"].map((attempt) => ({
                         source: "served-command",
                         status: "rejected",
@@ -811,6 +823,8 @@ it.skipIf(!existsSync(chrome))(
       expect(await id(0).textContent()).toBe('"Attempt A"');
       expect(await id(1).textContent()).toBe('"Attempt  A"');
       expect(await id(2).textContent()).toBe('"Attempt A\\u034f"');
+      expect(await id(3).textContent()).toBe('"Attempt \\u00e9"');
+      expect(await id(4).textContent()).toBe('"Attempt e\\u0301"');
       expect(
         await id(1).evaluate((node) => getComputedStyle(node).whiteSpace),
       ).toBe("break-spaces");
@@ -826,6 +840,14 @@ it.skipIf(!existsSync(chrome))(
       expect(await linkedAttempts.nth(2).textContent()).toContain(
         '"distinct-invisible-id-decision"',
       );
+      for (const [index, attached, excluded] of [
+        [3, "composed-id-decision", "decomposed-id-decision"],
+        [4, "decomposed-id-decision", "composed-id-decision"],
+      ]) {
+        const row = await linkedAttempts.nth(index).textContent();
+        expect(row).toContain(JSON.stringify(attached));
+        expect(row).not.toContain(JSON.stringify(excluded));
+      }
       for (const row of (await linkedAttempts.all()).slice(0, 2)) {
         expect(await row.textContent()).toContain(
           'Recorded command key: "shared-command-key"',
