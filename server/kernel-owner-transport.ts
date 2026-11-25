@@ -68,9 +68,13 @@ function record(value: unknown, keys: string[]): Record<string, unknown> {
   return item;
 }
 
-function payload(frame: Buffer): unknown {
+function payload(
+  frame: Buffer,
+  inspectVersion?: (value: unknown) => void,
+): unknown {
   return parseOwnerJson(
     new TextDecoder("utf-8", { fatal: true }).decode(frame.subarray(4)),
+    inspectVersion,
   );
 }
 
@@ -90,12 +94,21 @@ function checkSnapshotVersion(value: unknown) {
 }
 
 function snapshotEnvelope(frame: Buffer, includeSnapshotVersion = false) {
-  const value = payload(frame);
-  checkSnapshotVersion(value);
-  const envelope = record(value, ["version", "ok", "result"]);
-  if (includeSnapshotVersion && envelope.version === 1 && envelope.ok === true)
-    checkSnapshotVersion(envelope.result);
-  return envelope;
+  const value = payload(frame, (header) => {
+    checkSnapshotVersion(header);
+    if (
+      includeSnapshotVersion &&
+      header &&
+      typeof header === "object" &&
+      "version" in header &&
+      header.version === 1 &&
+      "ok" in header &&
+      header.ok === true &&
+      "result" in header
+    )
+      checkSnapshotVersion(header.result);
+  });
+  return record(value, ["version", "ok", "result"]);
 }
 
 // Kernel's domain identifiers use Python str.strip(): NEL and these C0

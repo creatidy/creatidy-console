@@ -2127,20 +2127,26 @@ async function loginOwner(
 it.each([
   [
     "future payload",
-    response({ version: 2, private: "synthetic-hidden" }),
+    response({ version: 2, private: { weight: 0.5, version: 1.5 } }),
     "unsupported",
   ],
-  [
-    "future envelope",
-    frame({ version: 2, other: "synthetic-hidden" }),
-    "unsupported",
-  ],
+  ["future envelope", frame({ version: 2, other: 0.25 }), "unsupported"],
   [
     "invalid version type",
     response({ ...snapshot(), version: "2" }),
     "disconnected",
   ],
   ["ordinary closure", null, "disconnected"],
+  [
+    "v1 fractional field",
+    response({ ...snapshot(), authority: { observed_at: 0.5 } }),
+    "disconnected",
+  ],
+  [
+    "ambiguous version",
+    Buffer.from([0, 0, 0, 25, ...Buffer.from('{"version":2,"version":1}')]),
+    "disconnected",
+  ],
 ] as const)(
   "distinguishes %s at the authenticated snapshot boundary",
   async (_name, bytes, status) => {

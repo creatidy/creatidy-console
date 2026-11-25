@@ -310,7 +310,10 @@ export function classifyLocalOwnerResult(
   return unknown;
 }
 
-export function parseOwnerJson(text: string): unknown {
+export function parseOwnerJson(
+  text: string,
+  inspectVersion?: (value: unknown) => void,
+): unknown {
   const syntax = parse(text, { mode: "json" });
   for (const { node, phase } of iterator(syntax)) {
     if (phase !== "enter" || node.type !== "Object") continue;
@@ -329,16 +332,30 @@ export function parseOwnerJson(text: string): unknown {
       context?: { source?: string },
     ) => unknown,
   ) => unknown;
-  return parseNative(text, (_key, item, context) => {
-    if (typeof item !== "number") return item;
-    const raw = context?.source;
+  function producerInteger(raw?: string) {
     if (!raw || !/^-?(?:0|[1-9]\d*)$/.test(raw) || raw.length > 128)
-      throw new Error("Unsupported producer number");
+      return undefined;
     const number = BigInt(raw);
     return number >= BigInt(Number.MIN_SAFE_INTEGER) &&
       number <= BigInt(Number.MAX_SAFE_INTEGER)
       ? Number(number)
       : number;
+  }
+  // Version diagnosis may reject a frame before v1 field rules apply. Only
+  // the strict decode below may supply data to its caller.
+  if (inspectVersion)
+    inspectVersion(
+      parseNative(text, (key, item, context) =>
+        key === "version" && typeof item === "number"
+          ? producerInteger(context?.source)
+          : item,
+      ),
+    );
+  return parseNative(text, (_key, item, context) => {
+    if (typeof item !== "number") return item;
+    const number = producerInteger(context?.source);
+    if (number === undefined) throw new Error("Unsupported producer number");
+    return number;
   });
 }
 
