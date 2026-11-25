@@ -135,6 +135,12 @@ function LineageRecords({ snapshot }: { snapshot: Snapshot }) {
               Work unit <Reference value={id} />: {status}; active attempt:{" "}
               <Reference value={active} />; recorded satisfaction reference:{" "}
               <Reference value={satisfaction} />.
+              {active != null &&
+                !unitAttempts.some(([attempt]) => attempt === active) && (
+                  <p>
+                    The active attempt record is unavailable in this sample.
+                  </p>
+                )}
               {unitAttempts.length ? (
                 <ul>{unitAttempts.map(attemptFact)}</ul>
               ) : (
@@ -227,6 +233,10 @@ export default function KernelLineage({
                 `Pending review records with an unknown outcome: ${uncertainReviews}. `}
               {otherPending > 0 &&
                 `Other pending decision records: ${otherPending}. `}
+              {snapshot.history === "gap" &&
+                "Kernel progress has a recorded gap. "}
+              {snapshot.history === "unknown" &&
+                "Kernel progress continuity is unknown. "}
               This is not a complete action list or a grant to act.
             </p>
           )}

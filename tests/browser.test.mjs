@@ -683,12 +683,12 @@ it.skipIf(!existsSync(chrome))(
               startPage: pageNumber,
               nextPage: { 0: 3, 3: 8, 8: 10 }[pageNumber] ?? null,
               status: "active",
-              history: "gap",
+              history: pageNumber === 3 ? "unknown" : "gap",
               counts: {
                 work_units: { sampled: pageNumber ? 1 : 24, total: 25 },
               },
               workUnits: [
-                [hostile, "pending", "Attempt A", "satisfaction-id"],
+                [hostile, "pending", "Attempt B", "satisfaction-id"],
                 null,
               ],
               attempts: [
@@ -756,6 +756,7 @@ it.skipIf(!existsSync(chrome))(
         "work_units: 25 total; 24 sampled",
       );
       expect(await workUnitCoverage.isVisible()).toBe(false);
+      await page.getByText(/Kernel progress has a recorded gap/).waitFor();
       await lineage.press("Enter");
       await page.getByText('"exact-decision"', { exact: true }).waitFor();
       const linkedUnit = page
@@ -763,6 +764,9 @@ it.skipIf(!existsSync(chrome))(
         .filter({ hasText: /^Work unit / });
       expect(await linkedUnit.textContent()).toContain("exact-decision");
       expect(await linkedUnit.textContent()).toContain("satisfaction-id");
+      await linkedUnit
+        .getByText("The active attempt record is unavailable in this sample.")
+        .waitFor();
       expect(await linkedUnit.textContent()).not.toContain(
         "unmatched-decision",
       );
@@ -810,6 +814,7 @@ it.skipIf(!existsSync(chrome))(
         .getByText(/No pending owner decision in the readable records/)
         .waitFor();
       await page.getByText(/Unreadable decision records: 1\./).waitFor();
+      await page.getByText(/Kernel progress continuity is unknown/).waitFor();
       await lineage.press("Enter");
       await page.getByText("work_units: 25 total; 1 sampled").waitFor();
       await page
@@ -818,7 +823,7 @@ it.skipIf(!existsSync(chrome))(
       expect
         .soft(
           await page
-            .getByText(/Progress continuity for this descriptor: gap/)
+            .getByText(/Progress continuity for this descriptor: unknown/)
             .count(),
         )
         .toBe(1);
