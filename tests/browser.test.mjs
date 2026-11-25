@@ -644,7 +644,8 @@ it.skipIf(!existsSync(chrome))(
       const visitedPages = [];
       let busyLaterPage = true;
       let holdLaterPage = true;
-      const sessionCheckPath = "**/api/kernel/session-check";
+      const sessionCheckUrl = "/api/kernel/session-check?view=snapshot";
+      const sessionCheckPath = /\/api\/kernel\/session-check\?view=snapshot$/;
       let snapshotStatus = "ready";
       await page.route(sessionCheckPath, async (route) => {
         const response = await route.fetch();
@@ -744,6 +745,25 @@ it.skipIf(!existsSync(chrome))(
         });
       });
       expect(snapshotReads).toBe(0);
+      snapshotStatus = "disconnected";
+      await page.clock.fastForward(10000);
+      await page
+        .getByText("The configured Kernel snapshot channel is closed.")
+        .waitFor();
+      await switchVisibility("hidden");
+      snapshotStatus = "unsupported";
+      await switchVisibility("visible");
+      await page
+        .getByText(/Kernel snapshot contract version is unsupported/)
+        .waitFor();
+      snapshotStatus = "ready";
+      await page.clock.fastForward(10000);
+      await page.getByText(/No snapshot requested/).waitFor();
+      await page.evaluate(() =>
+        Reflect.deleteProperty(document, "visibilityState"),
+      );
+      expect(snapshotReads).toBe(0);
+      expect(await page.getByText("Sampled work units").count()).toBe(0);
       await page.getByRole("button", { name: "Read snapshot" }).click();
       await page.getByText(/Pending owner-decision records: 1\./).waitFor();
       await page
@@ -878,11 +898,11 @@ it.skipIf(!existsSync(chrome))(
         name: "Previous pages",
       });
       await previousPages.focus();
-      await page.evaluate(() => {
+      await page.evaluate((url) => {
         const original = window.fetch.bind(window);
         let hold = true;
         window.fetch = (...args) => {
-          if (hold && args[0] === "/api/kernel/session-check") {
+          if (hold && args[0] === url) {
             hold = false;
             return Promise.resolve({
               ok: true,
@@ -896,7 +916,7 @@ it.skipIf(!existsSync(chrome))(
           }
           return original(...args);
         };
-      });
+      }, sessionCheckUrl);
       await page.clock.fastForward(10000);
       await page.waitForFunction(
         () => typeof window.releaseOldKernelCheck === "function",
@@ -943,7 +963,7 @@ it.skipIf(!existsSync(chrome))(
       expect(await lineage.count()).toBe(0);
       await page.getByRole("heading", { name: "Your console" }).waitFor();
       snapshotStatus = "ready";
-      await page.route("**/api/kernel/session-check", (route) =>
+      await page.route(sessionCheckPath, (route) =>
         route.fulfill({ status: 401, json: { error: "Login required" } }),
       );
       await page.getByRole("button", { name: "Read snapshot" }).click();
@@ -951,7 +971,7 @@ it.skipIf(!existsSync(chrome))(
       expect(
         await page.getByText("work_units: 25 total; 24 sampled").count(),
       ).toBe(0);
-      await page.unroute("**/api/kernel/session-check");
+      await page.unroute(sessionCheckPath);
       await page.unroute("**/api/kernel/snapshot");
       await page
         .getByLabel("Owner password", { exact: true })

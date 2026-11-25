@@ -14,6 +14,8 @@ const capabilityMessages: Record<KernelSnapshotStatus, string> = {
 };
 const hiddenMessage =
   "Snapshot hidden. Request another snapshot to view current data.";
+// Distinguish independent Console view checks without changing admission.
+const sessionCheckUrl = "/api/kernel/session-check?view=snapshot";
 
 function unavailableStatus(
   value: unknown,
@@ -55,27 +57,20 @@ export default function KernelSnapshotPanel({
       setVisible(false);
       setLoading(false);
     };
-    const visibility = () => {
-      if (document.visibilityState !== "visible") {
-        if (hasSnapshot.current || active.current) setMessage(hiddenMessage);
-        hide();
-      }
-    };
-    document.addEventListener("visibilitychange", visibility);
-    const timer = setInterval(async () => {
-      if (
-        document.visibilityState !== "visible" ||
-        !hasSnapshot.current ||
-        active.current
-      )
-        return;
+    let checking: AbortController | null = null;
+    const check = async () => {
+      if (document.visibilityState !== "visible" || active.current) return;
       const current = generation.current;
       const controller = new AbortController();
-      active.current = controller;
+      active.current = checking = controller;
       const deadline = setTimeout(() => controller.abort(), 5000);
       setVisible(false);
+      const unconfirmed = () => {
+        if (hasSnapshot.current) setMessage(hiddenMessage);
+        hide();
+      };
       try {
-        const response = await fetch("/api/kernel/session-check", {
+        const response = await fetch(sessionCheckUrl, {
           cache: "no-store",
           signal: controller.signal,
         });
@@ -87,31 +82,42 @@ export default function KernelSnapshotPanel({
           const session = response.ok ? await response.json() : null;
           if (current !== generation.current) return;
           if (controller.signal.aborted || session?.authenticated !== true) {
-            setMessage(hiddenMessage);
-            hide();
+            unconfirmed();
           } else if (unavailableStatus(session.snapshotStatus)) {
             setCapability(session.snapshotStatus);
             setMessage(null);
             hide();
           } else if (session.snapshotStatus !== "ready") {
-            setMessage(hiddenMessage);
-            hide();
+            unconfirmed();
           } else if (
             document.visibilityState === "visible" &&
             !controller.signal.aborted
-          )
-            setVisible(true);
+          ) {
+            setCapability("ready");
+            setVisible(hasSnapshot.current);
+          }
         }
       } catch {
-        if (current === generation.current) {
-          setMessage(hiddenMessage);
-          hide();
-        }
+        if (current === generation.current) unconfirmed();
       } finally {
         clearTimeout(deadline);
         if (active.current === controller) active.current = null;
+        if (checking === controller) checking = null;
       }
-    }, 10000);
+    };
+    const visibility = () => {
+      if (document.visibilityState === "visible") void check();
+      else {
+        if (
+          hasSnapshot.current ||
+          (active.current && active.current !== checking)
+        )
+          setMessage(hiddenMessage);
+        hide();
+      }
+    };
+    document.addEventListener("visibilitychange", visibility);
+    const timer = setInterval(check, 10000);
     return () => {
       clearInterval(timer);
       document.removeEventListener("visibilitychange", visibility);
@@ -178,7 +184,7 @@ export default function KernelSnapshotPanel({
       }
       clearTimeout(deadline);
       deadline = setTimeout(() => controller.abort(), 5000);
-      const session = await fetch("/api/kernel/session-check", {
+      const session = await fetch(sessionCheckUrl, {
         cache: "no-store",
         signal: controller.signal,
       });
