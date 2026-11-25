@@ -35,13 +35,14 @@
 
 ## Knowledge acquisition and automated research
 
-- Within an approved research task, agents may browse, search the web, scrape,
-  crawl, retrieve automatically, index and extract structured information from
-  publicly accessible sources. Research may cover public user-interface
-  patterns, dashboards, observability systems, operator workflows, accessibility
-  guidance, technical specifications and competing products. Routine research
-  needs no additional owner approval and no express publisher permission where
-  such permission is not legally required.
+- When public research is within the scope of an approved development task,
+  whether standalone or part of implementation, agents may browse, search the
+  web, scrape, crawl, retrieve automatically, index and extract structured
+  information from publicly accessible sources. Research may cover public
+  user-interface patterns, dashboards, observability systems, operator
+  workflows, accessibility guidance, technical specifications and competing
+  products. Routine research needs no additional owner approval and no express
+  publisher permission where such permission is not legally required.
 - Record factual knowledge, techniques, design principles, technical details and
   permitted examples in structured research notes and knowledge bases with
   source provenance. Research acquisition is distinct from copying or
