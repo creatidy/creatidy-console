@@ -448,6 +448,10 @@ export function createLocalOwnerTransport(
         const counts: Record<string, { sampled: number; total: number }> = {};
         const workUnits: ((string | null)[] | null)[] = [];
         const attempts: ((string | null)[] | null)[] = [];
+        const sampledIds = {
+          work_units: new Set<string>(),
+          attempts: new Set<string>(),
+        };
         const decisions: (KernelDecision | null)[] = [];
         const correlations: (KernelCorrelation | null)[] = [];
         let commandCoverage:
@@ -631,6 +635,10 @@ export function createLocalOwnerTransport(
                   )
                 )
                   throw new Error("Invalid snapshot record");
+                const ids = sampledIds[name];
+                if (ids.has(value[0]))
+                  throw new Error("Ambiguous snapshot record");
+                ids.add(value[0]);
                 return value as (string | null)[];
               }
               const omitted = record(value, [

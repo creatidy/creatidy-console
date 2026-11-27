@@ -488,6 +488,55 @@ it("exposes bounded work and attempt facts while marking oversized records", asy
   channel.close();
 });
 
+it.each(["work_units", "attempts"] as const)(
+  "rejects ambiguous %s across pages before projecting decision or candidate lineage",
+  async (duplicate) => {
+    const { client, requests } = await pair((socket, request) => {
+      const page = Number(request.page);
+      const item = { ...snapshot(), page };
+      for (const name of ["work_units", "attempts"] as const) {
+        item[name] = Array.from({ length: page ? 1 : 8 }, (_, offset) => {
+          const index = page * 8 + offset;
+          const id = `${name}-${page && name === duplicate ? 0 : index}`;
+          return name === "work_units"
+            ? [id, "ready", null, null]
+            : [id, `work_units-${index}`, "running", "actor"];
+        });
+        item.coverage[name] = [page * 8, 9, page === 1];
+      }
+      if (!page) {
+        item.decisions = [
+          {
+            source: "product-review",
+            status: "owner_decision_needed",
+            applicability: "pending",
+            attempt: "attempts-0",
+            decision_id: "review-0",
+          },
+        ];
+        item.correlations = [
+          {
+            attempt: "attempts-0",
+            workspace_reference: null,
+            candidate_head: "candidate",
+            candidate_scope: null,
+            runtime_handle: null,
+          },
+        ];
+      }
+      for (const name of ["decisions", "correlations"])
+        item.coverage[name] = [page, 1, true];
+      socket.write(response(item));
+    });
+    const channel = createLocalOwnerTransport(client, "program");
+    await expect(channel.readSnapshot()).rejects.toThrow(
+      "invalid producer response",
+    );
+    expect(requests.map(({ page }) => page)).toEqual([0, 1]);
+    expect(client.destroyed).toBe(true);
+  },
+);
+
 it("keeps proposal reads available after producer-valid snapshot identifiers containing U+FEFF", async () => {
   const work = "\uFEFF";
   const attempt = "\u00a0\uFEFF\t";
