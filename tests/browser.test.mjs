@@ -652,6 +652,13 @@ it.skipIf(!existsSync(chrome))(
       );
       const laterRequest = Promise.withResolvers();
       const releaseLaterRequest = Promise.withResolvers();
+      const unknownDecision = {
+        source: "served-command",
+        status: "owner_decision_needed",
+        applicability: "unknown",
+        attempt: null,
+        commandId: "unmatched-owner-decision",
+      };
       await page.route("**/api/kernel/snapshot", async (route) => {
         snapshotReads++;
         const pageNumber = route.request().postDataJSON()?.page ?? 0;
@@ -697,56 +704,64 @@ it.skipIf(!existsSync(chrome))(
                 ["Attempt e\u0301", hostile, "prepared", "synthetic-actor"],
                 ["Attempt-B", "out-of-window", "prepared", "synthetic-actor"],
               ],
-              decisions:
-                pageNumber === 3
-                  ? [null]
-                  : [
-                      {
-                        source: "product-review",
-                        status: "owner_decision_needed",
-                        applicability: "pending",
-                        attempt: "Attempt A",
-                        decisionId: "exact-decision",
-                      },
-                      {
-                        source: "product-review-operation",
-                        status: "review_unknown",
-                        applicability: "pending",
-                        attempt: "attempt a",
-                        decisionId: "unmatched-decision",
-                      },
-                      {
-                        source: "product-review",
-                        status: "owner_decision_needed",
-                        applicability: "historical",
-                        attempt: "Attempt A",
-                        decisionId: "historical-decision",
-                      },
-                      {
-                        source: "product-review",
-                        status: "owner_decision_needed",
-                        applicability: "historical",
-                        attempt: "Attempt A\u034f",
-                        decisionId: "distinct-invisible-id-decision",
-                      },
-                      ...[
-                        ["Attempt \u00e9", "composed-id-decision"],
-                        ["Attempt e\u0301", "decomposed-id-decision"],
-                      ].map(([attempt, decisionId]) => ({
-                        source: "product-review",
-                        status: "owner_decision_needed",
-                        applicability: "historical",
-                        attempt,
-                        decisionId,
-                      })),
-                      ...["Attempt A", "Attempt  A"].map((attempt) => ({
-                        source: "served-command",
-                        status: "rejected",
-                        applicability: "historical",
-                        attempt,
-                        commandId: "shared-command-key",
-                      })),
-                    ],
+              decisions: { 3: [null], 8: [unknownDecision], 10: [] }[
+                pageNumber
+              ] ?? [
+                unknownDecision,
+                null,
+                {
+                  source: "product-review",
+                  status: "changes_requested",
+                  applicability: "pending",
+                  attempt: "Attempt A",
+                  decisionId: "changes-requested",
+                },
+                {
+                  source: "product-review",
+                  status: "owner_decision_needed",
+                  applicability: "pending",
+                  attempt: "Attempt A",
+                  decisionId: "exact-decision",
+                },
+                {
+                  source: "product-review-operation",
+                  status: "review_unknown",
+                  applicability: "pending",
+                  attempt: "attempt a",
+                  decisionId: "unmatched-decision",
+                },
+                {
+                  source: "product-review",
+                  status: "owner_decision_needed",
+                  applicability: "historical",
+                  attempt: "Attempt A",
+                  decisionId: "historical-decision",
+                },
+                {
+                  source: "product-review",
+                  status: "owner_decision_needed",
+                  applicability: "historical",
+                  attempt: "Attempt A\u034f",
+                  decisionId: "distinct-invisible-id-decision",
+                },
+                ...[
+                  ["Attempt \u00e9", "composed-id-decision"],
+                  ["Attempt e\u0301", "decomposed-id-decision"],
+                ].map(([attempt, decisionId]) => ({
+                  source: "product-review",
+                  status: "owner_decision_needed",
+                  applicability: "historical",
+                  attempt,
+                  decisionId,
+                })),
+                ...["Attempt A", "Attempt  A"].map((attempt) => ({
+                  source: "served-command",
+                  status: "rejected",
+                  applicability: "historical",
+                  attempt,
+                  commandId: "shared-command-key",
+                })),
+              ],
               correlations: [
                 {
                   attempt: "Attempt A",
@@ -793,6 +808,15 @@ it.skipIf(!existsSync(chrome))(
         "work_units: 25 total; 24 sampled",
       );
       expect(await workUnitCoverage.isVisible()).toBe(false);
+      const attention = page.locator(".snapshot-attention");
+      const mixed = await attention.innerText();
+      expect(mixed).toContain(
+        "Readable decision records with unknown applicability: 1.",
+      );
+      expect(mixed).toContain("Historical decision records: 6.");
+      expect(mixed).toContain("Other pending decision records: 1.");
+      expect(mixed).toContain("Unreadable decision records: 1.");
+      expect(mixed).not.toContain("No decision records");
       await page.getByText(/Kernel progress has a recorded gap/).waitFor();
       await lineage.press("Enter");
       await page.getByText('"exact-decision"', { exact: true }).waitFor();
@@ -855,7 +879,34 @@ it.skipIf(!existsSync(chrome))(
         await row.getByText(/Exact command correlation unavailable/).waitFor();
       }
       await page.getByText('"unmatched-decision"', { exact: true }).waitFor();
-      await page.getByText(/Oversized records omitted: 1 work units/).waitFor();
+      for (const [decisionId, classification] of [
+        ["exact-decision", "owner_decision_needed (applicability: pending)"],
+        [
+          "historical-decision",
+          "owner_decision_needed (applicability: historical)",
+        ],
+        ["changes-requested", "changes_requested (applicability: pending)"],
+        ["unmatched-decision", "review_unknown (applicability: pending)"],
+      ]) {
+        const item = page
+          .getByText(JSON.stringify(decisionId), { exact: true })
+          .locator("..");
+        expect(await item.innerText()).toContain(classification);
+      }
+      const unknownRow = page.getByRole("listitem").filter({
+        hasText: /^owner_decision_needed \(applicability: unknown\)/,
+      });
+      expect(await unknownRow.innerText()).toContain(
+        '"unmatched-owner-decision"',
+      );
+      expect(await linkedUnit.innerText()).not.toContain(
+        "unmatched-owner-decision",
+      );
+      await page
+        .getByText(
+          /Oversized records omitted: 1 work units, 0 attempts, 1 decisions/,
+        )
+        .waitFor();
       expect(await page.locator('a[href^="file:"]').count()).toBe(0);
       expect(
         await page
@@ -873,10 +924,10 @@ it.skipIf(!existsSync(chrome))(
       expect(snapshotReads).toBe(1);
       expect(await page.evaluate(() => window.ownerInjected)).toBeUndefined();
       await page.getByRole("button", { name: "Next pages" }).click();
-      await page
-        .getByText(/No pending owner decision in the readable records/)
-        .waitFor();
       await page.getByText(/Unreadable decision records: 1\./).waitFor();
+      expect(await attention.innerText()).not.toMatch(
+        /No decision records|unknown applicability:|Pending owner-decision records:/,
+      );
       await page.getByText(/Kernel progress continuity is unknown/).waitFor();
       await page
         .getByText(/Kernel reported work authority expired in this sample/)
@@ -932,10 +983,29 @@ it.skipIf(!existsSync(chrome))(
           await page
             .getByText(/Another snapshot read is in progress/)
             .waitFor();
-        } else
+        } else {
           await page
-            .getByText(/Showing up to eight pages starting at producer page/)
+            .getByText(
+              `Showing up to eight pages starting at producer page ${pageNumber}.`,
+            )
             .waitFor();
+          expect(
+            await lineage.evaluate((summary) => summary.parentElement.open),
+          ).toBe(false);
+          const reported = await attention.innerText();
+          if (pageNumber === 8) {
+            expect(reported).toContain(
+              "Readable decision records with unknown applicability: 1.",
+            );
+            expect(reported).not.toContain("No decision records");
+          } else {
+            expect(reported).toContain("No decision records in this sample.");
+            expect(reported).not.toContain("unknown applicability:");
+          }
+          expect(reported).not.toMatch(
+            /Pending owner-decision records:|Unreadable decision records:|Historical decision records:/,
+          );
+        }
         expect
           .soft(await page.evaluate(() => document.activeElement?.textContent))
           .toBe(button);

@@ -27,8 +27,8 @@ function Reference({ value }: { value: string | null | undefined }) {
 function Decision({ record }: { record: KernelDecision }) {
   return (
     <li>
-      <strong>{fact(record.status)}</strong> ({record.applicability}); source:{" "}
-      <code>{record.source}</code>; attempt:{" "}
+      <strong>{fact(record.status)}</strong> (applicability:{" "}
+      {record.applicability}); source: <code>{record.source}</code>; attempt:{" "}
       <Reference value={record.attempt} />.
       {record.decisionId !== undefined && (
         <>
@@ -110,7 +110,9 @@ function LineageRecords({ snapshot }: { snapshot: Snapshot }) {
             ))}
           </ul>
         ) : (
-          <p>No decision or outcome record sampled for this attempt.</p>
+          <p>
+            No readable decision or outcome matched this attempt in the sample.
+          </p>
         )}
       </li>
     );
@@ -187,19 +189,22 @@ export default function KernelLineage({
   snapshot: Snapshot;
   visible: boolean;
 }) {
-  const pending = snapshot.decisions.filter(
-    (row) => row?.applicability === "pending",
-  );
-  const ownerDecisions = pending.filter(
-    (row) => row?.status === "owner_decision_needed",
-  ).length;
-  const uncertainReviews = pending.filter(
-    (row) => row?.status === "review_unknown",
-  ).length;
-  const otherPending = pending.length - ownerDecisions - uncertainReviews;
-  const omittedDecisions = snapshot.decisions.filter(
-    (row) => row === null,
-  ).length;
+  let ownerDecisions = 0,
+    uncertainReviews = 0,
+    otherPending = 0;
+  let historical = 0,
+    unknown = 0,
+    unreadable = 0;
+  for (const row of snapshot.decisions) {
+    if (row === null) unreadable++;
+    else if (row.applicability === "unknown") unknown++;
+    else if (row.applicability === "historical") historical++;
+    else if (row.applicability === "pending") {
+      if (row.status === "owner_decision_needed") ownerDecisions++;
+      else if (row.status === "review_unknown") uncertainReviews++;
+      else otherPending++;
+    }
+  }
   return (
     <>
       {visible && (
@@ -214,31 +219,34 @@ export default function KernelLineage({
               </>
             )}
           </p>
-          {snapshot.status !== "absent" && (
-            <p className="snapshot-attention">
-              <strong>Attention in this sample:</strong>{" "}
-              {ownerDecisions
-                ? `Pending owner-decision records: ${ownerDecisions}. `
-                : "No pending owner decision in the readable records. "}
-              {omittedDecisions > 0 &&
-                `Unreadable decision records: ${omittedDecisions}. Their status and applicability are unavailable. `}
-              {uncertainReviews > 0 &&
-                `Pending review records with an unknown outcome: ${uncertainReviews}. `}
-              {otherPending > 0 &&
-                `Other pending decision records: ${otherPending}. `}
-              {snapshot.history === "gap" &&
-                "Kernel progress has a recorded gap. "}
-              {snapshot.history === "unknown" &&
-                "Kernel progress continuity is unknown. "}
-              {(snapshot.authorityCutoff === "expired" ||
-                snapshot.authorityCutoff === "revoked") &&
-                `Kernel reported work authority ${snapshot.authorityCutoff} in this sample. `}
-              {(snapshot.authorityCutoff === "unknown" ||
-                snapshot.authorityCutoff == null) &&
-                "Kernel work-authority cutoff is unknown. "}
-              This is not a complete action list or a grant to act.
-            </p>
-          )}
+          <p className="snapshot-attention">
+            <strong>Attention in this sample:</strong>{" "}
+            {snapshot.decisions.length === 0 &&
+              "No decision records in this sample. "}
+            {ownerDecisions > 0 &&
+              `Pending owner-decision records: ${ownerDecisions}. `}
+            {uncertainReviews > 0 &&
+              `Pending review records with an unknown outcome: ${uncertainReviews}. `}
+            {otherPending > 0 &&
+              `Other pending decision records: ${otherPending}. `}
+            {unknown > 0 &&
+              `Readable decision records with unknown applicability: ${unknown}. Whether they require action is unknown. `}
+            {unreadable > 0 &&
+              `Unreadable decision records: ${unreadable}. Their status and applicability are unavailable. `}
+            {historical > 0 &&
+              `Historical decision records: ${historical}. These are not pending. `}
+            {snapshot.history === "gap" &&
+              "Kernel progress has a recorded gap. "}
+            {snapshot.history === "unknown" &&
+              "Kernel progress continuity is unknown. "}
+            {(snapshot.authorityCutoff === "expired" ||
+              snapshot.authorityCutoff === "revoked") &&
+              `Kernel reported work authority ${snapshot.authorityCutoff} in this sample. `}
+            {(snapshot.authorityCutoff === "unknown" ||
+              snapshot.authorityCutoff == null) &&
+              "Kernel work-authority cutoff is unknown. "}
+            This is not a complete action list or a grant to act.
+          </p>
           <p>
             Showing up to eight pages starting at producer page{" "}
             {snapshot.startPage}.
