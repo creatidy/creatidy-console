@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
+  FORGEJO_ORIGIN,
+  forgejoSubjectRoutes,
+} from "../server/forgejo-navigation.ts";
+import {
   assembleLocalOwnerApprovalScope,
   assembleLocalOwnerProposal,
   MAX_PROPOSAL_BYTES,
@@ -102,6 +106,60 @@ function frames(items: unknown[]) {
 }
 
 describe("synthetic Kernel proposal chunks", () => {
+  it("projects exact Forgejo subjects only from a supported verified proposal", () => {
+    const sample = proposal();
+    const read = (changes: Partial<typeof subject>) => {
+      const exact = { ...subject, ...changes };
+      sample.drafts[0]!.evidence.subject = exact;
+      sample.dependencies[0]!.subject = exact;
+      sample.drafts[0]!.evidence.baseline_reference = `${FORGEJO_ORIGIN}/owner/repo/pulls/2`;
+      return assembleLocalOwnerProposal(
+        frames(chunks(Buffer.from(JSON.stringify(sample)))),
+        "program",
+      ).forgejoSubjects;
+    };
+    expect(read({ origin: FORGEJO_ORIGIN })).toEqual([
+      { repository: "owner/repo", issue: "1", base: subject.base },
+    ]);
+    expect(read({ origin: `${FORGEJO_ORIGIN.toUpperCase()}` })).toEqual([]);
+    expect(
+      read({ origin: "https://forgejo.creatidy.com.example.test" }),
+    ).toEqual([]);
+    expect(read({ origin: FORGEJO_ORIGIN, repository: "owner/.." })).toEqual(
+      [],
+    );
+    expect(read({ origin: FORGEJO_ORIGIN, base: "a".repeat(64) })).toEqual([
+      { repository: "owner/repo", issue: "1", base: null },
+    ]);
+  });
+
+  it("builds only fixed Forgejo issue and full recorded-base routes", () => {
+    const exact = {
+      repository: "owner/repo",
+      issue: "9223372036854775807",
+      base: subject.base,
+    };
+    expect(forgejoSubjectRoutes(exact)).toMatchObject({
+      issueHref: `${FORGEJO_ORIGIN}/owner/repo/issues/9223372036854775807`,
+      baseHref: `${FORGEJO_ORIGIN}/owner/repo/commit/${subject.base}`,
+    });
+    for (const input of [
+      { repository: "owner/%2E%2E" },
+      { repository: "owner/.." },
+      { repository: "owner/repo?secret=synthetic" },
+      { repository: "//example.test" },
+      { repository: "owner/repo\n" },
+      { issue: "1?token=synthetic" },
+      { issue: "9223372036854775808" },
+      { issue: 1 },
+      { issue: "01" },
+    ])
+      expect(forgejoSubjectRoutes({ ...exact, ...input })).toBeNull();
+    expect(
+      forgejoSubjectRoutes({ ...exact, base: "refs/heads/develop" })?.baseHref,
+    ).toBeNull();
+  });
+
   it("validates bounded, digest-verified approval-scope evidence", () => {
     const reference = { policy_id: "p", version: "v", digest: "d" };
     const budget = {

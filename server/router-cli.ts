@@ -3,15 +3,18 @@ import { renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { openState } from "./state.ts";
-import { validateRouterOrigin } from "./router-config.ts";
+import { ROUTER_ADMIN_PROFILE, validateRouterOrigin } from "./router-config.ts";
 
 const operation = process.argv[2];
+const confirmAdmin = process.argv[4] === "--confirm-local-admin";
 if (!(
-  (operation === "set" && process.argv.length === 4) ||
+  (operation === "set" &&
+    (process.argv.length === 4 ||
+      (process.argv.length === 5 && confirmAdmin))) ||
   (operation === "clear" && process.argv.length === 3)
 )) {
   throw new Error(
-    "Usage: node server/router-cli.ts set <loopback-origin> < credential-file; or clear",
+    "Usage: node server/router-cli.ts set <loopback-origin> [--confirm-local-admin] < credential-file; or clear",
   );
 }
 const directory =
@@ -56,10 +59,18 @@ if (operation === "clear") {
     `.router-${randomBytes(16).toString("hex")}.tmp`,
   );
   try {
-    writeFileSync(temporary, JSON.stringify({ origin, credential }), {
-      flag: "wx",
-      mode: 0o600,
-    });
+    writeFileSync(
+      temporary,
+      JSON.stringify({
+        origin,
+        credential,
+        ...(confirmAdmin ? { adminProfile: ROUTER_ADMIN_PROFILE } : {}),
+      }),
+      {
+        flag: "wx",
+        mode: 0o600,
+      },
+    );
     renameSync(temporary, path);
   } finally {
     try {

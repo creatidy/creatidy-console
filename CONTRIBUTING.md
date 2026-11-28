@@ -172,6 +172,18 @@ groups over 10,000 entries are rejected. These are protective bounds, not
 measured capacity guarantees. No fixture proves a live installed producer
 integration.
 
+To enable the Router administration link, first verify on the trusted local
+machine that the configured observer origin also serves a compatible `/admin`
+page on the same Router listener. See the
+[navigation contract](docs/contracts.md). Rerun the existing command with
+`--confirm-local-admin` after the origin and provide the observer key on
+standard input as before. Old settings keep the observer working without a link;
+rerunning `set` without the flag removes the confirmation. Reverify after
+changing the Router build or listener. Console must also use a distinct local
+browser hostname (for example, `localhost` for Console and `127.0.0.1` for
+Router on the same machine). Different ports alone do not isolate cookies.
+Refresh the observer explicitly after configuration.
+
 For a consistent backup stop the server and copy the complete owner-only state
 directory into protected storage. Restoring old state can resurrect revoked
 sessions. With the server stopped, run

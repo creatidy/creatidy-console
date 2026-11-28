@@ -198,6 +198,26 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
               verified producer instance identity.
             </p>
           )}
+          {view.adminDestination && !view.refreshUnconfirmed ? (
+            <p>
+              <a
+                href={view.adminDestination}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Open Router administration at{" "}
+                <code>{view.adminDestination}</code> (new tab)
+              </a>
+              . Router handles its own sign-in. An existing session may not be
+              sent on cross-site arrival; sign in there if requested.
+            </p>
+          ) : (
+            <p>
+              Router administration link unavailable. It requires confirmed
+              local administration, a successful observer refresh, and distinct
+              Console and Router hostnames.
+            </p>
+          )}
           {view.gap && <p role="status">{view.gap}</p>}
           {(view.last_known || view.refreshUnconfirmed) && (
             <p>Last-known data follows; it may be stale.</p>

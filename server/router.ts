@@ -306,7 +306,10 @@ async function observe(
   );
 }
 
-export function createRouterObserver(directory: string) {
+export function createRouterObserver(
+  directory: string,
+  localConsoleOrigin?: () => string | null,
+) {
   let fingerprint: string | null = null;
   let configurationGeneration = 0;
   let position: unknown;
@@ -351,7 +354,19 @@ export function createRouterObserver(directory: string) {
     return config;
   }
   function view() {
-    configuration();
+    const config = configuration();
+    const consoleOrigin =
+      config?.adminConfirmed && status === "connected"
+        ? localConsoleOrigin?.()
+        : null;
+    // Cookies are scoped to the host, not the port. Both origins must also
+    // belong to the same trusted local browser/Console topology.
+    const adminDestination =
+      consoleOrigin &&
+      origin &&
+      new URL(consoleOrigin).hostname !== new URL(origin).hostname
+        ? `${origin}/admin`
+        : null;
     return {
       status,
       origin,
@@ -359,6 +374,7 @@ export function createRouterObserver(directory: string) {
       gap,
       observation: facts ? observation : null,
       last_known: status === "disconnected" && facts !== null,
+      ...(adminDestination ? { adminDestination } : {}),
     };
   }
   async function refresh() {

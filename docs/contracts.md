@@ -144,6 +144,24 @@ process or pipe to hold credentials and cursors, not shell arguments or retained
 logs. This configuration proves only a real Router's synthetic configured state,
 not provider health, quota or source discovery.
 
+## Specialist Navigation
+
+| Supported input                                                                                                                                                                                                                                                                              | Destination                                                                                    | Limits                                                                                                                                                                                                                                                                                                              |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Router observer v1; local admin profile, checked against Router [`f23ac356`](https://forgejo.creatidy.com/Creatidy/scarcity-router/src/commit/f23ac3569066e359bc0f7045631436a1eab64a6d/scarcity_router/server_ui.py) (source package 0.1.0)                                                  | `GET /admin` at the same configured literal loopback origin                                    | The owner confirms the installed admin route; the observer response cannot attest its build, administration or stable instance identity. Require an accepted observation, local Console listener/origin and distinct browser hostnames. No management-link probe, request forwarding or browser credential handoff. |
+| Supported ordinary Kernel proposal v1 at [`70a86a4c`](https://forgejo.creatidy.com/Creatidy/creatidy-kernel/src/commit/70a86a4c3291342b3bd704b6e588c9dbd4c839e3/src/creatidy_kernel/core/intake.py), with exact canonical Forgejo origin, repository, issue index and eligible full base SHA | Recorded issue and, for a 40-digit SHA, recorded base commit at `https://forgejo.creatidy.com` | No link from raw text or another forge, no URL verification call, no assumption that the objects still exist or are accessible. The served candidate tuple does not bind a Forgejo repository, PR or diff. Session attach and workspace access are unavailable.                                                     |
+
+Router `/admin` reads existing local configuration and counts at the inspected
+revision. Login or onboarding may be displayed; Console never submits them. A
+cross-site arrival may omit Router's `SameSite=Strict` session cookie, and
+Router handles expiry and denial. `/v1/status`, connection tests and generation
+tests are not navigation targets. Forgejo and Router links open a top-level tab
+without an opener or referrer; there is no proactive fetch of private reference
+paths. Forgejo determines authorization and current state after a user opens a
+link. The checked-in evidence is source and synthetic Console/browser evidence,
+not authorization for a live or remote browser exercise. No producer code was
+copied or dependency added.
+
 ## Historical Integration Risks
 
 These are verified source gaps at the inspected revisions, not newly delivered

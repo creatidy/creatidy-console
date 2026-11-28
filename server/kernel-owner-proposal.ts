@@ -1,5 +1,11 @@
 import { createHash } from "node:crypto";
 import { parseOwnerJson } from "./kernel-owner-v1.ts";
+import {
+  FORGEJO_ORIGIN,
+  MAX_FORGEJO_SUBJECTS,
+  forgejoSubjectRoutes,
+  type ForgejoSubject,
+} from "./forgejo-navigation.ts";
 
 // A consumer memory bound, not a producer size guarantee or authority grant.
 export const MAX_PROPOSAL_BYTES = 4 * 1024 * 1024;
@@ -166,6 +172,7 @@ function validateProposal(
   value: unknown,
   scope: string,
   allowQualified = false,
+  forgejoSubjects?: Map<string, ForgejoSubject>,
 ) {
   const version = (value as Record<string, unknown> | null)?.version;
   const proposal = record(value, [
@@ -286,6 +293,23 @@ function validateProposal(
     const other = subject(dependency.subject);
     if (!Object.keys(selected).every((key) => selected[key] === other[key]))
       throw new Error("Mismatched dependency subject");
+    if (
+      forgejoSubjects &&
+      forgejoSubjects.size < MAX_FORGEJO_SUBJECTS &&
+      selected.origin === FORGEJO_ORIGIN
+    ) {
+      const base = string(selected.base);
+      const reference = {
+        repository: string(selected.repository),
+        issue: integer(selected.issue, 1n).toString(),
+        base: base.length === 40 ? base : null,
+      };
+      if (forgejoSubjectRoutes(reference))
+        forgejoSubjects.set(
+          `${reference.repository}/${reference.issue}/${reference.base}`,
+          reference,
+        );
+    }
     string(dependency.reference);
     if (
       typeof dependency.complete !== "boolean" ||
@@ -409,7 +433,9 @@ export function assembleLocalOwnerProposal(
 ) {
   string(scope);
   const { digest, text, value } = assembleChunks(frames);
-  return { digest, proposal: validateProposal(value, scope), text };
+  const subjects = new Map<string, ForgejoSubject>();
+  const proposal = validateProposal(value, scope, false, subjects);
+  return { digest, proposal, text, forgejoSubjects: [...subjects.values()] };
 }
 
 // The complete producer-supplied text is evidence, not an authorization.

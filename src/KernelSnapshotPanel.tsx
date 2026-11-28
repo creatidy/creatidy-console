@@ -255,6 +255,10 @@ export default function KernelSnapshotPanel({
   return (
     <section aria-labelledby="kernel-snapshot-heading">
       <h2 id="kernel-snapshot-heading">Kernel snapshot</h2>
+      <p>
+        Forgejo candidate links are unavailable: this snapshot does not identify
+        a Forgejo repository or pull request for the recorded candidate.
+      </p>
       <p role="status">
         {message ?? capabilityMessages[capability ?? "ready"]}
       </p>
