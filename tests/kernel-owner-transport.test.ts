@@ -310,6 +310,8 @@ it("reads a bounded snapshot without exposing command data", async () => {
     epoch: "a".repeat(32),
     sequence: "3",
     revision: "4",
+    specDigest: "b".repeat(64),
+    authorityCutoff: "unknown",
     startPage: 0,
     nextPage: null,
     status: "active",
@@ -333,6 +335,26 @@ it("reads a bounded snapshot without exposing command data", async () => {
   expect(channel.snapshotAvailable()).toBe(false);
   expect(requests).toHaveLength(1);
 });
+
+it.each([
+  ["expired", "expired"],
+  ["revoked", "revoked"],
+  ["not-expired-observed", "not-expired-observed"],
+  ["unknown", "unknown"],
+  [["expired"], "unknown"],
+])(
+  "projects only a recognized sampled authority cutoff (%j)",
+  async (cutoff, expected) => {
+    const item = { ...snapshot(), authority: { cutoff, observed_at: 5 } };
+    const { client } = await pair((socket) => socket.write(response(item)));
+    const result = await createLocalOwnerTransport(
+      client,
+      "program",
+    ).readSnapshot();
+    expect(result.authorityCutoff).toBe(expected);
+    expect(result).not.toHaveProperty("authority");
+  },
+);
 
 it("rejects inconsistent snapshot scope or coverage", async () => {
   const wrong = snapshot();
@@ -465,6 +487,55 @@ it("exposes bounded work and attempt facts while marking oversized records", asy
   ]);
   channel.close();
 });
+
+it.each(["work_units", "attempts"] as const)(
+  "rejects ambiguous %s across pages before projecting decision or candidate lineage",
+  async (duplicate) => {
+    const { client, requests } = await pair((socket, request) => {
+      const page = Number(request.page);
+      const item = { ...snapshot(), page };
+      for (const name of ["work_units", "attempts"] as const) {
+        item[name] = Array.from({ length: page ? 1 : 8 }, (_, offset) => {
+          const index = page * 8 + offset;
+          const id = `${name}-${page && name === duplicate ? 0 : index}`;
+          return name === "work_units"
+            ? [id, "ready", null, null]
+            : [id, `work_units-${index}`, "running", "actor"];
+        });
+        item.coverage[name] = [page * 8, 9, page === 1];
+      }
+      if (!page) {
+        item.decisions = [
+          {
+            source: "product-review",
+            status: "owner_decision_needed",
+            applicability: "pending",
+            attempt: "attempts-0",
+            decision_id: "review-0",
+          },
+        ];
+        item.correlations = [
+          {
+            attempt: "attempts-0",
+            workspace_reference: null,
+            candidate_head: "candidate",
+            candidate_scope: null,
+            runtime_handle: null,
+          },
+        ];
+      }
+      for (const name of ["decisions", "correlations"])
+        item.coverage[name] = [page, 1, true];
+      socket.write(response(item));
+    });
+    const channel = createLocalOwnerTransport(client, "program");
+    await expect(channel.readSnapshot()).rejects.toThrow(
+      "invalid producer response",
+    );
+    expect(requests.map(({ page }) => page)).toEqual([0, 1]);
+    expect(client.destroyed).toBe(true);
+  },
+);
 
 it("keeps proposal reads available after producer-valid snapshot identifiers containing U+FEFF", async () => {
   const work = "\uFEFF";
@@ -1593,6 +1664,7 @@ it.each(["kilo-pull", "codex", "kilo-pull+codex"])(
 );
 
 it.each([
+  { field: "version", value: 2 },
   ...enumTypes("active").map((value) => ({ field: "status", value })),
   ...enumTypes("codex").map((value) => ({ field: "harness", value })),
   { field: "trust", value: ["trusted_development"] },
@@ -1603,7 +1675,7 @@ it.each([
 ])(
   "rejects malformed approval evidence $field = $value before review or dispatch",
   async ({ field, value }) => {
-    const isSnapshot = field === "status";
+    const isSnapshot = field === "status" || field === "version";
     const profile = {
       ...JSON.parse(canonicalProfile),
       ...(isSnapshot ? {} : { [field]: value }),
@@ -1621,7 +1693,8 @@ it.each([
         socket.write(
           response({
             ...revisionSnapshot,
-            status: isSnapshot ? value : "active",
+            status: "active",
+            ...(isSnapshot ? { [field]: value } : {}),
             program_revision: 1,
             spec_digest: "a".repeat(64),
           }),
@@ -1644,6 +1717,9 @@ it.each([
       readProposal: channel.readProposal,
       readApprovalScope: channel.readApprovalScope,
       readRevision: channel.readRevision,
+      readSnapshot: channel.readSnapshot,
+      snapshotAvailable: channel.snapshotAvailable,
+      snapshotVersionUnsupported: channel.snapshotVersionUnsupported,
       canSend: channel.canSend,
       sendCommand: channel.sendCommand,
       close: channel.close,
@@ -1651,6 +1727,7 @@ it.each([
         return channel.approvalSupported;
       },
     });
+    if (field === "version") await app.listen({ host: "127.0.0.1", port: 0 });
     const auth = await loginOwner(app, headers);
     const review = await app.inject({
       method: "POST",
@@ -1661,6 +1738,24 @@ it.each([
     expect(review.statusCode, review.body).toBe(503);
     expect(review.json()).not.toHaveProperty("review");
     expect(client.destroyed).toBe(true);
+    if (field === "version") {
+      const status = await app.inject({
+        method: "GET",
+        url: "/api/kernel/session-check",
+        headers: auth,
+      });
+      expect(status.json()).toEqual({
+        authenticated: true,
+        snapshotStatus: "unsupported",
+      });
+      const read = await app.inject({
+        method: "POST",
+        url: "/api/kernel/snapshot",
+        headers: auth,
+        payload: {},
+      });
+      expect(read.json()).toEqual({ status: "unsupported" });
+    }
     const command = await app.inject({
       method: "POST",
       url: "/api/kernel/owner",
@@ -2077,6 +2172,71 @@ async function loginOwner(
   const cookie = String(login.headers["set-cookie"]).split(";")[0]!;
   return { ...headers, cookie };
 }
+
+it.each([
+  [
+    "future payload",
+    response({ version: 2, private: { weight: 0.5, version: 1.5 } }),
+    "unsupported",
+  ],
+  ["future envelope", frame({ version: 2, other: 0.25 }), "unsupported"],
+  [
+    "invalid version type",
+    response({ ...snapshot(), version: "2" }),
+    "disconnected",
+  ],
+  ["ordinary closure", null, "disconnected"],
+  [
+    "v1 fractional field",
+    response({ ...snapshot(), authority: { observed_at: 0.5 } }),
+    "disconnected",
+  ],
+  [
+    "ambiguous version",
+    Buffer.from([0, 0, 0, 25, ...Buffer.from('{"version":2,"version":1}')]),
+    "disconnected",
+  ],
+] as const)(
+  "distinguishes %s at the authenticated snapshot boundary",
+  async (_name, bytes, status) => {
+    const { client, requests } = await pair((socket) => {
+      if (bytes) socket.write(bytes);
+      else socket.end();
+    });
+    const transport = createLocalOwnerTransport(client, "program");
+    const { app, headers } = await ownerApp({
+      scope: "program",
+      readProposal: transport.readProposal,
+      readSnapshot: transport.readSnapshot,
+      snapshotAvailable: transport.snapshotAvailable,
+      snapshotVersionUnsupported: transport.snapshotVersionUnsupported,
+      close: transport.close,
+    });
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const auth = await loginOwner(app, headers);
+    const read = () =>
+      app.inject({
+        method: "POST",
+        url: "/api/kernel/snapshot",
+        headers: auth,
+        payload: {},
+      });
+    expect((await read()).json()).toEqual({ status });
+    expect(transport.snapshotAvailable()).toBe(false);
+    const check = await app.inject({
+      method: "GET",
+      url: "/api/kernel/session-check",
+      headers: auth,
+    });
+    expect(check.json()).toEqual({
+      authenticated: true,
+      snapshotStatus: status,
+    });
+    expect(check.headers["set-cookie"]).toBeUndefined();
+    expect((await read()).json()).toEqual({ status });
+    expect(requests).toEqual([{ version: 1, action: "snapshot", page: 0 }]);
+  },
+);
 
 it("requires a literal action when reading stored command history", async () => {
   const { app, dir, headers } = await ownerApp({

@@ -21,6 +21,8 @@ import {
   SnapshotChanged,
   type KernelDecision,
   type KernelCorrelation,
+  type KernelSnapshotStatus,
+  type KernelAuthorityCutoff,
 } from "./kernel-owner-transport.ts";
 import type { OwnerPairing } from "./kernel-owner-greeting.ts";
 import { UnsupportedOwnerPayload } from "./kernel-owner-proposal.ts";
@@ -57,6 +59,7 @@ export interface AppOptions {
     approvalSupported?: boolean;
     readProposal: () => Promise<{ digest: string; text: string }>;
     snapshotAvailable?: () => boolean;
+    snapshotVersionUnsupported?: () => boolean;
     readSnapshot?: (selection?: {
       page: number;
       epoch: string;
@@ -66,6 +69,7 @@ export interface AppOptions {
       epoch: string;
       sequence: string;
       revision: string | null;
+      authorityCutoff?: KernelAuthorityCutoff;
       startPage: number;
       nextPage: number | null;
       status: string;
@@ -170,9 +174,10 @@ export async function createApp(options: AppOptions) {
       ? origin.origin
       : null;
   }
-  const snapshotStatus = () => {
+  const snapshotStatus = (): KernelSnapshotStatus => {
     const channel = options.kernelOwner;
     if (!localConsoleOrigin() || !channel?.readSnapshot) return "unavailable";
+    if (channel.snapshotVersionUnsupported?.()) return "unsupported";
     return channel.snapshotAvailable?.() === false ? "disconnected" : "ready";
   };
   const admitMiInspection: import("fastify").onRequestAsyncHookHandler = async (
@@ -329,6 +334,7 @@ export async function createApp(options: AppOptions) {
     return {
       configured: Boolean(owner()),
       authenticated: signedIn,
+      ...(signedIn ? { kernelSnapshotStatus: snapshotStatus() } : {}),
       ...(miInspectionOrigin ? { miInspectionOrigin } : {}),
     };
   });

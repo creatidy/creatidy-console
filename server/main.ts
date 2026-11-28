@@ -62,6 +62,7 @@ try {
         ? {
             readSnapshot: transport.readSnapshot,
             snapshotAvailable: transport.snapshotAvailable,
+            snapshotVersionUnsupported: transport.snapshotVersionUnsupported,
           }
         : {}),
       readApprovalScope: transport.readApprovalScope,

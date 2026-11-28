@@ -102,7 +102,34 @@ button:disabled {
   cursor: wait;
 }
 input:focus-visible,
-button:focus-visible {
+button:focus-visible,
+summary:focus-visible {
   outline: 0.15rem solid #154f7c;
   outline-offset: 0.25rem;
+}
+
+.operator-overview > section {
+  border-top: 1px solid #aabfce;
+  margin-block: 1.5rem;
+}
+
+.operator-overview nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.25rem;
+}
+
+.operator-overview summary {
+  cursor: pointer;
+  font-weight: 650;
+  padding-block: 0.4rem;
+}
+
+.snapshot-attention {
+  border-inline-start: 0.25rem solid #225c86;
+  padding-inline-start: 0.75rem;
+}
+
+.kernel-reference {
+  white-space: break-spaces;
 }

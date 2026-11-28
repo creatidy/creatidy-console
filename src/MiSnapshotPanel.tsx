@@ -346,6 +346,7 @@ export default function MiSnapshotPanel({
   return (
     <section aria-labelledby="mi-snapshot-heading">
       <h2 id="mi-snapshot-heading">Model Intelligence offline file</h2>
+      <p role="status">{message}</p>
       <p>
         Selected files are sent to the authenticated local Console at{" "}
         <code>{destination}</code> for in-memory inspection. Console does not
@@ -443,7 +444,6 @@ export default function MiSnapshotPanel({
           if (file) void inspect(file, "publication");
         }}
       />
-      <p role="status">{message}</p>
       {snapshot && visible && (
         <p>
           Unverified file instance: {snapshot.instance}; evaluated:{" "}

@@ -1,47 +1,52 @@
 import { useEffect, useRef, useState } from "react";
-import type {
-  KernelCorrelation,
-  KernelDecision,
-} from "../server/kernel-owner-transport";
+import KernelLineage, { type Snapshot } from "./KernelLineage";
+import type { KernelSnapshotStatus } from "../server/kernel-owner-transport";
 
-type Snapshot = {
-  scope: string;
-  epoch: string;
-  sequence: string;
-  revision: string | null;
-  startPage: number;
-  nextPage: number | null;
-  status: string;
-  history: "initial" | "continuous" | "gap" | "unknown";
-  counts: Record<string, { sampled: number; total: number }>;
-  workUnits: ((string | null)[] | null)[];
-  attempts: ((string | null)[] | null)[];
-  decisions: (KernelDecision | null)[];
-  correlations: (KernelCorrelation | null)[];
-  commandCoverage: { sampled: number; total: number; complete: boolean };
-};
 type Window = Pick<Snapshot, "epoch" | "sequence" | "startPage" | "nextPage">;
-const disconnectedMessage = "The configured Kernel snapshot channel is closed.";
+const capabilityMessages: Record<KernelSnapshotStatus, string> = {
+  ready:
+    "No snapshot requested. Read the local snapshot to inspect recorded work.",
+  unavailable:
+    "Optional. No supported local Kernel snapshot capability is configured for this connection.",
+  disconnected: "The configured Kernel snapshot channel is closed.",
+  unsupported:
+    "The Kernel snapshot contract version is unsupported. Console closed the channel and did not accept any facts from the read.",
+};
+const hiddenMessage =
+  "Snapshot hidden. Request another snapshot to view current data.";
+// Distinguish independent Console view checks without changing admission.
+const sessionCheckUrl = "/api/kernel/session-check?view=snapshot";
+
+function unavailableStatus(
+  value: unknown,
+): value is Exclude<KernelSnapshotStatus, "ready"> {
+  return (
+    value === "unavailable" ||
+    value === "disconnected" ||
+    value === "unsupported"
+  );
+}
 
 export default function KernelSnapshotPanel({
   expired,
+  initialStatus,
 }: {
   expired: () => void;
+  initialStatus: KernelSnapshotStatus | undefined;
 }) {
   const [snapshot, setSnapshot] = useState<Snapshot>();
   const [window, setWindow] = useState<Window>();
   const [previousWindows, setPreviousWindows] = useState<number[]>([]);
   const [visible, setVisible] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState("No snapshot requested.");
+  const [capability, setCapability] = useState(initialStatus);
+  const [message, setMessage] = useState<string | null>(null);
   const generation = useRef(0);
   const active = useRef<AbortController | null>(null);
   const hasSnapshot = useRef(false);
 
   useEffect(() => {
-    const hide = (
-      message = "Snapshot hidden. Request another snapshot to view current data.",
-    ) => {
+    const hide = () => {
       generation.current++;
       active.current?.abort();
       active.current = null;
@@ -51,26 +56,21 @@ export default function KernelSnapshotPanel({
       setPreviousWindows([]);
       setVisible(false);
       setLoading(false);
-      setMessage(message);
     };
-    const visibility = () => {
-      if (document.visibilityState !== "visible") hide();
-    };
-    document.addEventListener("visibilitychange", visibility);
-    const timer = setInterval(async () => {
-      if (
-        document.visibilityState !== "visible" ||
-        !hasSnapshot.current ||
-        active.current
-      )
-        return;
+    let checking: AbortController | null = null;
+    const check = async () => {
+      if (document.visibilityState !== "visible" || active.current) return;
       const current = generation.current;
       const controller = new AbortController();
-      active.current = controller;
+      active.current = checking = controller;
       const deadline = setTimeout(() => controller.abort(), 5000);
       setVisible(false);
+      const unconfirmed = () => {
+        if (hasSnapshot.current) setMessage(hiddenMessage);
+        hide();
+      };
       try {
-        const response = await fetch("/api/kernel/session-check", {
+        const response = await fetch(sessionCheckUrl, {
           cache: "no-store",
           signal: controller.signal,
         });
@@ -81,25 +81,43 @@ export default function KernelSnapshotPanel({
         } else {
           const session = response.ok ? await response.json() : null;
           if (current !== generation.current) return;
-          if (controller.signal.aborted || session?.authenticated !== true)
+          if (controller.signal.aborted || session?.authenticated !== true) {
+            unconfirmed();
+          } else if (unavailableStatus(session.snapshotStatus)) {
+            setCapability(session.snapshotStatus);
+            setMessage(null);
             hide();
-          else if (session.snapshotStatus === "disconnected")
-            hide(disconnectedMessage);
-          else if (session.snapshotStatus !== "ready")
-            hide("Kernel snapshot capability is no longer available.");
-          else if (
+          } else if (session.snapshotStatus !== "ready") {
+            unconfirmed();
+          } else if (
             document.visibilityState === "visible" &&
             !controller.signal.aborted
-          )
-            setVisible(true);
+          ) {
+            setCapability("ready");
+            setVisible(hasSnapshot.current);
+          }
         }
       } catch {
-        if (current === generation.current) hide();
+        if (current === generation.current) unconfirmed();
       } finally {
         clearTimeout(deadline);
         if (active.current === controller) active.current = null;
+        if (checking === controller) checking = null;
       }
-    }, 10000);
+    };
+    const visibility = () => {
+      if (document.visibilityState === "visible") void check();
+      else {
+        if (
+          hasSnapshot.current ||
+          (active.current && active.current !== checking)
+        )
+          setMessage(hiddenMessage);
+        hide();
+      }
+    };
+    document.addEventListener("visibilitychange", visibility);
+    const timer = setInterval(check, 10000);
     return () => {
       clearInterval(timer);
       document.removeEventListener("visibilitychange", visibility);
@@ -150,22 +168,23 @@ export default function KernelSnapshotPanel({
         return;
       if (result.status !== "observed") {
         if (result.status !== "busy") resetWindow();
-        setMessage(
-          result.status === "resync-required"
-            ? "The snapshot changed during the read. Request a fresh snapshot; the missed interval remains unknown."
-            : result.status === "busy"
-              ? "Another snapshot read is in progress. Try again."
-              : result.status === "disconnected"
-                ? disconnectedMessage
-                : result.status === "unavailable"
-                  ? "Kernel snapshots require a local Console and a configured read capability."
-                  : "Kernel snapshot unavailable; the read could not be completed.",
-        );
+        if (unavailableStatus(result.status)) {
+          setCapability(result.status);
+          setMessage(null);
+        } else {
+          setMessage(
+            result.status === "resync-required"
+              ? "The snapshot changed during the read. Request a fresh snapshot; the missed interval remains unknown."
+              : result.status === "busy"
+                ? "Another snapshot read is in progress. Try again."
+                : "Kernel snapshot unavailable; the read could not be completed.",
+          );
+        }
         return;
       }
       clearTimeout(deadline);
       deadline = setTimeout(() => controller.abort(), 5000);
-      const session = await fetch("/api/kernel/session-check", {
+      const session = await fetch(sessionCheckUrl, {
         cache: "no-store",
         signal: controller.signal,
       });
@@ -183,11 +202,10 @@ export default function KernelSnapshotPanel({
         return;
       if (validated.snapshotStatus !== "ready") {
         resetWindow();
-        setMessage(
-          validated.snapshotStatus === "disconnected"
-            ? disconnectedMessage
-            : "Kernel snapshot capability is no longer available.",
-        );
+        if (unavailableStatus(validated.snapshotStatus)) {
+          setCapability(validated.snapshotStatus);
+          setMessage(null);
+        } else setMessage("Kernel snapshot capability is no longer available.");
         return;
       }
       const next = result.snapshot as Snapshot;
@@ -214,6 +232,7 @@ export default function KernelSnapshotPanel({
       });
       hasSnapshot.current = true;
       setVisible(true);
+      setCapability("ready");
       setMessage("Snapshot observed. It may have changed since this read.");
     } catch {
       if (current === generation.current) {
@@ -236,7 +255,9 @@ export default function KernelSnapshotPanel({
   return (
     <section aria-labelledby="kernel-snapshot-heading">
       <h2 id="kernel-snapshot-heading">Kernel snapshot</h2>
-      <p role="status">{message}</p>
+      <p role="status">
+        {message ?? capabilityMessages[capability ?? "ready"]}
+      </p>
       <button type="button" disabled={loading} onClick={() => void refresh()}>
         Read snapshot
       </button>
@@ -259,124 +280,7 @@ export default function KernelSnapshotPanel({
       >
         Next pages
       </button>
-      {snapshot && visible && (
-        <>
-          <p>Scope: {snapshot.scope}</p>
-          <p>
-            Status: {snapshot.status}; program revision:{" "}
-            {snapshot.revision ?? "unavailable"}
-          </p>
-          <p>
-            Projection epoch: {snapshot.epoch}; sequence: {snapshot.sequence}.
-            This epoch is not a verified producer identity.
-          </p>
-          <p>
-            Counts are producer-reported snapshot coverage, not a complete event
-            history. Other collections and full command records are not
-            displayed.
-          </p>
-          <p>
-            Progress continuity for this descriptor: {snapshot.history}.
-            Progress is a bounded hint, not durable history; earlier gaps and
-            unknown intervals remain visible after later reads.
-          </p>
-          <ul>
-            {Object.entries(snapshot.counts).map(([name, count]) => (
-              <li key={name}>
-                {name}: {count.total} total; {count.sampled} sampled
-              </li>
-            ))}
-          </ul>
-          <p>
-            Showing up to eight pages starting at producer page{" "}
-            {snapshot.startPage}.
-          </p>
-          <h3>Sampled work units</h3>
-          <ul>
-            {snapshot.workUnits.map((row, index) => (
-              <li key={index}>
-                {row
-                  ? `${row[0]}: ${row[1]}; active attempt: ${row[2] ?? "unavailable"}; satisfaction: ${row[3] ?? "unavailable"}`
-                  : "Oversized record omitted."}
-              </li>
-            ))}
-          </ul>
-          <h3>Sampled attempts</h3>
-          <ul>
-            {snapshot.attempts.map((row, index) => (
-              <li key={index}>
-                {row
-                  ? `${row[0]}: ${row[2]}; work unit: ${row[1]}; actor: ${row[3]}`
-                  : "Oversized record omitted."}
-              </li>
-            ))}
-          </ul>
-          <h3>Recorded decisions</h3>
-          <p>
-            Kernel sampled {snapshot.commandCoverage.sampled} of{" "}
-            {snapshot.commandCoverage.total} command records. Decision records
-            are producer facts, not an action queue; a pending record does not
-            by itself require owner action.
-          </p>
-          <ul>
-            {snapshot.decisions.map((decision, index) => (
-              <li key={index}>
-                {decision ? (
-                  <>
-                    Source: {decision.source}; status:{" "}
-                    {decision.status || "(empty string)"}; applicability:{" "}
-                    {decision.applicability}; attempt:{" "}
-                    {decision.attempt ?? "unavailable"}.
-                    {decision.commandId !== undefined && (
-                      <> Command: {decision.commandId}.</>
-                    )}
-                    {decision.decisionId !== undefined && (
-                      <> Decision: {decision.decisionId}.</>
-                    )}
-                    {decision.reviewOperationId !== undefined && (
-                      <> Review operation: {decision.reviewOperationId}.</>
-                    )}
-                  </>
-                ) : (
-                  "Oversized decision omitted."
-                )}
-              </li>
-            ))}
-          </ul>
-          <h3>Kernel correlation facts</h3>
-          <p>
-            These are Kernel-provided references, not verified cross-product
-            joins or evidence that external effects settled. Opaque runtime
-            handles are not displayed.
-          </p>
-          <ul>
-            {snapshot.correlations.map((row, index) => (
-              <li key={index}>
-                {row ? (
-                  <>
-                    Attempt: {row.attempt}; workspace:{" "}
-                    {row.workspaceReference ?? "unavailable"}; candidate head:{" "}
-                    {row.candidateHead === ""
-                      ? "(empty string)"
-                      : (row.candidateHead ?? "unavailable")}
-                    ; candidate scope:{" "}
-                    {row.candidateScope === ""
-                      ? "(empty string)"
-                      : (row.candidateScope ?? "unavailable")}
-                    ; runtime handle:{" "}
-                    {row.runtimeHandlePresent
-                      ? "present, hidden"
-                      : "unavailable"}
-                    .
-                  </>
-                ) : (
-                  "Oversized correlation omitted."
-                )}
-              </li>
-            ))}
-          </ul>
-        </>
-      )}
+      {snapshot && <KernelLineage snapshot={snapshot} visible={visible} />}
     </section>
   );
 }

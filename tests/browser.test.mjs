@@ -151,6 +151,29 @@ it.skipIf(!existsSync(chrome))(
       ]);
       expect(loginResponse.status()).toBe(200);
       await page.getByRole("heading", { name: "Your console" }).waitFor();
+      await page.getByRole("heading", { name: "Operator overview" }).waitFor();
+      await page
+        .getByText(/No supported local Kernel snapshot capability/)
+        .waitFor();
+      await page.getByText("No offline file inspected.").waitFor();
+      const switchVisibility = (value) =>
+        page.evaluate((value) => {
+          Object.defineProperty(document, "visibilityState", {
+            configurable: true,
+            value,
+          });
+          document.dispatchEvent(new Event("visibilitychange"));
+        }, value);
+      await switchVisibility("hidden");
+      await switchVisibility("visible");
+      expect(
+        await page
+          .getByText(/No supported local Kernel snapshot capability/)
+          .isVisible(),
+      ).toBe(true);
+      await page.evaluate(() =>
+        Reflect.deleteProperty(document, "visibilityState"),
+      );
       const remote = await browser.newPage();
       const remoteOrigin = "https://console.example.invalid";
       const remoteUploads = [];
@@ -228,7 +251,10 @@ it.skipIf(!existsSync(chrome))(
         .getByText(/Selected files are sent to the authenticated local Console/)
         .waitFor();
       expect(
-        await page.locator("#mi-snapshot-heading + p code").textContent(),
+        await page
+          .locator('section[aria-labelledby="mi-snapshot-heading"] p code')
+          .first()
+          .textContent(),
       ).toBe(origin);
       await page
         .getByRole("heading", { name: "Kernel owner actions" })
@@ -618,23 +644,27 @@ it.skipIf(!existsSync(chrome))(
       const visitedPages = [];
       let busyLaterPage = true;
       let holdLaterPage = true;
-      const sessionCheckPath = "**/api/kernel/session-check";
+      const sessionCheckUrl = "/api/kernel/session-check?view=snapshot";
+      const sessionCheckPath = /\/api\/kernel\/session-check\?view=snapshot$/;
       let snapshotStatus = "ready";
-      await page.route(sessionCheckPath, async (route) => {
-        const response = await route.fetch();
-        await route.fulfill({
-          response,
-          json: { ...(await response.json()), snapshotStatus },
-        });
-      });
+      await page.route(sessionCheckPath, (route) =>
+        route.fulfill({ json: { authenticated: true, snapshotStatus } }),
+      );
       const laterRequest = Promise.withResolvers();
       const releaseLaterRequest = Promise.withResolvers();
+      const unknownDecision = {
+        source: "served-command",
+        status: "owner_decision_needed",
+        applicability: "unknown",
+        attempt: null,
+        commandId: "unmatched-owner-decision",
+      };
       await page.route("**/api/kernel/snapshot", async (route) => {
         snapshotReads++;
         const pageNumber = route.request().postDataJSON()?.page ?? 0;
         visitedPages.push(pageNumber);
-        if (snapshotStatus === "disconnected")
-          return route.fulfill({ json: { status: "disconnected" } });
+        if (snapshotStatus !== "ready")
+          return route.fulfill({ json: { status: snapshotStatus } });
         if (pageNumber === 10 && busyLaterPage) {
           busyLaterPage = false;
           return route.fulfill({ json: { status: "busy" } });
@@ -653,24 +683,236 @@ it.skipIf(!existsSync(chrome))(
               epoch: "a".repeat(32),
               sequence: "3",
               revision: "4",
+              specDigest: "b".repeat(64),
               startPage: pageNumber,
               nextPage: { 0: 3, 3: 8, 8: 10 }[pageNumber] ?? null,
               status: "active",
-              history: "gap",
+              history: pageNumber === 3 ? "unknown" : "gap",
+              authorityCutoff: pageNumber === 3 ? "expired" : "unknown",
               counts: {
                 work_units: { sampled: pageNumber ? 1 : 24, total: 25 },
               },
-              workUnits: [[hostile, "pending", null, null], null],
-              attempts: [],
-              decisions: [],
-              correlations: [],
+              workUnits: [
+                [hostile, "pending", "Attempt B", "satisfaction-id"],
+                null,
+              ],
+              attempts: [
+                ["Attempt A", hostile, "prepared", "synthetic-actor"],
+                ["Attempt  A", hostile, "prepared", "synthetic-actor"],
+                ["Attempt A\u034f", hostile, "prepared", "synthetic-actor"],
+                ["Attempt \u00e9", hostile, "prepared", "synthetic-actor"],
+                ["Attempt e\u0301", hostile, "prepared", "synthetic-actor"],
+                ["Attempt-B", "out-of-window", "prepared", "synthetic-actor"],
+              ],
+              decisions: { 3: [null], 8: [unknownDecision], 10: [] }[
+                pageNumber
+              ] ?? [
+                unknownDecision,
+                null,
+                {
+                  source: "product-review",
+                  status: "changes_requested",
+                  applicability: "pending",
+                  attempt: "Attempt A",
+                  decisionId: "changes-requested",
+                },
+                {
+                  source: "product-review",
+                  status: "owner_decision_needed",
+                  applicability: "pending",
+                  attempt: "Attempt A",
+                  decisionId: "exact-decision",
+                },
+                {
+                  source: "product-review-operation",
+                  status: "review_unknown",
+                  applicability: "pending",
+                  attempt: "attempt a",
+                  decisionId: "unmatched-decision",
+                },
+                {
+                  source: "product-review",
+                  status: "owner_decision_needed",
+                  applicability: "historical",
+                  attempt: "Attempt A",
+                  decisionId: "historical-decision",
+                },
+                {
+                  source: "product-review",
+                  status: "owner_decision_needed",
+                  applicability: "historical",
+                  attempt: "Attempt A\u034f",
+                  decisionId: "distinct-invisible-id-decision",
+                },
+                ...[
+                  ["Attempt \u00e9", "composed-id-decision"],
+                  ["Attempt e\u0301", "decomposed-id-decision"],
+                ].map(([attempt, decisionId]) => ({
+                  source: "product-review",
+                  status: "owner_decision_needed",
+                  applicability: "historical",
+                  attempt,
+                  decisionId,
+                })),
+                ...["Attempt A", "Attempt  A"].map((attempt) => ({
+                  source: "served-command",
+                  status: "rejected",
+                  applicability: "historical",
+                  attempt,
+                  commandId: "shared-command-key",
+                })),
+              ],
+              correlations: [
+                {
+                  attempt: "Attempt A",
+                  workspaceReference: "file:///synthetic/local",
+                  candidateHead: "c".repeat(40),
+                  candidateScope: "candidate-scope",
+                  runtimeHandlePresent: true,
+                },
+              ],
               commandCoverage: { sampled: 0, total: 0, complete: true },
             },
           },
         });
       });
       expect(snapshotReads).toBe(0);
+      snapshotStatus = "disconnected";
+      await page.clock.fastForward(10000);
+      await page
+        .getByText("The configured Kernel snapshot channel is closed.")
+        .waitFor();
+      await switchVisibility("hidden");
+      snapshotStatus = "unsupported";
+      await switchVisibility("visible");
+      await page
+        .getByText(/Kernel snapshot contract version is unsupported/)
+        .waitFor();
+      snapshotStatus = "ready";
+      await page.clock.fastForward(10000);
+      await page.getByText(/No snapshot requested/).waitFor();
+      await page.evaluate(() =>
+        Reflect.deleteProperty(document, "visibilityState"),
+      );
+      expect(snapshotReads).toBe(0);
+      expect(await page.getByText("Sampled work units").count()).toBe(0);
       await page.getByRole("button", { name: "Read snapshot" }).click();
+      await page.getByText(/Pending owner-decision records: 1\./).waitFor();
+      await page
+        .getByText(/Pending review records with an unknown outcome: 1\./)
+        .waitFor();
+      const lineage = page.getByText(
+        "Inspect Kernel lineage and recorded evidence",
+      );
+      const workUnitCoverage = page.getByText(
+        "work_units: 25 total; 24 sampled",
+      );
+      expect(await workUnitCoverage.isVisible()).toBe(false);
+      const attention = page.locator(".snapshot-attention");
+      const mixed = await attention.innerText();
+      expect(mixed).toContain(
+        "Readable decision records with unknown applicability: 1.",
+      );
+      expect(mixed).toContain("Historical decision records: 6.");
+      expect(mixed).toContain("Other pending decision records: 1.");
+      expect(mixed).toContain("Unreadable decision records: 1.");
+      expect(mixed).not.toContain("No decision records");
+      await page.getByText(/Kernel progress has a recorded gap/).waitFor();
+      await lineage.press("Enter");
+      await page.getByText('"exact-decision"', { exact: true }).waitFor();
+      await page.getByText(/observed aggregate revision: 4/).waitFor();
+      await page
+        .getByText(/current specification SHA-256 of the sampled Program/)
+        .waitFor();
+      await page
+        .getByText(
+          /does not report the specification revision or digest under which each attempt ran/,
+        )
+        .waitFor();
+      const linkedUnit = page
+        .getByRole("listitem")
+        .filter({ hasText: /^Work unit / });
+      expect(await linkedUnit.textContent()).toContain("exact-decision");
+      expect(await linkedUnit.textContent()).toContain("satisfaction-id");
+      await linkedUnit
+        .getByText("The active attempt record is unavailable in this sample.")
+        .waitFor();
+      expect(await linkedUnit.textContent()).not.toContain(
+        "unmatched-decision",
+      );
+      expect(await linkedUnit.textContent()).not.toContain("out-of-window");
+      const linkedAttempts = linkedUnit.locator(":scope > ul > li");
+      const id = (index) =>
+        linkedAttempts.nth(index).locator(":scope > code").first();
+      expect(await id(0).textContent()).toBe('"Attempt A"');
+      expect(await id(1).textContent()).toBe('"Attempt  A"');
+      expect(await id(2).textContent()).toBe('"Attempt A\\u034f"');
+      expect(await id(3).textContent()).toBe('"Attempt \\u00e9"');
+      expect(await id(4).textContent()).toBe('"Attempt e\\u0301"');
+      expect(
+        await id(1).evaluate((node) => getComputedStyle(node).whiteSpace),
+      ).toBe("break-spaces");
+      expect(await linkedAttempts.nth(0).textContent()).toContain(
+        '"exact-decision"',
+      );
+      expect(await linkedAttempts.nth(1).textContent()).not.toContain(
+        '"exact-decision"',
+      );
+      expect(await linkedAttempts.nth(0).textContent()).not.toContain(
+        '"distinct-invisible-id-decision"',
+      );
+      expect(await linkedAttempts.nth(2).textContent()).toContain(
+        '"distinct-invisible-id-decision"',
+      );
+      for (const [index, attached, excluded] of [
+        [3, "composed-id-decision", "decomposed-id-decision"],
+        [4, "decomposed-id-decision", "composed-id-decision"],
+      ]) {
+        const row = await linkedAttempts.nth(index).textContent();
+        expect(row).toContain(JSON.stringify(attached));
+        expect(row).not.toContain(JSON.stringify(excluded));
+      }
+      for (const row of (await linkedAttempts.all()).slice(0, 2)) {
+        expect(await row.textContent()).toContain(
+          'Recorded command key: "shared-command-key"',
+        );
+        await row.getByText(/Exact command correlation unavailable/).waitFor();
+      }
+      await page.getByText('"unmatched-decision"', { exact: true }).waitFor();
+      for (const [decisionId, classification] of [
+        ["exact-decision", "owner_decision_needed (applicability: pending)"],
+        [
+          "historical-decision",
+          "owner_decision_needed (applicability: historical)",
+        ],
+        ["changes-requested", "changes_requested (applicability: pending)"],
+        ["unmatched-decision", "review_unknown (applicability: pending)"],
+      ]) {
+        const item = page
+          .getByText(JSON.stringify(decisionId), { exact: true })
+          .locator("..");
+        expect(await item.innerText()).toContain(classification);
+      }
+      const unknownRow = page.getByRole("listitem").filter({
+        hasText: /^owner_decision_needed \(applicability: unknown\)/,
+      });
+      expect(await unknownRow.innerText()).toContain(
+        '"unmatched-owner-decision"',
+      );
+      expect(await linkedUnit.innerText()).not.toContain(
+        "unmatched-owner-decision",
+      );
+      await page
+        .getByText(
+          /Oversized records omitted: 1 work units, 0 attempts, 1 decisions/,
+        )
+        .waitFor();
+      expect(await page.locator('a[href^="file:"]').count()).toBe(0);
+      expect(
+        await page
+          .locator('section[aria-labelledby="kernel-snapshot-heading"] img')
+          .count(),
+      ).toBe(0);
       await page.getByText("work_units: 25 total; 24 sampled").waitFor();
       expect
         .soft(
@@ -682,6 +924,15 @@ it.skipIf(!existsSync(chrome))(
       expect(snapshotReads).toBe(1);
       expect(await page.evaluate(() => window.ownerInjected)).toBeUndefined();
       await page.getByRole("button", { name: "Next pages" }).click();
+      await page.getByText(/Unreadable decision records: 1\./).waitFor();
+      expect(await attention.innerText()).not.toMatch(
+        /No decision records|unknown applicability:|Pending owner-decision records:/,
+      );
+      await page.getByText(/Kernel progress continuity is unknown/).waitFor();
+      await page
+        .getByText(/Kernel reported work authority expired in this sample/)
+        .waitFor();
+      await lineage.press("Enter");
       await page.getByText("work_units: 25 total; 1 sampled").waitFor();
       await page
         .getByText("Showing up to eight pages starting at producer page 3.")
@@ -689,7 +940,7 @@ it.skipIf(!existsSync(chrome))(
       expect
         .soft(
           await page
-            .getByText(/Progress continuity for this descriptor: gap/)
+            .getByText(/Progress continuity for this descriptor: unknown/)
             .count(),
         )
         .toBe(1);
@@ -732,10 +983,29 @@ it.skipIf(!existsSync(chrome))(
           await page
             .getByText(/Another snapshot read is in progress/)
             .waitFor();
-        } else
+        } else {
           await page
-            .getByText(/Showing up to eight pages starting at producer page/)
+            .getByText(
+              `Showing up to eight pages starting at producer page ${pageNumber}.`,
+            )
             .waitFor();
+          expect(
+            await lineage.evaluate((summary) => summary.parentElement.open),
+          ).toBe(false);
+          const reported = await attention.innerText();
+          if (pageNumber === 8) {
+            expect(reported).toContain(
+              "Readable decision records with unknown applicability: 1.",
+            );
+            expect(reported).not.toContain("No decision records");
+          } else {
+            expect(reported).toContain("No decision records in this sample.");
+            expect(reported).not.toContain("unknown applicability:");
+          }
+          expect(reported).not.toMatch(
+            /Pending owner-decision records:|Unreadable decision records:|Historical decision records:/,
+          );
+        }
         expect
           .soft(await page.evaluate(() => document.activeElement?.textContent))
           .toBe(button);
@@ -744,11 +1014,11 @@ it.skipIf(!existsSync(chrome))(
         name: "Previous pages",
       });
       await previousPages.focus();
-      await page.evaluate(() => {
+      await page.evaluate((url) => {
         const original = window.fetch.bind(window);
         let hold = true;
         window.fetch = (...args) => {
-          if (hold && args[0] === "/api/kernel/session-check") {
+          if (hold && args[0] === url) {
             hold = false;
             return Promise.resolve({
               ok: true,
@@ -762,7 +1032,7 @@ it.skipIf(!existsSync(chrome))(
           }
           return original(...args);
         };
-      });
+      }, sessionCheckUrl);
       await page.clock.fastForward(10000);
       await page.waitForFunction(
         () => typeof window.releaseOldKernelCheck === "function",
@@ -772,6 +1042,7 @@ it.skipIf(!existsSync(chrome))(
       ).toBe(true);
       expect(await page.getByText("Sampled work units").count()).toBe(0);
       await page.getByRole("button", { name: "Read snapshot" }).click();
+      await lineage.press("Enter");
       await page.getByText("work_units: 25 total; 24 sampled").waitFor();
       await page.evaluate(async () => {
         window.releaseOldKernelCheck();
@@ -793,9 +1064,22 @@ it.skipIf(!existsSync(chrome))(
       await page.getByRole("button", { name: "Read snapshot" }).click();
       await unavailable.waitFor();
       expect(snapshotReads).toBe(readsBeforeClosure + 1);
+      await switchVisibility("hidden");
+      await switchVisibility("visible");
+      expect(await unavailable.isVisible()).toBe(true);
+      await page.evaluate(() =>
+        Reflect.deleteProperty(document, "visibilityState"),
+      );
+      snapshotStatus = "unsupported";
+      await page.getByRole("button", { name: "Read snapshot" }).click();
+      await page
+        .getByText(/Kernel snapshot contract version is unsupported/)
+        .waitFor();
+      expect(await unavailable.count()).toBe(0);
+      expect(await lineage.count()).toBe(0);
       await page.getByRole("heading", { name: "Your console" }).waitFor();
       snapshotStatus = "ready";
-      await page.route("**/api/kernel/session-check", (route) =>
+      await page.route(sessionCheckPath, (route) =>
         route.fulfill({ status: 401, json: { error: "Login required" } }),
       );
       await page.getByRole("button", { name: "Read snapshot" }).click();
@@ -803,7 +1087,7 @@ it.skipIf(!existsSync(chrome))(
       expect(
         await page.getByText("work_units: 25 total; 24 sampled").count(),
       ).toBe(0);
-      await page.unroute("**/api/kernel/session-check");
+      await page.unroute(sessionCheckPath);
       await page.unroute("**/api/kernel/snapshot");
       await page
         .getByLabel("Owner password", { exact: true })
@@ -1133,8 +1417,8 @@ it.skipIf(!existsSync(chrome))(
             origin: "source",
             enabled: true,
             worker_connected: null,
-            observed_at: null,
-            freshness: "never_observed",
+            observed_at: "2026-01-01T00:00:00.000Z",
+            freshness: "stale",
             health: null,
             availability: "unknown",
             quota_facts: [],
@@ -1232,6 +1516,17 @@ it.skipIf(!existsSync(chrome))(
         };
       });
       await page.getByRole("button", { name: "Refresh Router" }).click();
+      const routerObservation = page.getByText("Inspect Router observations");
+      await routerObservation.waitFor();
+      await page
+        .getByText(
+          "Resources reported stale at the last observation: 1 in the displayed sample.",
+        )
+        .waitFor();
+      expect(
+        await page.getByText("m".repeat(64), { exact: false }).isVisible(),
+      ).toBe(false);
+      await routerObservation.press("Enter");
       await page.getByText("m".repeat(64), { exact: false }).waitFor();
       expect
         .soft(await page.getByText(/Last-known data follows/).count())
@@ -1458,6 +1753,7 @@ it.skipIf(!existsSync(chrome))(
         .getByLabel("Owner password", { exact: true })
         .fill("synthetic-owner-password");
       await page.getByRole("button", { name: "Sign in" }).click();
+      await routerObservation.press("Enter");
       await page.getByText("m".repeat(64), { exact: false }).waitFor();
       upstreamMode = "disconnected";
       await page.getByRole("button", { name: "Refresh Router" }).click();

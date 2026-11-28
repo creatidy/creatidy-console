@@ -24,6 +24,7 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
   const [activity, setActivity] = useState<"read" | "refresh" | null>(null);
   const [readFailed, setReadFailed] = useState(false);
   const [refreshBusy, setRefreshBusy] = useState(false);
+  const [factsOpen, setFactsOpen] = useState(false);
   const active = useRef<AbortController | null>(null);
   // Only a previously accepted observation can be mistaken for a new one.
   const uncertainObservation = useRef<string | null>(null);
@@ -147,6 +148,9 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
   }, []);
 
   const pending = activity === "refresh";
+  const staleResources =
+    view?.facts?.resources.filter((resource) => resource.freshness === "stale")
+      .length ?? 0;
   const canRefresh =
     view !== null &&
     view.status !== "unconfigured" &&
@@ -199,6 +203,29 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
             <p>Last-known data follows; it may be stale.</p>
           )}
           {view.facts && (
+            <p>
+              {view.last_known || view.refreshUnconfirmed
+                ? "Last-known inventory"
+                : "Observed inventory"}
+              : {view.facts.resource_count} resources, {view.facts.source_count}{" "}
+              sources, {view.facts.discovery_count} discoveries.
+            </p>
+          )}
+          {staleResources > 0 && (
+            <p>
+              Resources reported stale at the last observation: {staleResources}{" "}
+              in the displayed sample.
+            </p>
+          )}
+        </>
+      )}
+      {view?.facts && (
+        <details
+          open={factsOpen}
+          onToggle={(event) => setFactsOpen(event.currentTarget.open)}
+        >
+          <summary>Inspect Router observations</summary>
+          {activity === null && (
             <>
               <h3>Resources</h3>
               {view.facts.resource_count > view.facts.resources.length && (
@@ -333,7 +360,7 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
               </p>
             </>
           )}
-        </>
+        </details>
       )}
     </section>
   );

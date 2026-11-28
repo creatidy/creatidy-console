@@ -3,10 +3,12 @@ import RouterPanel from "./RouterPanel";
 import KernelOwnerPanel from "./KernelOwnerPanel";
 import KernelSnapshotPanel from "./KernelSnapshotPanel";
 import MiSnapshotPanel from "./MiSnapshotPanel";
+import type { KernelSnapshotStatus } from "../server/kernel-owner-transport";
 
 type Session = {
   configured: boolean;
   authenticated: boolean;
+  kernelSnapshotStatus?: KernelSnapshotStatus;
   miInspectionOrigin?: string;
 };
 
@@ -146,7 +148,21 @@ export default function App() {
           </button>
         </div>
       ) : session.authenticated ? (
-        <section>
+        <div className="operator-overview">
+          <h2>Operator overview</h2>
+          <p>
+            See what each source last reported, what it recorded about its
+            decisions, and what may need attention. These sources are observed
+            independently.
+          </p>
+          <nav aria-label="Operator views">
+            <a href="#router-heading">Resources</a>
+            <a href="#kernel-snapshot-heading">Work and decisions</a>
+            <a href="#mi-snapshot-heading">Offline evidence</a>
+            {!pending && (
+              <a href="#kernel-owner-heading">Proposal and command history</a>
+            )}
+          </nav>
           <RouterPanel
             expired={() => {
               invalidate(true);
@@ -154,15 +170,17 @@ export default function App() {
           />
           {!pending && (
             <>
-              <KernelOwnerPanel expired={() => invalidate(true)} />
-              <KernelSnapshotPanel expired={() => invalidate(true)} />
+              <KernelSnapshotPanel
+                initialStatus={session.kernelSnapshotStatus}
+                expired={() => invalidate(true)}
+              />
               <MiSnapshotPanel
                 destination={session.miInspectionOrigin}
                 expired={() => invalidate(true)}
               />
+              <KernelOwnerPanel expired={() => invalidate(true)} />
             </>
           )}
-          <p>Model Intelligence is not configured by this view.</p>
           <button
             type="button"
             disabled={pending}
@@ -170,7 +188,7 @@ export default function App() {
           >
             Log out
           </button>
-        </section>
+        </div>
       ) : (
         <form onSubmit={(event) => void submit(event)}>
           {session.configured && (
