@@ -27,9 +27,7 @@ export default function KernelOwnerPanel({ expired }: { expired: () => void }) {
   const [visible, setVisible] = useState(false);
   const disclosure = useRef<HTMLDetailsElement>(null);
   const disclosureOpen = useRef(false);
-  const navigation = useNavigationFocus(
-    Boolean(proposal && status === "connected" && visible),
-  );
+  const navigation = useNavigationFocus(visible || status === "disconnected");
   const [canApprove, setCanApprove] = useState(false);
   const [approvalScope, setApprovalScope] = useState<{
     digest: string;
@@ -246,7 +244,6 @@ export default function KernelOwnerPanel({ expired }: { expired: () => void }) {
         timer = setTimeout(() => void check(), 10000);
       } catch {
         if (current === generation) {
-          navigation.discard();
           disclosureOpen.current = false;
           setStatus("disconnected");
           if (cached && document.visibilityState === "visible")
@@ -278,7 +275,9 @@ export default function KernelOwnerPanel({ expired }: { expired: () => void }) {
 
   return (
     <section aria-labelledby="kernel-owner-heading" ref={navigation.scope}>
-      <h2 id="kernel-owner-heading">Kernel owner actions</h2>
+      <h2 id="kernel-owner-heading" tabIndex={-1} ref={navigation.fallback}>
+        Kernel owner actions
+      </h2>
       <p role="status">
         {status === "checking"
           ? "Checking owner capability."

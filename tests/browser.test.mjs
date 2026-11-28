@@ -1405,6 +1405,7 @@ it.skipIf(!existsSync(chrome))(
       await page.getByText(/Approval scope received/).waitFor();
       expect(await page.locator("pre").count()).toBe(2);
       let checks = 0;
+      await forgeLink.focus();
       await page.route("**/api/kernel/session-check", (route) => {
         checks++;
         return checks === 1 ? route.abort("failed") : route.continue();
@@ -1414,10 +1415,15 @@ it.skipIf(!existsSync(chrome))(
       );
       await page.getByText(/Kernel proposal unavailable/).waitFor();
       expect(await page.locator("pre").count()).toBe(0);
+      expect(await forgeLink.count()).toBe(0);
+      expect(await page.evaluate(() => document.activeElement?.id)).toBe(
+        "kernel-owner-heading",
+      );
       await page.clock.fastForward(10000);
       await page.getByText(hostile, { exact: false }).first().waitFor();
       expect(checks).toBe(2);
       expect(proposalReads).toBe(2);
+      expect(await forgeLink.isVisible()).toBe(false);
       await page.unroute("**/api/kernel/session-check");
       let releaseCheck;
       let checkStarted;
@@ -1722,6 +1728,33 @@ it.skipIf(!existsSync(chrome))(
           referer: undefined,
         },
       ]);
+      await routerLink.focus();
+      let releaseWithdrawal;
+      const heldWithdrawal = new Promise((resolve) => {
+        releaseWithdrawal = resolve;
+      });
+      await page.route("**/api/router", async (route) => {
+        await heldWithdrawal;
+        await route.fulfill({
+          json: { status: "denied", facts: null, origin: routerOrigin },
+        });
+      });
+      await page.clock.fastForward(10000);
+      await routerLink.waitFor({ state: "detached" });
+      const refreshAfterWithdrawal = page.getByRole("button", {
+        name: "Refresh Router",
+      });
+      await refreshAfterWithdrawal.focus();
+      releaseWithdrawal();
+      await page.getByText(/Observer access was denied/).waitFor();
+      expect(
+        await refreshAfterWithdrawal.evaluate(
+          (button) => document.activeElement === button,
+        ),
+      ).toBe(true);
+      await page.unroute("**/api/router");
+      await page.clock.fastForward(10000);
+      await routerLink.waitFor();
       expect(
         await page.evaluate(
           () => document.documentElement.scrollWidth <= innerWidth,

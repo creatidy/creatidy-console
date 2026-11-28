@@ -27,14 +27,7 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
   const [refreshBusy, setRefreshBusy] = useState(false);
   const [factsOpen, setFactsOpen] = useState(false);
   const active = useRef<AbortController | null>(null);
-  const navigation = useNavigationFocus(
-    Boolean(
-      view &&
-      activity === null &&
-      !view.refreshUnconfirmed &&
-      view.adminDestination,
-    ),
-  );
+  const navigation = useNavigationFocus(activity === null);
   // Only a previously accepted observation can be mistaken for a new one.
   const uncertainObservation = useRef<string | null>(null);
 
@@ -110,8 +103,6 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
       if (!next || !applicable()) return;
       if (next.observation !== uncertainObservation.current)
         uncertainObservation.current = null;
-      if (!next.adminDestination || uncertainObservation.current !== null)
-        navigation.discard();
       setView({
         ...next,
         refreshUnconfirmed:
@@ -120,7 +111,6 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
       setReadFailed(false);
     } catch {
       if (applicable()) {
-        navigation.discard();
         setView(null);
         setReadFailed(true);
       }
@@ -172,7 +162,9 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
     view.status !== "configuration_error";
   return (
     <section aria-labelledby="router-heading" ref={navigation.scope}>
-      <h2 id="router-heading">Router observer</h2>
+      <h2 id="router-heading" tabIndex={-1} ref={navigation.fallback}>
+        Router observer
+      </h2>
       {readFailed && (
         <p role="alert">
           Console could not retrieve Router status. Check the application
