@@ -262,6 +262,7 @@ export default function App() {
       {!session ? (
         <button
           type="button"
+          disabled={checking && !retryRequested.current}
           aria-disabled={checking}
           onClick={() => {
             if (!checking) {

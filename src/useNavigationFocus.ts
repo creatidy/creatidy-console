@@ -2,7 +2,10 @@ import { useEffect, useLayoutEffect, useRef } from "react";
 
 // Protected links leave the DOM while their read is pending. Remember only
 // focus identity, not live controls, and abandon it if the user moves focus.
-export function useNavigationFocus(settled: boolean) {
+export function useNavigationFocus(
+  settled: boolean,
+  attribute = "data-navigation-focus",
+) {
   const scope = useRef<HTMLElement>(null);
   const fallback = useRef<HTMLHeadingElement>(null);
   const previous = useRef<string | undefined>(undefined);
@@ -12,7 +15,7 @@ export function useNavigationFocus(settled: boolean) {
   const remember = () => {
     const focused = document.activeElement;
     if (focused instanceof HTMLElement && scope.current?.contains(focused))
-      previous.current = focused.dataset.navigationFocus;
+      previous.current = focused.getAttribute(attribute) ?? undefined;
   };
   useEffect(() => {
     document.addEventListener("focusin", discard);
@@ -25,10 +28,9 @@ export function useNavigationFocus(settled: boolean) {
     discard();
     if (document.activeElement !== document.body) return;
     const target = Array.from(
-      scope.current?.querySelectorAll<HTMLElement>("[data-navigation-focus]") ??
-        [],
-    ).find((element) => element.dataset.navigationFocus === key);
+      scope.current?.querySelectorAll<HTMLElement>(`[${attribute}]`) ?? [],
+    ).find((element) => element.getAttribute(attribute) === key);
     (target ?? fallback.current)?.focus();
-  }, [settled]);
+  }, [settled, attribute]);
   return { scope, fallback, remember, discard };
 }

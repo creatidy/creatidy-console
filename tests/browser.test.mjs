@@ -153,6 +153,34 @@ it.skipIf(!existsSync(chrome))(
           page.getByRole("heading", { name: "Set up your console" }),
         ),
       ).toBe(true);
+      const slowStart = await context.newPage();
+      const releaseSession = Promise.withResolvers();
+      await slowStart.route("**/api/session", async (route) => {
+        await releaseSession.promise;
+        await route.continue();
+      });
+      await slowStart.goto(origin);
+      const startupSkip = slowStart.getByRole("link", {
+        name: "Skip to main content",
+      });
+      try {
+        await startupSkip.waitFor({ state: "attached" });
+        await slowStart.keyboard.press("Tab");
+        expect(await hasFocus(startupSkip)).toBe(true);
+        expect(
+          await slowStart
+            .getByRole("button", { name: "Try again" })
+            .isDisabled(),
+        ).toBe(true);
+      } finally {
+        releaseSession.resolve();
+      }
+      await slowStart
+        .getByRole("heading", { name: "Set up your console" })
+        .waitFor();
+      expect(await hasFocus(startupSkip)).toBe(true);
+      await slowStart.close();
+      await page.bringToFront();
       await page.setViewportSize({ width: 320, height: 640 });
       await assertReflow();
       expect(
@@ -1556,6 +1584,25 @@ it.skipIf(!existsSync(chrome))(
       await page.getByText(/outcome unknown; do not retry blindly/).waitFor();
       expect(await hasFocus(journal)).toBe(true);
       expect(await journal.isEnabled()).toBe(true);
+      const receiptControl = page.getByRole("button", {
+        name: "Check original receipt",
+      });
+      const releaseHistoryCheck = Promise.withResolvers();
+      const holdHistoryCheck = async (route) => {
+        await releaseHistoryCheck.promise;
+        await route.fallback();
+      };
+      await page.route("**/api/kernel/session-check", holdHistoryCheck);
+      try {
+        await receiptControl.focus();
+        await page.clock.fastForward(10000);
+        await receiptControl.waitFor({ state: "detached" });
+      } finally {
+        releaseHistoryCheck.resolve();
+      }
+      await receiptControl.waitFor();
+      await page.unroute("**/api/kernel/session-check", holdHistoryCheck);
+      expect(await hasFocus(receiptControl)).toBe(true);
       const replayStarted = Promise.withResolvers();
       const releaseReplay = Promise.withResolvers();
       await page.route("**/api/kernel/owner-replay", async (route) => {

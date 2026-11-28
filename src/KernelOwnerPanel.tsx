@@ -433,8 +433,12 @@ function KernelApprovalPanel({
   const [pending, setPending] = useState(false);
   const [history, setHistory] = useState<HistoryEntry[]>();
   const confirmControl = useRef<HTMLButtonElement>(null);
-  const historyHeading = useRef<HTMLHeadingElement>(null);
   const [historyVisible, setHistoryVisible] = useState(false);
+  const historyNavigation = useNavigationFocus(
+    historyVisible || !history,
+    "data-history-focus",
+  );
+  const historyHeading = historyNavigation.fallback;
   const generation = useRef(0);
   const active = useRef<AbortController | undefined>(undefined);
   useEffect(() => {
@@ -460,6 +464,7 @@ function KernelApprovalPanel({
     if (!history) return;
     const controller = new AbortController();
     const timer = setTimeout(async () => {
+      historyNavigation.remember();
       setHistoryVisible(false);
       try {
         const response = await fetch("/api/kernel/session-check", {
@@ -911,7 +916,10 @@ function KernelApprovalPanel({
           </>
         )}
       </section>
-      <section aria-labelledby="kernel-command-history-heading">
+      <section
+        aria-labelledby="kernel-command-history-heading"
+        ref={historyNavigation.scope}
+      >
         <h3
           id="kernel-command-history-heading"
           ref={historyHeading}
@@ -978,6 +986,7 @@ function KernelApprovalPanel({
                 {entry.canRecover && entry.outcome === "unknown" ? (
                   <button
                     type="button"
+                    data-history-focus={`disposition:${entry.commandId}`}
                     disabled={pending}
                     onClick={(event) =>
                       void replay(entry.commandId, true, event.currentTarget)
@@ -998,6 +1007,7 @@ function KernelApprovalPanel({
                       </p>
                       <button
                         type="button"
+                        data-history-focus={`receipt:${entry.commandId}`}
                         disabled={pending}
                         onClick={(event) =>
                           void replay(
