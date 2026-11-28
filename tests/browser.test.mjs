@@ -1482,8 +1482,12 @@ it.skipIf(!existsSync(chrome))(
       await page.getByRole("button", { name: "Confirm approval" }).click();
       await page.getByText(/Approval outcome is unknown/).waitFor();
       expect(approvals).toBe(2);
-      await page.route("**/api/kernel/owner-journal", (route) =>
-        route.fulfill({
+      const journalStarted = Promise.withResolvers();
+      const releaseJournal = Promise.withResolvers();
+      await page.route("**/api/kernel/owner-journal", async (route) => {
+        journalStarted.resolve();
+        await releaseJournal.promise;
+        return route.fulfill({
           json: {
             status: "available",
             commands: [
@@ -1504,12 +1508,27 @@ it.skipIf(!existsSync(chrome))(
               },
             ],
           },
-        }),
-      );
-      await page
-        .getByRole("button", { name: "Inspect command history" })
-        .press("Enter");
+        });
+      });
+      const journal = page.getByRole("button", {
+        name: "Inspect command history",
+      });
+      await journal.press("Enter");
+      try {
+        await journalStarted.promise;
+        expect(await hasFocus(journal)).toBe(true);
+        expect(await journal.getAttribute("aria-disabled")).toBe("true");
+        await page
+          .getByRole("status")
+          .filter({ hasText: "Reading command history." })
+          .waitFor();
+        await page.keyboard.press("Enter");
+      } finally {
+        releaseJournal.resolve();
+      }
       await page.getByText(/outcome unknown; do not retry blindly/).waitFor();
+      expect(await hasFocus(journal)).toBe(true);
+      expect(await journal.isEnabled()).toBe(true);
       await page.route("**/api/kernel/owner-replay", (route) => {
         expect(route.request().postDataJSON()).toEqual({
           commandId: "synthetic-command",
@@ -2071,6 +2090,37 @@ it.skipIf(!existsSync(chrome))(
       expect(await page.getByText("resource-a", { exact: false }).count()).toBe(
         0,
       );
+      const retryStarted = Promise.withResolvers();
+      const releaseRetry = Promise.withResolvers();
+      await page.route("**/api/router", async (route) => {
+        retryStarted.resolve();
+        await releaseRetry.promise;
+        await route.abort("failed");
+      });
+      const routerStatus = page
+        .getByRole("region", { name: "Router observer" })
+        .getByRole("status");
+      await page
+        .getByRole("button", { name: "Retry Router status" })
+        .press("Enter");
+      try {
+        await retryStarted.promise;
+        expect(await routerStatus.textContent()).toBe(
+          "Checking Router status again.",
+        );
+        expect(
+          await hasFocus(
+            page.getByRole("button", { name: "Checking Router status" }),
+          ),
+        ).toBe(true);
+      } finally {
+        releaseRetry.resolve();
+      }
+      await routerStatus
+        .filter({
+          hasText: "Router status unavailable. Check the Console connection.",
+        })
+        .waitFor();
       await page.unroute("**/api/router");
       const recovery = page.waitForResponse(`${origin}/api/router`, {
         timeout: 2500,
@@ -2344,10 +2394,39 @@ it.skipIf(!existsSync(chrome))(
           value: "visible",
         });
       });
+      const logoutConfirmed = Promise.withResolvers();
+      const releaseLogout = Promise.withResolvers();
+      await other.route("**/api/logout", async (route) => {
+        try {
+          const response = await route.fetch();
+          logoutConfirmed.resolve(response.ok());
+          await releaseLogout.promise;
+          await route.fulfill({ response });
+        } catch (error) {
+          logoutConfirmed.reject(error);
+        }
+      });
       await other
         .getByRole("button", { name: "Log out" })
-        .evaluate((button) => button.click());
-      await other.getByRole("heading", { name: "Sign in" }).waitFor();
+        .evaluate((button) => {
+          button.focus();
+          button.click();
+        });
+      try {
+        expect(await logoutConfirmed.promise).toBe(true);
+        const denial = other.waitForResponse(
+          (response) =>
+            response.url() === `${origin}/api/router` &&
+            response.status() === 401,
+        );
+        await other.evaluate(() =>
+          document.dispatchEvent(new Event("visibilitychange")),
+        );
+        await denial;
+        await other.getByRole("heading", { name: "Sign in" }).waitFor();
+      } finally {
+        releaseLogout.resolve();
+      }
       await other
         .getByRole("status")
         .getByText("You are signed out.")

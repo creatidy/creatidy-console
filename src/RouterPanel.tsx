@@ -2,6 +2,8 @@ import { useEffect, useEffectEvent, useRef, useState } from "react";
 import type { RouterView } from "../server/router.ts";
 import { useNavigationFocus } from "./useNavigationFocus.ts";
 
+type ReadIntent = "passive" | "retry" | "refresh";
+
 const descriptions: Record<RouterView["status"], string> = {
   unconfigured:
     "Not configured. Add a local observer connection using the Console command line.",
@@ -32,7 +34,7 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
   const [view, setView] = useState<
     (RouterView & { refreshUnconfirmed: boolean }) | null
   >(null);
-  const [activity, setActivity] = useState<"read" | "refresh" | null>(null);
+  const [activity, setActivity] = useState<ReadIntent | null>(null);
   const [readFailed, setReadFailed] = useState(false);
   const [refreshBusy, setRefreshBusy] = useState(false);
   const [factsOpen, setFactsOpen] = useState(false);
@@ -43,8 +45,9 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
   // Only a previously accepted observation can be mistaken for a new one.
   const uncertainObservation = useRef<string | null>(null);
 
-  async function load(refresh = false) {
+  async function load(intent: ReadIntent = "passive") {
     if (document.visibilityState !== "visible") return;
+    const refresh = intent === "refresh";
     active.current?.abort();
     const controller = new AbortController();
     active.current = controller;
@@ -99,10 +102,17 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
       }
     };
     navigation.remember();
-    setAnnouncement(refresh ? "Requesting a Router observation." : "");
-    setActivity(refresh ? "refresh" : "read");
+    setAnnouncement(
+      refresh
+        ? "Requesting a Router observation."
+        : intent === "retry"
+          ? "Checking Router status again."
+          : "",
+    );
+    setActivity(intent);
     const announce = (message: string, key = message) => {
-      if (refresh || key !== lastAnnouncement.current) setAnnouncement(message);
+      if (intent !== "passive" || key !== lastAnnouncement.current)
+        setAnnouncement(message);
       lastAnnouncement.current = key;
     };
     try {
@@ -181,7 +191,7 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
     };
   }, []);
 
-  const pending = activity === "refresh";
+  const pending = activity === "refresh" || activity === "retry";
   const staleResources =
     view?.facts?.resources.filter((resource) => resource.freshness === "stale")
       .length ?? 0;
@@ -197,7 +207,7 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
       <div className="visually-hidden" role="status">
         {announcement}
       </div>
-      {readFailed && (
+      {readFailed && activity === null && (
         <p>
           Console could not retrieve Router status. Check the application
           connection.
@@ -213,14 +223,16 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
         type="button"
         aria-disabled={pending}
         onClick={() => {
-          if (!pending) void load(canRefresh);
+          if (!pending) void load(canRefresh ? "refresh" : "retry");
         }}
       >
-        {pending
+        {activity === "refresh"
           ? "Refreshing Router"
-          : canRefresh
-            ? "Refresh Router"
-            : "Retry Router status"}
+          : activity === "retry"
+            ? "Checking Router status"
+            : canRefresh
+              ? "Refresh Router"
+              : "Retry Router status"}
       </button>
       {!view || activity !== null ? (
         !readFailed || activity !== null ? (

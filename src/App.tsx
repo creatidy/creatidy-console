@@ -26,6 +26,7 @@ export default function App() {
   const [checking, setChecking] = useState(true);
   const channel = useRef<BroadcastChannel | null>(null);
   const generation = useRef(0);
+  const invalidatedGeneration = useRef<number>(-1);
   const skipLink = useRef<HTMLAnchorElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
   const confirmation = useRef<HTMLInputElement>(null);
@@ -59,7 +60,7 @@ export default function App() {
     broadcast: boolean,
     notice = "Your session expired or was revoked. Sign in again.",
   ) {
-    generation.current++;
+    invalidatedGeneration.current = ++generation.current;
     setSession({ configured: true, authenticated: false });
     setChecking(false);
     setError("");
@@ -171,7 +172,13 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: "{}",
       });
-      if (current !== generation.current) return;
+      if (current !== generation.current) {
+        // A passive 401 may have already cleared this session and notified peers.
+        // Confirm only locally, unless a newer session check has superseded it.
+        if (response.ok && invalidatedGeneration.current === generation.current)
+          setSessionNotice("You are signed out.");
+        return;
+      }
       if (response.status === 401) {
         invalidate(true);
         return;

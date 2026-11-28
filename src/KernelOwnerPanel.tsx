@@ -637,6 +637,7 @@ function KernelApprovalPanel({
   }
 
   async function readHistory() {
+    if (pending || document.visibilityState !== "visible") return;
     const current = ++generation.current;
     active.current?.abort();
     const controller = new AbortController();
@@ -644,6 +645,7 @@ function KernelApprovalPanel({
     const timeout = setTimeout(() => controller.abort(), 10000);
     setHistory(undefined);
     setReview(undefined);
+    setMessage("Reading command history.");
     setPending(true);
     try {
       const response = await fetch("/api/kernel/owner-journal", {
@@ -902,7 +904,7 @@ function KernelApprovalPanel({
         <h3 id="kernel-command-history-heading">Command history</h3>
         <button
           type="button"
-          disabled={pending}
+          aria-disabled={pending}
           onClick={() => void readHistory()}
         >
           Inspect command history
