@@ -798,8 +798,13 @@ function KernelApprovalPanel({
     }
   }
 
-  async function replay(commandId: string, readOnly: boolean) {
+  async function replay(
+    commandId: string,
+    readOnly: boolean,
+    trigger: HTMLButtonElement,
+  ) {
     if (pending || document.visibilityState !== "visible") return;
+    if (document.activeElement === trigger) historyHeading.current?.focus();
     setHistory(undefined);
     setPending(true);
     setMessage(
@@ -974,7 +979,9 @@ function KernelApprovalPanel({
                   <button
                     type="button"
                     disabled={pending}
-                    onClick={() => void replay(entry.commandId, true)}
+                    onClick={(event) =>
+                      void replay(entry.commandId, true, event.currentTarget)
+                    }
                   >
                     Read approval disposition
                   </button>
@@ -992,7 +999,13 @@ function KernelApprovalPanel({
                       <button
                         type="button"
                         disabled={pending}
-                        onClick={() => void replay(entry.commandId, false)}
+                        onClick={(event) =>
+                          void replay(
+                            entry.commandId,
+                            false,
+                            event.currentTarget,
+                          )
+                        }
                       >
                         Check original receipt
                       </button>

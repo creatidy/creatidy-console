@@ -1556,7 +1556,11 @@ it.skipIf(!existsSync(chrome))(
       await page.getByText(/outcome unknown; do not retry blindly/).waitFor();
       expect(await hasFocus(journal)).toBe(true);
       expect(await journal.isEnabled()).toBe(true);
-      await page.route("**/api/kernel/owner-replay", (route) => {
+      const replayStarted = Promise.withResolvers();
+      const releaseReplay = Promise.withResolvers();
+      await page.route("**/api/kernel/owner-replay", async (route) => {
+        replayStarted.resolve();
+        await releaseReplay.promise;
         expect(route.request().postDataJSON()).toEqual({
           commandId: "synthetic-command",
         });
@@ -1564,8 +1568,18 @@ it.skipIf(!existsSync(chrome))(
       });
       await page
         .getByRole("button", { name: "Check original receipt" })
-        .click();
+        .press("Enter");
+      const historyHeading = page.getByRole("heading", {
+        name: "Command history",
+      });
+      try {
+        await replayStarted.promise;
+        expect(await hasFocus(historyHeading)).toBe(true);
+      } finally {
+        releaseReplay.resolve();
+      }
       await page.getByText(/A historical receipt was returned/).waitFor();
+      expect(await hasFocus(historyHeading)).toBe(true);
       await page.clock.fastForward(10000);
       await page.getByText(/Approval scope received/).waitFor();
       expect(await page.locator("pre").count()).toBe(2);
