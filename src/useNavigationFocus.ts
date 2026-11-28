@@ -28,7 +28,7 @@ export function useNavigationFocus(settled: boolean) {
       scope.current?.querySelectorAll<HTMLElement>("[data-navigation-focus]") ??
         [],
     ).find((element) => element.dataset.navigationFocus === key);
-    (target ?? fallback.current)?.focus({ preventScroll: true });
+    (target ?? fallback.current)?.focus();
   }, [settled]);
   return { scope, fallback, remember, discard };
 }

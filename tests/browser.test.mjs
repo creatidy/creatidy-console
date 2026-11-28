@@ -1159,6 +1159,11 @@ it.skipIf(!existsSync(chrome))(
                 base: "f".repeat(40),
               },
               { repository: "example/..", issue: "18", base: null },
+              ...Array.from({ length: 16 }, (_, index) => ({
+                repository: "example/synthetic",
+                issue: String(30 + index),
+                base: null,
+              })),
             ],
           },
           headers: { "cache-control": "no-store" },
@@ -1194,7 +1199,7 @@ it.skipIf(!existsSync(chrome))(
       expect(await forgeLink.getAttribute("href")).toBe(forgeDestination);
       expect(
         await page.getByRole("link", { name: /Open Forgejo issue/ }).count(),
-      ).toBe(1);
+      ).toBe(17);
       expect(
         await page
           .getByRole("link", { name: /Open recorded base/ })
@@ -1219,6 +1224,11 @@ it.skipIf(!existsSync(chrome))(
       const holdForgeCheck = new Promise((resolve) => {
         finishForgeCheck = resolve;
       });
+      await page.setViewportSize({ width: 360, height: 280 });
+      const lateForgeLink = page.getByRole("link", {
+        name: "Open Forgejo issue example/synthetic#45 (new tab)",
+      });
+      await lateForgeLink.focus();
       await page.route("**/api/kernel/session-check", async (route) => {
         forgeCheckStarted();
         await holdForgeCheck;
@@ -1226,12 +1236,21 @@ it.skipIf(!existsSync(chrome))(
       });
       await page.clock.fastForward(10000);
       await forgeCheck;
-      await forgeLink.waitFor({ state: "detached" });
+      await lateForgeLink.waitFor({ state: "detached" });
+      // Model the scroll position moving up when the long disclosure shrinks.
+      await page.evaluate(() => window.scrollTo(0, 0));
       finishForgeCheck();
-      await forgeLink.waitFor();
-      await page.waitForFunction(() =>
-        document.activeElement?.textContent?.includes("example/synthetic#17"),
-      );
+      await lateForgeLink.waitFor();
+      expect(
+        await lateForgeLink.evaluate((link) => {
+          const { top, bottom } = link.getBoundingClientRect();
+          return (
+            document.activeElement === link && top >= 0 && bottom <= innerHeight
+          );
+        }),
+      ).toBe(true);
+      await page.setViewportSize({ width: 360, height: 800 });
+      await forgeLink.focus();
       await page.unroute("**/api/kernel/session-check");
       await context.route(forgeDestination, (route) =>
         route.fulfill({
