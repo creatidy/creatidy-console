@@ -30,6 +30,16 @@ const summaries: Record<RouterView["status"], string> = {
   configuration_error: "Check the local Router observer configuration.",
 };
 
+const busyInstruction =
+  "Router did not queue a refresh. Retry the refresh to read the new configuration.";
+
+function staleCount(view: RouterView | null) {
+  return (
+    view?.facts?.resources.filter((resource) => resource.freshness === "stale")
+      .length ?? 0
+  );
+}
+
 export default function RouterPanel({ expired }: { expired: () => void }) {
   const [view, setView] = useState<
     (RouterView & { refreshUnconfirmed: boolean }) | null
@@ -112,7 +122,7 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
     setActivity(intent);
     const announce = (message: string, key = message) => {
       if (intent !== "passive" || key !== lastAnnouncement.current)
-        setAnnouncement(message);
+        setAnnouncement(busy ? `${busyInstruction} ${message}` : message);
       lastAnnouncement.current = key;
     };
     try {
@@ -142,9 +152,10 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
       const summary = refreshUnconfirmed
         ? "New Router observation unconfirmed; displaying last-known facts if available."
         : summaries[next.status];
+      const stale = staleCount(next);
       announce(
-        `${busy ? "Router is still finishing an earlier refresh. " : ""}${summary}${next.gap ? " Router history has a gap." : ""}`,
-        `${summary}:${next.gap ?? ""}`,
+        `${summary}${stale ? " The sample includes resources reported stale." : ""}${next.gap ? " Router history has a gap." : ""}`,
+        JSON.stringify([summary, next.observation, next.gap, stale]),
       );
     } catch {
       if (applicable()) {
@@ -192,9 +203,7 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
   }, []);
 
   const pending = activity === "refresh" || activity === "retry";
-  const staleResources =
-    view?.facts?.resources.filter((resource) => resource.freshness === "stale")
-      .length ?? 0;
+  const staleResources = staleCount(view);
   const canRefresh =
     view !== null &&
     view.status !== "unconfigured" &&

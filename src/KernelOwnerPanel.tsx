@@ -432,6 +432,8 @@ function KernelApprovalPanel({
   }>();
   const [pending, setPending] = useState(false);
   const [history, setHistory] = useState<HistoryEntry[]>();
+  const confirmControl = useRef<HTMLButtonElement>(null);
+  const historyHeading = useRef<HTMLHeadingElement>(null);
   const [historyVisible, setHistoryVisible] = useState(false);
   const generation = useRef(0);
   const active = useRef<AbortController | undefined>(undefined);
@@ -490,6 +492,7 @@ function KernelApprovalPanel({
   }, [history, expired]);
 
   async function prepare() {
+    if (pending || !visible || !/^[1-9][0-9]{0,18}$/.test(expiry)) return;
     const current = ++generation.current;
     active.current?.abort();
     const controller = new AbortController();
@@ -575,6 +578,8 @@ function KernelApprovalPanel({
   async function approve() {
     if (!review || pending || !visible) return;
     const selected = review;
+    if (document.activeElement === confirmControl.current)
+      historyHeading.current?.focus();
     setReview(undefined);
     setPending(true);
     setMessage("Submitting approval; a lost reply cannot prove its outcome.");
@@ -870,7 +875,7 @@ function KernelApprovalPanel({
         />
         <button
           type="button"
-          disabled={pending || !/^[1-9][0-9]{0,18}$/.test(expiry)}
+          aria-disabled={pending || !/^[1-9][0-9]{0,18}$/.test(expiry)}
           onClick={() => void prepare()}
         >
           Review exact approval
@@ -892,6 +897,7 @@ function KernelApprovalPanel({
             <pre>{review.text}</pre>
             <button
               type="button"
+              ref={confirmControl}
               disabled={pending}
               onClick={() => void approve()}
             >
@@ -901,7 +907,13 @@ function KernelApprovalPanel({
         )}
       </section>
       <section aria-labelledby="kernel-command-history-heading">
-        <h3 id="kernel-command-history-heading">Command history</h3>
+        <h3
+          id="kernel-command-history-heading"
+          ref={historyHeading}
+          tabIndex={-1}
+        >
+          Command history
+        </h3>
         <button
           type="button"
           aria-disabled={pending}

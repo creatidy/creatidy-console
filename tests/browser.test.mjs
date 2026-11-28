@@ -1440,8 +1440,16 @@ it.skipIf(!existsSync(chrome))(
       expect(await page.locator("pre img").count()).toBe(0);
       expect(await page.evaluate(() => window.ownerInjected)).toBeUndefined();
       let approvals = 0;
-      await page.route("**/api/kernel/owner-review", (route) =>
-        route.fulfill({
+      const reviewStarted = Promise.withResolvers();
+      const releaseReview = Promise.withResolvers();
+      let reviewRequests = 0;
+      await page.route("**/api/kernel/owner-review", async (route) => {
+        if (++reviewRequests === 1) {
+          reviewStarted.resolve();
+          await releaseReview.promise;
+          return route.fulfill({ status: 503 });
+        }
+        return route.fulfill({
           json: {
             review: "f".repeat(64),
             scope: hostile,
@@ -1452,8 +1460,8 @@ it.skipIf(!existsSync(chrome))(
             approvalExpiry: "2000000000",
             text: hostile,
           },
-        }),
-      );
+        });
+      });
       await page.route("**/api/kernel/owner", (route) => {
         if (route.request().method() !== "POST") return route.fallback();
         approvals++;
@@ -1466,17 +1474,36 @@ it.skipIf(!existsSync(chrome))(
         return route.fulfill({ json: { kind: "unknown" } });
       });
       await page.getByLabel("Requested producer expiry").fill("2000000000");
+      const reviewControl = page.getByRole("button", {
+        name: "Review exact approval",
+      });
+      await reviewControl.press("Enter");
+      try {
+        await reviewStarted.promise;
+        expect(await hasFocus(reviewControl)).toBe(true);
+        expect(await reviewControl.getAttribute("aria-disabled")).toBe("true");
+      } finally {
+        releaseReview.resolve();
+      }
       await page
-        .getByRole("button", { name: "Review exact approval" })
-        .press("Enter");
+        .getByText("Review unavailable; no approval was sent.")
+        .waitFor();
+      expect(await hasFocus(reviewControl)).toBe(true);
+      await reviewControl.press("Enter");
       await page.getByText(/Review these exact values/).waitFor();
+      expect(await hasFocus(reviewControl)).toBe(true);
       await page.setViewportSize({ width: 320, height: 640 });
       await assertReflow();
       await page.setViewportSize({ width: 1280, height: 720 });
       expect(await page.locator("pre img").count()).toBe(0);
       expect(await page.getByText(/Observed revision: -1/).count()).toBe(1);
-      await page.getByRole("button", { name: "Confirm approval" }).click();
+      await page
+        .getByRole("button", { name: "Confirm approval" })
+        .press("Enter");
       await page.getByText(/No approval was sent/).waitFor();
+      expect(
+        await hasFocus(page.getByRole("heading", { name: "Command history" })),
+      ).toBe(true);
       expect(await page.getByText(/Approval outcome.*unknown/).count()).toBe(0);
       await page.getByRole("button", { name: "Review exact approval" }).click();
       await page.getByRole("button", { name: "Confirm approval" }).click();
@@ -2130,6 +2157,45 @@ it.skipIf(!existsSync(chrome))(
       expect(recovered.status()).toBe(200);
       expect(await recovered.headerValue("set-cookie")).toBeNull();
       await page.getByText("m".repeat(64), { exact: false }).waitFor();
+      expect(calls).toBe(reconciledCalls);
+      await page.route("**/api/router", async (route) => {
+        const response = await route.fetch();
+        const view = await response.json();
+        expect(view.status).toBe("connected");
+        await route.fulfill({
+          json: { ...view, observation: "synthetic-new-observation" },
+        });
+      });
+      await page.clock.fastForward(10000);
+      await routerStatus
+        .filter({
+          hasText:
+            "Router observation available. The sample includes resources reported stale.",
+        })
+        .waitFor();
+      await page.clock.fastForward(10000);
+      await page.getByText("m".repeat(64), { exact: false }).waitFor();
+      expect(await routerStatus.textContent()).toBe("");
+      await page.unroute("**/api/router");
+      await page.route("**/api/router/refresh", (route) =>
+        route.fulfill({ status: 503 }),
+      );
+      for (const failCache of [false, true]) {
+        if (failCache)
+          await page.route("**/api/router", (route) => route.abort("failed"));
+        await page
+          .getByRole("button", { name: "Refresh Router" })
+          .press("Enter");
+        await routerStatus
+          .filter({ hasText: /did not queue a refresh.*Retry the refresh/ })
+          .waitFor();
+        if (failCache)
+          expect(await routerStatus.textContent()).toContain(
+            "Router status unavailable",
+          );
+      }
+      await page.unroute("**/api/router/refresh");
+      await page.unroute("**/api/router");
       expect(calls).toBe(reconciledCalls);
       await page.route("**/api/router", (route) =>
         route.fulfill({ status: 401, json: { error: "expired" } }),
