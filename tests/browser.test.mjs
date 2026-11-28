@@ -68,7 +68,7 @@ it.skipIf(!existsSync(chrome))(
         listener.once("error", reject);
         listener.listen(0, "127.0.0.1", resolve);
       });
-      const origin = `http://127.0.0.1:${listener.address().port}`;
+      const origin = `http://localhost:${listener.address().port}`;
       await new Promise((resolve, reject) =>
         listener.close((error) => (error ? reject(error) : resolve())),
       );
@@ -112,7 +112,7 @@ it.skipIf(!existsSync(chrome))(
           "--disable-background-networking",
           "--disable-component-update",
           "--proxy-server=127.0.0.1:9",
-          "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1",
+          "--host-resolver-rules=MAP localhost 127.0.0.1, MAP * ~NOTFOUND, EXCLUDE 127.0.0.1",
         ],
       });
       const context = await browser.newContext();
@@ -1152,6 +1152,19 @@ it.skipIf(!existsSync(chrome))(
             scope: hostile,
             digest: "a".repeat(64),
             text: hostile,
+            forgejoSubjects: [
+              {
+                repository: "example/synthetic",
+                issue: "17",
+                base: "f".repeat(40),
+              },
+              { repository: "example/..", issue: "18", base: null },
+              ...Array.from({ length: 16 }, (_, index) => ({
+                repository: "example/synthetic",
+                issue: String(30 + index),
+                base: null,
+              })),
+            ],
           },
           headers: { "cache-control": "no-store" },
         });
@@ -1174,6 +1187,117 @@ it.skipIf(!existsSync(chrome))(
       expect(await page.locator("pre").textContent()).toBe(hostile);
       expect(await page.locator("pre img").count()).toBe(0);
       expect(await page.evaluate(() => window.ownerInjected)).toBeUndefined();
+      const forgeSummary = page.getByText("Forgejo proposal references", {
+        exact: true,
+      });
+      await forgeSummary.press("Enter");
+      const forgeLink = page.getByRole("link", {
+        name: "Open Forgejo issue example/synthetic#17 (new tab)",
+      });
+      const forgeDestination =
+        "https://forgejo.creatidy.com/example/synthetic/issues/17";
+      expect(await forgeLink.getAttribute("href")).toBe(forgeDestination);
+      expect(
+        await page.getByRole("link", { name: /Open Forgejo issue/ }).count(),
+      ).toBe(17);
+      expect(
+        await page
+          .getByRole("link", { name: /Open recorded base/ })
+          .getAttribute("href"),
+      ).toBe(
+        `https://forgejo.creatidy.com/example/synthetic/commit/${"f".repeat(40)}`,
+      );
+      expect(await forgeLink.getAttribute("rel")).toBe("noopener noreferrer");
+      await page.keyboard.press("Tab");
+      expect(
+        await forgeLink.evaluate(
+          (link) =>
+            link === document.activeElement &&
+            getComputedStyle(link).outlineStyle !== "none",
+        ),
+      ).toBe(true);
+      let finishForgeCheck;
+      let forgeCheckStarted;
+      const forgeCheck = new Promise((resolve) => {
+        forgeCheckStarted = resolve;
+      });
+      const holdForgeCheck = new Promise((resolve) => {
+        finishForgeCheck = resolve;
+      });
+      await page.setViewportSize({ width: 360, height: 280 });
+      const lateForgeLink = page.getByRole("link", {
+        name: "Open Forgejo issue example/synthetic#45 (new tab)",
+      });
+      await lateForgeLink.focus();
+      await page.route("**/api/kernel/session-check", async (route) => {
+        forgeCheckStarted();
+        await holdForgeCheck;
+        await route.continue();
+      });
+      await page.clock.fastForward(10000);
+      await forgeCheck;
+      await lateForgeLink.waitFor({ state: "detached" });
+      // Model the scroll position moving up when the long disclosure shrinks.
+      await page.evaluate(() => window.scrollTo(0, 0));
+      finishForgeCheck();
+      await lateForgeLink.waitFor();
+      expect(
+        await lateForgeLink.evaluate((link) => {
+          const { top, bottom } = link.getBoundingClientRect();
+          return (
+            document.activeElement === link && top >= 0 && bottom <= innerHeight
+          );
+        }),
+      ).toBe(true);
+      await page.setViewportSize({ width: 360, height: 800 });
+      await forgeLink.focus();
+      await page.unroute("**/api/kernel/session-check");
+      await context.route(forgeDestination, (route) =>
+        route.fulfill({
+          contentType: "text/html",
+          body: "<h1>Synthetic Forgejo</h1>",
+        }),
+      );
+      const [forgeTab] = await Promise.all([
+        context.waitForEvent("page"),
+        page.keyboard.press("Enter"),
+      ]);
+      await forgeTab
+        .getByRole("heading", { name: "Synthetic Forgejo" })
+        .waitFor();
+      expect(
+        await forgeTab.evaluate(() => [window.opener, document.referrer]),
+      ).toEqual([null, ""]);
+      // Headless Chrome need not change document visibility on new-tab
+      // navigation. Exercise the background/foreground transition explicitly.
+      await page.evaluate(() => {
+        Object.defineProperty(document, "visibilityState", {
+          configurable: true,
+          value: "hidden",
+        });
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await forgeLink.waitFor({ state: "detached" });
+      await forgeTab.close();
+      await page.evaluate(() => {
+        Object.defineProperty(document, "visibilityState", {
+          configurable: true,
+          value: "visible",
+        });
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await forgeLink.waitFor();
+      await page.waitForFunction(() =>
+        document.activeElement?.textContent?.includes("example/synthetic#17"),
+      );
+      await page.keyboard.press("Tab");
+      expect(
+        await page.evaluate(() => document.activeElement?.textContent),
+      ).toContain("Open recorded base");
+      await page.evaluate(() =>
+        Reflect.deleteProperty(document, "visibilityState"),
+      );
+      await context.unroute(forgeDestination);
       await page.unroute("**/api/kernel/approval-scope");
       await page.route("**/api/kernel/approval-scope", (route) =>
         route.fulfill({
@@ -1300,6 +1424,7 @@ it.skipIf(!existsSync(chrome))(
       await page.getByText(/Approval scope received/).waitFor();
       expect(await page.locator("pre").count()).toBe(2);
       let checks = 0;
+      await forgeLink.focus();
       await page.route("**/api/kernel/session-check", (route) => {
         checks++;
         return checks === 1 ? route.abort("failed") : route.continue();
@@ -1309,10 +1434,15 @@ it.skipIf(!existsSync(chrome))(
       );
       await page.getByText(/Kernel proposal unavailable/).waitFor();
       expect(await page.locator("pre").count()).toBe(0);
+      expect(await forgeLink.count()).toBe(0);
+      expect(await page.evaluate(() => document.activeElement?.id)).toBe(
+        "kernel-owner-heading",
+      );
       await page.clock.fastForward(10000);
       await page.getByText(hostile, { exact: false }).first().waitFor();
       expect(checks).toBe(2);
       expect(proposalReads).toBe(2);
+      expect(await forgeLink.isVisible()).toBe(false);
       await page.unroute("**/api/kernel/session-check");
       let releaseCheck;
       let checkStarted;
@@ -1395,6 +1525,7 @@ it.skipIf(!existsSync(chrome))(
       let upstreamMode = "connected";
       let calls = 0;
       const key = "synthetic-browser-observer-key";
+      const adminRequests = [];
       const position = {
         epoch: "a".repeat(32),
         sequence: 1,
@@ -1433,6 +1564,22 @@ it.skipIf(!existsSync(chrome))(
           heldRefresh = resolve;
         });
       upstream = createHttpServer((request, response) => {
+        if (request.url === "/admin") {
+          adminRequests.push({
+            method: request.method,
+            cookie: request.headers.cookie,
+            authorization: request.headers.authorization,
+            referer: request.headers.referer,
+          });
+          response.writeHead(303, { location: "/admin/login" }).end();
+          return;
+        }
+        if (request.url === "/admin/login") {
+          response
+            .writeHead(200, { "content-type": "text/html" })
+            .end("<h1>Synthetic Router sign-in required</h1>");
+          return;
+        }
         calls++;
         if (upstreamMode === "hold") {
           heldRefresh(response);
@@ -1488,11 +1635,13 @@ it.skipIf(!existsSync(chrome))(
         upstream.once("error", reject);
         upstream.listen(0, "127.0.0.1", resolve);
       });
+      const routerOrigin = `http://127.0.0.1:${upstream.address().port}`;
       writeFileSync(
         join(state, "router.json"),
         JSON.stringify({
-          origin: `http://127.0.0.1:${upstream.address().port}`,
+          origin: routerOrigin,
           credential: key,
+          adminProfile: "local-admin-v1",
         }),
         { mode: 0o600 },
       );
@@ -1503,6 +1652,11 @@ it.skipIf(!existsSync(chrome))(
         )
         .waitFor();
       expect(calls).toBe(0);
+      expect(
+        await page
+          .getByRole("link", { name: /Open Router administration/ })
+          .count(),
+      ).toBe(0);
       await page.evaluate(() => {
         const actualFetch = window.fetch;
         window.fetch = async (input, options) => {
@@ -1540,6 +1694,86 @@ it.skipIf(!existsSync(chrome))(
         .waitFor();
       await page.getByText("m".repeat(64), { exact: false }).waitFor();
       await page.setViewportSize({ width: 390, height: 844 });
+      const routerLink = page.getByRole("link", {
+        name: /Open Router administration/,
+      });
+      expect(await routerLink.getAttribute("href")).toBe(
+        `${routerOrigin}/admin`,
+      );
+      expect(adminRequests).toEqual([]);
+      await routerLink.focus();
+      let finishRouterRead;
+      let routerReadStarted;
+      const routerRead = new Promise((resolve) => {
+        routerReadStarted = resolve;
+      });
+      const holdRouterRead = new Promise((resolve) => {
+        finishRouterRead = resolve;
+      });
+      await page.route("**/api/router", async (route) => {
+        routerReadStarted();
+        await holdRouterRead;
+        await route.continue();
+      });
+      await page.clock.fastForward(10000);
+      await routerRead;
+      await routerLink.waitFor({ state: "detached" });
+      finishRouterRead();
+      await routerLink.waitFor();
+      await page.waitForFunction(() =>
+        document.activeElement?.textContent?.includes(
+          "Open Router administration",
+        ),
+      );
+      await page.unroute("**/api/router");
+      // Use the browser's native navigation; neither Console nor observer
+      // credentials may appear on the actual synthetic Router request.
+      const [routerTab] = await Promise.all([
+        context.waitForEvent("page"),
+        page.keyboard.press("Enter"),
+      ]);
+      await routerTab
+        .getByRole("heading", { name: "Synthetic Router sign-in required" })
+        .waitFor();
+      expect(
+        await routerTab.evaluate(() => [window.opener, document.referrer]),
+      ).toEqual([null, ""]);
+      await routerTab.close();
+      expect(adminRequests).toEqual([
+        {
+          method: "GET",
+          cookie: undefined,
+          authorization: undefined,
+          referer: undefined,
+        },
+      ]);
+      await routerLink.focus();
+      let releaseWithdrawal;
+      const heldWithdrawal = new Promise((resolve) => {
+        releaseWithdrawal = resolve;
+      });
+      await page.route("**/api/router", async (route) => {
+        await heldWithdrawal;
+        await route.fulfill({
+          json: { status: "denied", facts: null, origin: routerOrigin },
+        });
+      });
+      await page.clock.fastForward(10000);
+      await routerLink.waitFor({ state: "detached" });
+      const refreshAfterWithdrawal = page.getByRole("button", {
+        name: "Refresh Router",
+      });
+      await refreshAfterWithdrawal.focus();
+      releaseWithdrawal();
+      await page.getByText(/Observer access was denied/).waitFor();
+      expect(
+        await refreshAfterWithdrawal.evaluate(
+          (button) => document.activeElement === button,
+        ),
+      ).toBe(true);
+      await page.unroute("**/api/router");
+      await page.clock.fastForward(10000);
+      await routerLink.waitFor();
       expect(
         await page.evaluate(
           () => document.documentElement.scrollWidth <= innerWidth,
@@ -1603,6 +1837,7 @@ it.skipIf(!existsSync(chrome))(
       expect
         .soft(await page.getByText(/Observer access was denied/).count())
         .toBe(1);
+      expect(await routerLink.count()).toBe(0);
       expect
         .soft(await page.getByText("resource-a", { exact: false }).count())
         .toBe(0);

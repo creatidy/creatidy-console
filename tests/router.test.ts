@@ -17,7 +17,10 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { createApp } from "../server/app.ts";
-import { validateRouterOrigin } from "../server/router-config.ts";
+import {
+  ROUTER_ADMIN_PROFILE,
+  validateRouterOrigin,
+} from "../server/router-config.ts";
 import { createRouterObserver } from "../server/router.ts";
 import { openState } from "../server/state.ts";
 
@@ -303,10 +306,10 @@ function directory() {
   return dir;
 }
 
-function writeConfig(dir: string, routerOrigin: string) {
+function writeConfig(dir: string, routerOrigin: string, adminProfile?: string) {
   writeFileSync(
     join(dir, "router.json"),
-    JSON.stringify({ origin: routerOrigin, credential }),
+    JSON.stringify({ origin: routerOrigin, credential, adminProfile }),
     { mode: 0o600 },
   );
 }
@@ -320,6 +323,38 @@ afterEach(async () => {
 });
 
 describe("Router observer", () => {
+  it("publishes only the confirmed local admin destination without probing it", async () => {
+    const fixture = await upstream();
+    const dir = directory();
+    let local: string | null = "http://localhost:4173";
+    const observer = createRouterObserver(dir, () => local);
+    writeConfig(dir, fixture.origin);
+    expect((await observer.refresh()).adminDestination).toBeUndefined();
+    writeConfig(dir, fixture.origin, "future-admin-profile");
+    const unsupported = await observer.refresh();
+    expect(unsupported.status).toBe("connected");
+    expect(unsupported.adminDestination).toBeUndefined();
+    writeConfig(dir, fixture.origin, ROUTER_ADMIN_PROFILE);
+    expect(observer.view().adminDestination).toBeUndefined();
+    expect(fixture.calls).toHaveLength(2);
+    expect((await observer.refresh()).adminDestination).toBe(
+      `${fixture.origin}/admin`,
+    );
+    local = origin; // Same cookie host despite a different port.
+    expect(observer.view().adminDestination).toBeUndefined();
+    local = null; // Non-local Console listener or browser origin.
+    expect(observer.view().adminDestination).toBeUndefined();
+    local = "http://localhost:4173";
+    fixture.setMode("denied");
+    expect((await observer.refresh()).adminDestination).toBeUndefined();
+    expect(fixture.calls.map(({ method, url }) => [method, url])).toEqual([
+      ["GET", "/observer/v1/snapshot"],
+      ["GET", "/observer/v1/snapshot"],
+      ["GET", "/observer/v1/snapshot"],
+      ["POST", "/observer/v1/replay"],
+    ]);
+  });
+
   it("rejects destinations that could escape the local trust boundary", () => {
     const withCredentials = new URL("http://127.0.0.1:9000");
     withCredentials.username = "synthetic-user";

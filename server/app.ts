@@ -26,6 +26,7 @@ import {
 } from "./kernel-owner-transport.ts";
 import type { OwnerPairing } from "./kernel-owner-greeting.ts";
 import { UnsupportedOwnerPayload } from "./kernel-owner-proposal.ts";
+import type { ForgejoSubject } from "./forgejo-navigation.ts";
 import {
   ownerIdentityDigest,
   parseOwnerJson,
@@ -57,7 +58,7 @@ export interface AppOptions {
     proposalSupported?: boolean;
     approvalScopeSupported?: boolean;
     approvalSupported?: boolean;
-    readProposal: () => Promise<{ digest: string; text: string }>;
+    readProposal: () => Promise<ProposalObservation>;
     snapshotAvailable?: () => boolean;
     snapshotVersionUnsupported?: () => boolean;
     readSnapshot?: (selection?: {
@@ -112,6 +113,12 @@ export interface AppOptions {
   };
 }
 
+type ProposalObservation = {
+  digest: string;
+  text: string;
+  forgejoSubjects?: ForgejoSubject[];
+};
+
 export async function createApp(options: AppOptions) {
   const origin = new URL(options.origin);
   if (
@@ -164,7 +171,10 @@ export async function createApp(options: AppOptions) {
   });
   const cookieName =
     origin.protocol === "https:" ? "__Host-console" : "console";
-  const routerObserver = createRouterObserver(options.stateDirectory);
+  const routerObserver = createRouterObserver(
+    options.stateDirectory,
+    localConsoleOrigin,
+  );
   function localConsoleOrigin() {
     const listener = app.server.address();
     return listener &&
@@ -513,10 +523,7 @@ export async function createApp(options: AppOptions) {
       kernelReadActive = false;
     }
   }
-  const proposalReads = new Map<
-    string,
-    QueuedRead<{ digest: string; text: string }>
-  >();
+  const proposalReads = new Map<string, QueuedRead<ProposalObservation>>();
   type ReadSnapshot = NonNullable<
     NonNullable<AppOptions["kernelOwner"]>["readSnapshot"]
   >;
@@ -572,7 +579,7 @@ export async function createApp(options: AppOptions) {
     const ownerChannel = options.kernelOwner;
     if (!ownerChannel || ownerChannel.proposalSupported === false)
       return { status: "unavailable", actions: [] };
-    let proposal: { digest: string; text: string } | undefined;
+    let proposal: ProposalObservation | undefined;
     let failure = "disconnected";
     try {
       proposal = await coalesceKernelRead(
@@ -627,6 +634,9 @@ export async function createApp(options: AppOptions) {
       scope: ownerChannel.scope,
       digest: proposal.digest,
       text: proposal.text,
+      ...(localConsoleOrigin() && proposal.forgejoSubjects?.length
+        ? { forgejoSubjects: proposal.forgejoSubjects }
+        : {}),
     };
   });
   app.get("/api/kernel/approval-scope", async (request, reply) => {

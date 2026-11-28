@@ -163,6 +163,10 @@ export default function App() {
               <a href="#kernel-owner-heading">Proposal and command history</a>
             )}
           </nav>
+          <p>
+            Attaching to an execution session or opening its workspace is
+            unavailable. Console has no supported attach or workspace access.
+          </p>
           <RouterPanel
             expired={() => {
               invalidate(true);

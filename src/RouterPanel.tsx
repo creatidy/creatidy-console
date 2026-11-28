@@ -1,5 +1,6 @@
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import type { RouterView } from "../server/router.ts";
+import { useNavigationFocus } from "./useNavigationFocus.ts";
 
 const descriptions: Record<RouterView["status"], string> = {
   unconfigured:
@@ -26,6 +27,7 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
   const [refreshBusy, setRefreshBusy] = useState(false);
   const [factsOpen, setFactsOpen] = useState(false);
   const active = useRef<AbortController | null>(null);
+  const navigation = useNavigationFocus(activity === null);
   // Only a previously accepted observation can be mistaken for a new one.
   const uncertainObservation = useRef<string | null>(null);
 
@@ -58,6 +60,7 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
         if (!applicable()) return null;
         signal.throwIfAborted();
         if (response.status === 401) {
+          navigation.discard();
           setView(null);
           expired();
           controller.abort();
@@ -81,6 +84,7 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
         clearTimeout(timer);
       }
     };
+    navigation.remember();
     setActivity(refresh ? "refresh" : "read");
     try {
       if (refresh) {
@@ -132,6 +136,7 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
         reconcile(true);
         return;
       }
+      navigation.remember();
       active.current?.abort();
       active.current = null;
       setView(null);
@@ -156,8 +161,10 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
     view.status !== "unconfigured" &&
     view.status !== "configuration_error";
   return (
-    <section aria-labelledby="router-heading">
-      <h2 id="router-heading">Router observer</h2>
+    <section aria-labelledby="router-heading" ref={navigation.scope}>
+      <h2 id="router-heading" tabIndex={-1} ref={navigation.fallback}>
+        Router observer
+      </h2>
       {readFailed && (
         <p role="alert">
           Console could not retrieve Router status. Check the application
@@ -196,6 +203,27 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
             <p>
               Configured origin: <code>{view.origin}</code>. This is not a
               verified producer instance identity.
+            </p>
+          )}
+          {view.adminDestination && !view.refreshUnconfirmed ? (
+            <p>
+              <a
+                href={view.adminDestination}
+                data-navigation-focus={view.adminDestination}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Open Router administration at{" "}
+                <code>{view.adminDestination}</code> (new tab)
+              </a>
+              . Router handles its own sign-in. An existing session may not be
+              sent on cross-site arrival; sign in there if requested.
+            </p>
+          ) : (
+            <p>
+              Router administration link unavailable. It requires confirmed
+              local administration, a successful observer refresh, and distinct
+              Console and Router hostnames.
             </p>
           )}
           {view.gap && <p role="status">{view.gap}</p>}

@@ -5,7 +5,10 @@ export interface RouterConfig {
   origin: string;
   credential: string;
   fileRevision: string;
+  adminConfirmed: boolean;
 }
+
+export const ROUTER_ADMIN_PROFILE = "local-admin-v1";
 
 export function validateRouterOrigin(value: string) {
   const url = new URL(value);
@@ -55,7 +58,7 @@ export function readRouterConfig(directory: string): RouterConfig | null {
     if (end > maxBytes) throw new Error("Unsafe Router configuration");
     const config = JSON.parse(
       bytes.toString("utf8", 0, end),
-    ) as Partial<RouterConfig>;
+    ) as Partial<RouterConfig> & { adminProfile?: unknown };
     if (
       typeof config.origin !== "string" ||
       typeof config.credential !== "string" ||
@@ -65,6 +68,7 @@ export function readRouterConfig(directory: string): RouterConfig | null {
     return {
       origin: validateRouterOrigin(config.origin),
       credential: config.credential,
+      adminConfirmed: config.adminProfile === ROUTER_ADMIN_PROFILE,
       // Bind the observation to the opened file, not just its contents.
       fileRevision: `${info.dev}:${info.ino}:${info.ctimeNs}`,
     };

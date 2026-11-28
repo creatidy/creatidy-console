@@ -1,4 +1,17 @@
 import { useEffect, useRef, useState } from "react";
+import {
+  FORGEJO_ORIGIN,
+  MAX_FORGEJO_SUBJECTS,
+  forgejoSubjectRoutes,
+} from "../server/forgejo-navigation.ts";
+import { useNavigationFocus } from "./useNavigationFocus.ts";
+
+type Proposal = {
+  scope: string;
+  digest: string;
+  text: string;
+  forgejoSubjects: unknown[];
+};
 
 export default function KernelOwnerPanel({ expired }: { expired: () => void }) {
   const [status, setStatus] = useState<
@@ -10,12 +23,11 @@ export default function KernelOwnerPanel({ expired }: { expired: () => void }) {
     | "invalid"
     | "busy"
   >("checking");
-  const [proposal, setProposal] = useState<{
-    scope: string;
-    digest: string;
-    text: string;
-  }>();
+  const [proposal, setProposal] = useState<Proposal>();
   const [visible, setVisible] = useState(false);
+  const disclosure = useRef<HTMLDetailsElement>(null);
+  const disclosureOpen = useRef(false);
+  const navigation = useNavigationFocus(visible || status === "disconnected");
   const [canApprove, setCanApprove] = useState(false);
   const [approvalScope, setApprovalScope] = useState<{
     digest: string;
@@ -132,10 +144,10 @@ export default function KernelOwnerPanel({ expired }: { expired: () => void }) {
     let generation = 0;
     let controller: AbortController | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    let cached:
-      | { scope: string; digest: string; text: string; canApprove: boolean }
-      | undefined;
+    let cached: (Proposal & { canApprove: boolean }) | undefined;
     const hide = () => {
+      if (disclosure.current) disclosureOpen.current = disclosure.current.open;
+      navigation.remember();
       generation++;
       controller?.abort();
       if (timer) clearTimeout(timer);
@@ -172,6 +184,7 @@ export default function KernelOwnerPanel({ expired }: { expired: () => void }) {
             scope?: unknown;
             digest?: unknown;
             text?: unknown;
+            forgejoSubjects?: unknown;
           };
           if (current !== generation) return;
           if (signal.aborted) throw new Error();
@@ -192,6 +205,9 @@ export default function KernelOwnerPanel({ expired }: { expired: () => void }) {
               scope: result.scope,
               digest: result.digest,
               text: result.text,
+              forgejoSubjects: Array.isArray(result.forgejoSubjects)
+                ? result.forgejoSubjects.slice(0, MAX_FORGEJO_SUBJECTS)
+                : [],
               canApprove: result.actions.length === 1,
             };
           } else if (
@@ -211,6 +227,8 @@ export default function KernelOwnerPanel({ expired }: { expired: () => void }) {
         if (current !== generation) return;
         if (signal.aborted) throw new Error();
         if (response.status === 401) {
+          navigation.discard();
+          disclosureOpen.current = false;
           expired();
           return;
         }
@@ -226,6 +244,7 @@ export default function KernelOwnerPanel({ expired }: { expired: () => void }) {
         timer = setTimeout(() => void check(), 10000);
       } catch {
         if (current === generation) {
+          disclosureOpen.current = false;
           setStatus("disconnected");
           if (cached && document.visibilityState === "visible")
             timer = setTimeout(() => void check(), 10000);
@@ -248,9 +267,17 @@ export default function KernelOwnerPanel({ expired }: { expired: () => void }) {
     };
   }, []);
 
+  const forgejoLinks =
+    proposal?.forgejoSubjects.flatMap((subject) => {
+      const routes = forgejoSubjectRoutes(subject);
+      return routes ? [routes] : [];
+    }) ?? [];
+
   return (
-    <section aria-labelledby="kernel-owner-heading">
-      <h2 id="kernel-owner-heading">Kernel owner actions</h2>
+    <section aria-labelledby="kernel-owner-heading" ref={navigation.scope}>
+      <h2 id="kernel-owner-heading" tabIndex={-1} ref={navigation.fallback}>
+        Kernel owner actions
+      </h2>
       <p role="status">
         {status === "checking"
           ? "Checking owner capability."
@@ -280,6 +307,56 @@ export default function KernelOwnerPanel({ expired }: { expired: () => void }) {
             policy. Effective host policy is unknown; this view is not an
             approval.
           </p>
+          {forgejoLinks.length > 0 ? (
+            <details ref={disclosure} open={disclosureOpen.current}>
+              <summary data-navigation-focus="forgejo-references">
+                Forgejo proposal references
+              </summary>
+              <p>
+                Destination: <code>{FORGEJO_ORIGIN}</code>. Up to{" "}
+                {MAX_FORGEJO_SUBJECTS} recorded subjects are linked. Opening a
+                link shares only its destination with Forgejo; Forgejo checks
+                access separately. These references do not verify current issue
+                or candidate state.
+              </p>
+              <ul>
+                {forgejoLinks.map(
+                  ({ repository, issue, issueHref, baseHref }) => (
+                    <li key={`${issueHref}:${baseHref}`}>
+                      <a
+                        href={issueHref}
+                        data-navigation-focus={`${issueHref}:${baseHref}:issue`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        Open Forgejo issue{" "}
+                        <code>
+                          {repository}#{issue}
+                        </code>{" "}
+                        (new tab)
+                      </a>
+                      {baseHref && (
+                        <>
+                          {"; "}
+                          <a
+                            href={baseHref}
+                            data-navigation-focus={`${issueHref}:${baseHref}:base`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            Open recorded base{" "}
+                            <code>{baseHref.slice(-40)}</code> (new tab)
+                          </a>
+                        </>
+                      )}
+                    </li>
+                  ),
+                )}
+              </ul>
+            </details>
+          ) : (
+            <p>No supported Forgejo proposal links are available.</p>
+          )}
           <pre>{proposal.text}</pre>
           <button type="button" onClick={() => void readApprovalScope()}>
             Inspect approval scope
