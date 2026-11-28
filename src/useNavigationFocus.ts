@@ -29,7 +29,14 @@ export function useNavigationFocus(
     if (document.activeElement !== document.body) return;
     const target = Array.from(
       scope.current?.querySelectorAll<HTMLElement>(`[${attribute}]`) ?? [],
-    ).find((element) => element.getAttribute(attribute) === key);
+    ).find(
+      (element) =>
+        element.getAttribute(attribute) === key &&
+        !element.matches(
+          ":disabled, [aria-disabled=true], [data-focus-fallback-only]",
+        ) &&
+        !element.closest("[hidden]"),
+    );
     (target ?? fallback.current)?.focus();
   }, [settled, attribute]);
   return { scope, fallback, remember, discard };

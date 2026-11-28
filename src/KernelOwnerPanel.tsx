@@ -294,7 +294,11 @@ export default function KernelOwnerPanel({ expired }: { expired: () => void }) {
                     : "Kernel proposal unavailable: the channel disconnected or refused the read. No owner commands are available."}
       </p>
       {(status === "busy" || status === "disconnected") && (
-        <button type="button" onClick={() => retryProposal.current?.()}>
+        <button
+          type="button"
+          data-navigation-focus="proposal-retry"
+          onClick={() => retryProposal.current?.()}
+        >
           Retry Kernel proposal
         </button>
       )}
@@ -358,7 +362,11 @@ export default function KernelOwnerPanel({ expired }: { expired: () => void }) {
             <p>No supported Forgejo proposal links are available.</p>
           )}
           <pre>{proposal.text}</pre>
-          <button type="button" onClick={() => void readApprovalScope()}>
+          <button
+            type="button"
+            data-navigation-focus="inspect-approval-scope"
+            onClick={() => void readApprovalScope()}
+          >
             Inspect approval scope
           </button>
           <p role="status">{scopeStatus}</p>
@@ -872,6 +880,7 @@ function KernelApprovalPanel({
         </label>
         <input
           id="kernel-approval-expiry"
+          data-navigation-focus="approval-expiry"
           inputMode="numeric"
           disabled={pending}
           value={expiry}
@@ -885,6 +894,7 @@ function KernelApprovalPanel({
         />
         <button
           type="button"
+          data-navigation-focus="review-approval"
           aria-disabled={pending || !/^[1-9][0-9]{0,18}$/.test(expiry)}
           onClick={() => void prepare()}
         >
@@ -907,6 +917,8 @@ function KernelApprovalPanel({
             <pre>{review.text}</pre>
             <button
               type="button"
+              data-navigation-focus="confirm-approval"
+              data-focus-fallback-only
               ref={confirmControl}
               disabled={pending}
               onClick={() => void approve()}

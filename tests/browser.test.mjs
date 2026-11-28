@@ -1501,7 +1501,25 @@ it.skipIf(!existsSync(chrome))(
           return route.fulfill({ status: 503, json: { kind: "not-sent" } });
         return route.fulfill({ json: { kind: "unknown" } });
       });
-      await page.getByLabel("Requested producer expiry").fill("2000000000");
+      const expiryField = page.getByLabel("Requested producer expiry");
+      await expiryField.fill("2000000000");
+      const releaseApprovalCheck = Promise.withResolvers();
+      const holdApprovalCheck = async (route) => {
+        await releaseApprovalCheck.promise;
+        await route.fallback();
+      };
+      await page.route("**/api/kernel/session-check", holdApprovalCheck);
+      try {
+        expect(await hasFocus(expiryField)).toBe(true);
+        await page.clock.fastForward(10000);
+        await expiryField.waitFor({ state: "hidden" });
+      } finally {
+        releaseApprovalCheck.resolve();
+      }
+      await expiryField.waitFor();
+      await page.unroute("**/api/kernel/session-check", holdApprovalCheck);
+      expect(await hasFocus(expiryField)).toBe(true);
+      expect(await expiryField.inputValue()).toBe("2000000000");
       const reviewControl = page.getByRole("button", {
         name: "Review exact approval",
       });
