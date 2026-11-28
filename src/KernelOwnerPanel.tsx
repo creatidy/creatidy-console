@@ -27,7 +27,9 @@ export default function KernelOwnerPanel({ expired }: { expired: () => void }) {
   const [visible, setVisible] = useState(false);
   const disclosure = useRef<HTMLDetailsElement>(null);
   const disclosureOpen = useRef(false);
-  const navigation = useNavigationFocus(visible || status === "disconnected");
+  const navigation = useNavigationFocus(
+    status === "connected" ? visible : status !== "checking",
+  );
   const [canApprove, setCanApprove] = useState(false);
   const [approvalScope, setApprovalScope] = useState<{
     digest: string;

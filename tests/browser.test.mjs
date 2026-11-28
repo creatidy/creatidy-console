@@ -1261,8 +1261,14 @@ it.skipIf(!existsSync(chrome))(
       await page.getByRole("heading", { name: "Your console" }).waitFor();
       let proposalReads = 0;
       let ownerContended = true;
-      await page.route("**/api/kernel/owner", (route) => {
+      const busyRetryStarted = Promise.withResolvers();
+      const releaseBusyRetry = Promise.withResolvers();
+      await page.route("**/api/kernel/owner", async (route) => {
         proposalReads++;
+        if (proposalReads === 2) {
+          busyRetryStarted.resolve();
+          await releaseBusyRetry.promise;
+        }
         if (ownerContended)
           return route.fulfill({
             status: 503,
@@ -1297,11 +1303,21 @@ it.skipIf(!existsSync(chrome))(
       await page
         .getByText(/Kernel proposal unavailable|Kernel read busy/)
         .waitFor();
-      ownerContended = false;
       const retryProposal = page.getByRole("button", {
         name: "Retry Kernel proposal",
       });
-      await retryProposal.click();
+      await retryProposal.press("Enter");
+      try {
+        await busyRetryStarted.promise;
+        await retryProposal.waitFor({ state: "detached" });
+        expect(await page.locator("pre").count()).toBe(0);
+      } finally {
+        releaseBusyRetry.resolve();
+      }
+      await retryProposal.waitFor();
+      expect(await hasFocus(retryProposal)).toBe(true);
+      ownerContended = false;
+      await retryProposal.press("Enter");
       await page
         .getByText(
           "Verified proposal received when this view opened; it may have changed. Reload to recheck. Approval requires a fresh review.",
@@ -1673,7 +1689,7 @@ it.skipIf(!existsSync(chrome))(
         ),
       ).toBe(true);
       expect(checks).toBe(2);
-      expect(proposalReads).toBe(2);
+      expect(proposalReads).toBe(3);
       expect(await forgeLink.isVisible()).toBe(false);
       await page.unroute("**/api/kernel/session-check");
       const retryCacheRead = Promise.withResolvers();
@@ -1706,7 +1722,7 @@ it.skipIf(!existsSync(chrome))(
       }
       await page.getByText(hostile, { exact: false }).first().waitFor();
       expect(await hasFocus(movedFocus)).toBe(true);
-      expect(proposalReads).toBe(2);
+      expect(proposalReads).toBe(3);
       await page.unroute("**/api/kernel/session-check", failThenHold);
       let releaseCheck;
       let checkStarted;
