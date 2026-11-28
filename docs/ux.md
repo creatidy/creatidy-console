@@ -119,3 +119,47 @@ source blockers and permissions remain source-owned. Delivery while
 asleep/offline is never guaranteed merely by installing a PWA. Implementation
 targets and polling limits require measured evidence, not invented numeric
 performance promises.
+
+### Acceptance for Delivered Views
+
+The scoped
+[#10](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/10) review
+uses existing synthetic Console scenarios rather than repeating the installed
+producer campaign. Only the current local application is in scope.
+
+| Surface                         | Evidence and limits                                                                                                                                                                                                                                                                                                                                                                             |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Setup, sign-in and overview     | Keyboard skip and section links; focus on setup, sign-in and overview transitions; password mismatch associated with its field; distinguish initial checking, failed connection, expiry and confirmed logout.                                                                                                                                                                                   |
+| Router observer                 | Nonempty and stale resource sample, explicit disconnected/last-known, denied and unsupported states. An unchanged cache-only check is not announced again; protected facts still leave the rendered view during the check.                                                                                                                                                                      |
+| Kernel snapshot and owner views | Keyboard snapshot read and lineage disclosure, review preparation and command history. [#4](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/4#issuecomment-23956) supplies empty/mixed/unknown lineage evidence; [#38](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/38#issuecomment-23711) supplies synthetic approval/recovery evidence, not installed effects. |
+| MI offline inspector            | Invocable file inputs with labels, no-file state, keyboard disclosure and wrapping of a nonempty file's read-only evidence; the fixture does not authenticate its publisher.                                                                                                                                                                                                                    |
+| External links                  | [#8](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/8#issuecomment-23998) covers keyboard entry, new tab, distinct Router sign-in, and visible focus or deliberate fallback after an authorization check. No fresh external navigation was needed outside synthetic fixtures.                                                                                                    |
+
+Browser coverage here is Linux Chrome 158 at desktop width 1280 CSS px and
+narrow widths 320 and 390 CSS px (plus the prior 360 by 280 focus case from #8).
+The synthetic browser checks use keyboard input, the accessibility tree, and
+forced colors and reduced motion for section navigation. A separate local Chrome
+walkthrough used the Linux AT-SPI bridge on a virtual display: skip link and
+main landmark focus, Router denial text, all view landmarks, MI heading focus on
+a narrow viewport, and sign-in heading focus after logout. Native Chrome zoom at
+400% reduced the 1280 CSS px viewport to 320 CSS px; the document did not exceed
+its available width (316 px after the scrollbar). This verifies the native
+accessibility interface, not spoken output, physical mobile devices or other
+browser/AT combinations. No live producer was accessed.
+
+WCAG 2.2 AA remains a target, not a certification. Proposed regression targets
+are no page-level horizontal scrolling at a 320 CSS px viewport for readable
+evidence, visible keyboard focus, no color-only state, and no repeat
+announcement for an unchanged passive observation. The default text and
+focus/link colors against the page background measure 12.28:1 and 7.69:1 in the
+current palette; these are sampled color pairs, not an audit of all user
+settings.
+
+For each future view or material change, retain #10's acceptance: exercise
+keyboard and assistive technology, narrow reflow and zoom, visible/restored
+focus, meaningful next steps for pending/error/denied/unknown states, exact IDs
+and timestamps, safe destinations, and quiet status changes. Record the actual
+browser/AT matrix and compare producer facts only at identical input, revision
+and policy; keep observation-time differences and unsupported fields explicit.
+Do not infer unavailable authority from hidden controls or require a future
+feature in order to validate an existing one.

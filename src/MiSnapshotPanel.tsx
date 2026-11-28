@@ -335,7 +335,9 @@ export default function MiSnapshotPanel({
   if (!local)
     return (
       <section aria-labelledby="mi-snapshot-heading">
-        <h2 id="mi-snapshot-heading">Model Intelligence offline file</h2>
+        <h2 id="mi-snapshot-heading" tabIndex={-1}>
+          Model Intelligence offline file
+        </h2>
         <p>
           Offline MI inspection is unavailable. Both file inspection modes
           require a local Console connection.
@@ -345,7 +347,9 @@ export default function MiSnapshotPanel({
 
   return (
     <section aria-labelledby="mi-snapshot-heading">
-      <h2 id="mi-snapshot-heading">Model Intelligence offline file</h2>
+      <h2 id="mi-snapshot-heading" tabIndex={-1}>
+        Model Intelligence offline file
+      </h2>
       <p role="status">{message}</p>
       <p>
         Selected files are sent to the authenticated local Console at{" "}

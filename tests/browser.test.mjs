@@ -118,10 +118,43 @@ it.skipIf(!existsSync(chrome))(
       const context = await browser.newContext();
       const page = await context.newPage();
       await page.clock.install();
+      const hasFocus = (locator) =>
+        locator.evaluate((node) => node === document.activeElement);
+      const assertReflow = async () => {
+        expect(
+          await page.evaluate(() => document.documentElement.scrollWidth),
+        ).toBe(page.viewportSize().width);
+      };
+      await page.route("**/api/session", (route) => route.abort("failed"));
       await page.goto(origin);
+      await page
+        .getByRole("alert")
+        .getByText(/Console is disconnected/)
+        .waitFor();
+      expect(
+        await page.getByText("Checking the local application session.").count(),
+      ).toBe(0);
+      await page.keyboard.press("Tab");
+      const skipLink = page.getByRole("link", { name: "Skip to main content" });
+      expect(await hasFocus(skipLink)).toBe(true);
+      await page.keyboard.press("Enter");
+      expect(await hasFocus(page.getByRole("main"))).toBe(true);
+      await page.unroute("**/api/session");
+      await page.keyboard.press("Tab");
+      expect(
+        await hasFocus(page.getByRole("button", { name: "Try again" })),
+      ).toBe(true);
+      await page.keyboard.press("Enter");
       await page
         .getByRole("heading", { name: "Set up your console" })
         .waitFor();
+      expect(
+        await hasFocus(
+          page.getByRole("heading", { name: "Set up your console" }),
+        ),
+      ).toBe(true);
+      await page.setViewportSize({ width: 320, height: 640 });
+      await assertReflow();
       expect(
         await page.evaluate(() =>
           fetch("/api/application").then((response) => response.status),
@@ -133,9 +166,24 @@ it.skipIf(!existsSync(chrome))(
         .fill("synthetic-owner-password");
       await page
         .getByLabel("Confirm owner password")
-        .fill("synthetic-owner-password");
+        .fill("synthetic-mismatched-password");
+      await page.getByRole("button", { name: "Create owner" }).press("Enter");
+      await page
+        .getByRole("alert")
+        .getByText("Passwords do not match.")
+        .waitFor();
+      const confirmation = page.getByLabel("Confirm owner password");
+      expect(await hasFocus(confirmation)).toBe(true);
+      expect(await confirmation.getAttribute("aria-invalid")).toBe("true");
+      expect(await confirmation.getAttribute("aria-describedby")).toBe(
+        "session-error",
+      );
+      await confirmation.fill("synthetic-owner-password");
       await page.getByRole("button", { name: "Create owner" }).click();
       await page.getByRole("heading", { name: "Sign in" }).waitFor();
+      expect(
+        await hasFocus(page.getByRole("heading", { name: "Sign in" })),
+      ).toBe(true);
       expect(existsSync(join(state, "bootstrap-token"))).toBe(false);
       await page
         .getByLabel("Owner password", { exact: true })
@@ -156,6 +204,45 @@ it.skipIf(!existsSync(chrome))(
         .getByText(/No supported local Kernel snapshot capability/)
         .waitFor();
       await page.getByText("No offline file inspected.").waitFor();
+      expect(
+        await hasFocus(page.getByRole("heading", { name: "Your console" })),
+      ).toBe(true);
+      await page.emulateMedia({
+        forcedColors: "active",
+        reducedMotion: "reduce",
+      });
+      for (const [linkName, headingName] of [
+        ["Resources", "Router observer"],
+        ["Work and decisions", "Kernel snapshot"],
+        ["Offline evidence", "Model Intelligence offline file"],
+        ["Proposal and command history", "Kernel owner actions"],
+      ]) {
+        await page
+          .getByRole("link", { name: linkName, exact: true })
+          .press("Enter");
+        const heading = page.getByRole("heading", {
+          name: headingName,
+          exact: true,
+        });
+        expect(await hasFocus(heading)).toBe(true);
+        expect(
+          await heading.evaluate((node) => getComputedStyle(node).outlineStyle),
+        ).toBe("solid");
+      }
+      const ax = await page.getByRole("main").ariaSnapshot();
+      for (const entry of [
+        'heading "Your console" [level=1]',
+        'navigation "Operator views"',
+        'region "Router observer"',
+        'region "Kernel snapshot"',
+        'region "Model Intelligence offline file"',
+        'region "Kernel owner actions"',
+        'heading "Command history" [level=3]',
+      ])
+        expect(ax).toContain(entry);
+      await assertReflow();
+      await page.emulateMedia({ forcedColors: null, reducedMotion: null });
+      await page.setViewportSize({ width: 1280, height: 720 });
       const switchVisibility = (value) =>
         page.evaluate((value) => {
           Object.defineProperty(document, "visibilityState", {
@@ -482,10 +569,13 @@ it.skipIf(!existsSync(chrome))(
       const disclosure = page.getByText(
         "Untrusted evidence records and reported rights",
       );
-      await disclosure.click();
+      await disclosure.press("Enter");
       expect(await page.getByText(/synthetic-source/).count()).toBeGreaterThan(
         0,
       );
+      await page.setViewportSize({ width: 320, height: 640 });
+      await assertReflow();
+      await page.setViewportSize({ width: 1280, height: 720 });
       expect(await page.evaluate(() => window.miInjected)).toBeUndefined();
       let disclosureCheckStarted;
       let releaseDisclosureCheck;
@@ -796,8 +886,10 @@ it.skipIf(!existsSync(chrome))(
       );
       expect(snapshotReads).toBe(0);
       expect(await page.getByText("Sampled work units").count()).toBe(0);
-      await page.getByRole("button", { name: "Read snapshot" }).click();
+      const initialRead = page.getByRole("button", { name: "Read snapshot" });
+      await initialRead.press("Enter");
       await page.getByText(/Pending owner-decision records: 1\./).waitFor();
+      expect(await hasFocus(initialRead)).toBe(true);
       await page
         .getByText(/Pending review records with an unknown outcome: 1\./)
         .waitFor();
@@ -820,6 +912,9 @@ it.skipIf(!existsSync(chrome))(
       await page.getByText(/Kernel progress has a recorded gap/).waitFor();
       await lineage.press("Enter");
       await page.getByText('"exact-decision"', { exact: true }).waitFor();
+      await page.setViewportSize({ width: 320, height: 640 });
+      await assertReflow();
+      await page.setViewportSize({ width: 1280, height: 720 });
       await page.getByText(/observed aggregate revision: 4/).waitFor();
       await page
         .getByText(/current specification SHA-256 of the sampled Program/)
@@ -1371,8 +1466,13 @@ it.skipIf(!existsSync(chrome))(
         return route.fulfill({ json: { kind: "unknown" } });
       });
       await page.getByLabel("Requested producer expiry").fill("2000000000");
-      await page.getByRole("button", { name: "Review exact approval" }).click();
+      await page
+        .getByRole("button", { name: "Review exact approval" })
+        .press("Enter");
       await page.getByText(/Review these exact values/).waitFor();
+      await page.setViewportSize({ width: 320, height: 640 });
+      await assertReflow();
+      await page.setViewportSize({ width: 1280, height: 720 });
       expect(await page.locator("pre img").count()).toBe(0);
       expect(await page.getByText(/Observed revision: -1/).count()).toBe(1);
       await page.getByRole("button", { name: "Confirm approval" }).click();
@@ -1408,7 +1508,7 @@ it.skipIf(!existsSync(chrome))(
       );
       await page
         .getByRole("button", { name: "Inspect command history" })
-        .click();
+        .press("Enter");
       await page.getByText(/outcome unknown; do not retry blindly/).waitFor();
       await page.route("**/api/kernel/owner-replay", (route) => {
         expect(route.request().postDataJSON()).toEqual({
@@ -1952,6 +2052,12 @@ it.skipIf(!existsSync(chrome))(
       );
       await page.evaluate(() => window.releaseRouterPassiveCheck());
       await page.getByText("m".repeat(64), { exact: false }).waitFor();
+      expect(
+        await page
+          .getByRole("region", { name: "Router observer" })
+          .getByRole("status")
+          .textContent(),
+      ).toBe("");
       expect
         .soft(
           await refreshControl.evaluate(
@@ -1980,6 +2086,13 @@ it.skipIf(!existsSync(chrome))(
       );
       await page.clock.fastForward(10000);
       await page.getByRole("heading", { name: "Sign in" }).waitFor();
+      expect(
+        await hasFocus(page.getByRole("heading", { name: "Sign in" })),
+      ).toBe(true);
+      await page
+        .getByRole("status")
+        .getByText(/Your session expired or was revoked/)
+        .waitFor();
       expect(await page.getByText("resource-a", { exact: false }).count()).toBe(
         0,
       );
@@ -2235,6 +2348,13 @@ it.skipIf(!existsSync(chrome))(
         .getByRole("button", { name: "Log out" })
         .evaluate((button) => button.click());
       await other.getByRole("heading", { name: "Sign in" }).waitFor();
+      await other
+        .getByRole("status")
+        .getByText("You are signed out.")
+        .waitFor();
+      expect(
+        await hasFocus(other.getByRole("heading", { name: "Sign in" })),
+      ).toBe(true);
       await page.getByRole("heading", { name: "Sign in" }).waitFor();
       expect(await page.locator("pre").count()).toBe(0);
       expect(await page.evaluate(() => window.visibilityEvents)).toBe(0);

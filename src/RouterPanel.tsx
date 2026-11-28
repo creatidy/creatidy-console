@@ -18,6 +18,16 @@ const descriptions: Record<RouterView["status"], string> = {
     "The local Router configuration is invalid or has unsafe permissions.",
 };
 
+const summaries: Record<RouterView["status"], string> = {
+  unconfigured: "Router observer is not configured.",
+  configured: "Router has not been observed yet.",
+  connected: "Router observation available.",
+  denied: "Router observer access denied; no cached facts shown.",
+  disconnected: "Router unavailable; any retained observations are last known.",
+  unsupported: "Unsupported Router observation; no cached facts shown.",
+  configuration_error: "Check the local Router observer configuration.",
+};
+
 export default function RouterPanel({ expired }: { expired: () => void }) {
   const [view, setView] = useState<
     (RouterView & { refreshUnconfirmed: boolean }) | null
@@ -26,6 +36,8 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
   const [readFailed, setReadFailed] = useState(false);
   const [refreshBusy, setRefreshBusy] = useState(false);
   const [factsOpen, setFactsOpen] = useState(false);
+  const [announcement, setAnnouncement] = useState("");
+  const lastAnnouncement = useRef("");
   const active = useRef<AbortController | null>(null);
   const navigation = useNavigationFocus(activity === null);
   // Only a previously accepted observation can be mistaken for a new one.
@@ -38,6 +50,7 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
     active.current = controller;
     const applicable = () =>
       active.current === controller && document.visibilityState === "visible";
+    let busy = false;
     const request = async (post = false) => {
       const deadline = new AbortController();
       const timer = setTimeout(() => deadline.abort(), post ? 10000 : 5000);
@@ -67,6 +80,7 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
           return null;
         }
         if (post && response.status === 503) {
+          busy = true;
           setRefreshBusy(true);
           await response.body?.cancel();
           return null;
@@ -85,7 +99,12 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
       }
     };
     navigation.remember();
+    setAnnouncement(refresh ? "Requesting a Router observation." : "");
     setActivity(refresh ? "refresh" : "read");
+    const announce = (message: string, key = message) => {
+      if (refresh || key !== lastAnnouncement.current) setAnnouncement(message);
+      lastAnnouncement.current = key;
+    };
     try {
       if (refresh) {
         setRefreshBusy(false);
@@ -103,16 +122,25 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
       if (!next || !applicable()) return;
       if (next.observation !== uncertainObservation.current)
         uncertainObservation.current = null;
+      const refreshUnconfirmed =
+        next.status === "connected" && uncertainObservation.current !== null;
       setView({
         ...next,
-        refreshUnconfirmed:
-          next.status === "connected" && uncertainObservation.current !== null,
+        refreshUnconfirmed,
       });
       setReadFailed(false);
+      const summary = refreshUnconfirmed
+        ? "New Router observation unconfirmed; displaying last-known facts if available."
+        : summaries[next.status];
+      announce(
+        `${busy ? "Router is still finishing an earlier refresh. " : ""}${summary}${next.gap ? " Router history has a gap." : ""}`,
+        `${summary}:${next.gap ?? ""}`,
+      );
     } catch {
       if (applicable()) {
         setView(null);
         setReadFailed(true);
+        announce("Router status unavailable. Check the Console connection.");
       }
     } finally {
       if (active.current === controller) {
@@ -139,6 +167,7 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
       navigation.remember();
       active.current?.abort();
       active.current = null;
+      setAnnouncement("");
       setView(null);
       setActivity(null);
     };
@@ -165,14 +194,17 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
       <h2 id="router-heading" tabIndex={-1} ref={navigation.fallback}>
         Router observer
       </h2>
+      <div className="visually-hidden" role="status">
+        {announcement}
+      </div>
       {readFailed && (
-        <p role="alert">
+        <p>
           Console could not retrieve Router status. Check the application
           connection.
         </p>
       )}
       {refreshBusy && (
-        <p role="status">
+        <p>
           An earlier Router refresh is still finishing. Retry the refresh to
           read the new configuration.
         </p>
@@ -191,10 +223,12 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
             : "Retry Router status"}
       </button>
       {!view || activity !== null ? (
-        <p>Checking connection configuration and session.</p>
+        !readFailed || activity !== null ? (
+          <p>Checking connection configuration and session.</p>
+        ) : null
       ) : (
         <>
-          <p role="status">
+          <p>
             {view.refreshUnconfirmed
               ? "Console could not confirm a new Router observation."
               : descriptions[view.status]}
@@ -226,7 +260,7 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
               Console and Router hostnames.
             </p>
           )}
-          {view.gap && <p role="status">{view.gap}</p>}
+          {view.gap && <p>{view.gap}</p>}
           {(view.last_known || view.refreshUnconfirmed) && (
             <p>Last-known data follows; it may be stale.</p>
           )}

@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
 import RouterPanel from "./RouterPanel";
 import KernelOwnerPanel from "./KernelOwnerPanel";
 import KernelSnapshotPanel from "./KernelSnapshotPanel";
@@ -15,14 +21,49 @@ type Session = {
 export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [error, setError] = useState("");
+  const [sessionNotice, setSessionNotice] = useState("");
   const [pending, setPending] = useState(false);
+  const [checking, setChecking] = useState(true);
   const channel = useRef<BroadcastChannel | null>(null);
   const generation = useRef(0);
+  const skipLink = useRef<HTMLAnchorElement>(null);
+  const heading = useRef<HTMLHeadingElement>(null);
+  const confirmation = useRef<HTMLInputElement>(null);
+  const screen = !session
+    ? "connection"
+    : session.authenticated
+      ? "overview"
+      : session.configured
+        ? "login"
+        : "setup";
+  const previousScreen = useRef(screen);
+  const retryRequested = useRef(false);
+  const confirmationMismatch = error === "Passwords do not match.";
 
-  function invalidate(broadcast: boolean) {
+  useLayoutEffect(() => {
+    const before = previousScreen.current;
+    previousScreen.current = screen;
+    // Do not interrupt initial navigation or pull focus into an inactive tab.
+    if (
+      before !== screen &&
+      (before !== "connection" || retryRequested.current) &&
+      document.visibilityState === "visible" &&
+      document.activeElement !== skipLink.current
+    ) {
+      heading.current?.focus();
+    }
+    retryRequested.current = false;
+  }, [screen]);
+
+  function invalidate(
+    broadcast: boolean,
+    notice = "Your session expired or was revoked. Sign in again.",
+  ) {
     generation.current++;
     setSession({ configured: true, authenticated: false });
-    setError("Your session expired or was revoked. Sign in again.");
+    setChecking(false);
+    setError("");
+    setSessionNotice(notice);
     if (broadcast) {
       try {
         channel.current?.postMessage(null);
@@ -33,9 +74,15 @@ export default function App() {
   }
 
   async function refresh() {
-    const current = generation.current;
+    const current = ++generation.current;
+    setChecking(true);
+    setError("");
+    setSessionNotice("");
     try {
-      const response = await fetch("/api/session", { cache: "no-store" });
+      const response = await fetch("/api/session", {
+        cache: "no-store",
+        signal: AbortSignal.timeout(5000),
+      });
       if (!response.ok) throw new Error();
       const result = (await response.json()) as Session;
       if (current !== generation.current) return;
@@ -47,6 +94,8 @@ export default function App() {
       setError(
         "Console is disconnected. Check that the application server is running.",
       );
+    } finally {
+      if (current === generation.current) setChecking(false);
     }
   }
 
@@ -69,15 +118,18 @@ export default function App() {
   async function submit(event: FormEvent<HTMLFormElement>) {
     const current = generation.current;
     event.preventDefault();
+    if (pending) return;
     const form = event.currentTarget;
     const data = new FormData(form);
     const setup = !session?.configured;
     if (setup && data.get("password") !== data.get("confirmation")) {
       setError("Passwords do not match.");
+      confirmation.current?.focus();
       return;
     }
     setPending(true);
     setError("");
+    setSessionNotice("");
     try {
       const response = await fetch(setup ? "/api/bootstrap" : "/api/login", {
         method: "POST",
@@ -99,16 +151,19 @@ export default function App() {
         await refresh();
       }
     } catch {
-      setError(
-        "Could not reach Console. Check the application server and try again.",
-      );
+      if (current === generation.current)
+        setError(
+          "Could not reach Console. Check the application server and try again.",
+        );
     } finally {
       setPending(false);
     }
   }
 
   async function logout() {
-    generation.current++;
+    if (pending) return;
+    const current = ++generation.current;
+    setError("");
     setPending(true);
     try {
       const response = await fetch("/api/logout", {
@@ -116,37 +171,59 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: "{}",
       });
+      if (current !== generation.current) return;
       if (response.status === 401) {
         invalidate(true);
         return;
       }
       if (!response.ok) throw new Error();
-      invalidate(true);
+      invalidate(true, "You are signed out.");
     } catch {
-      setError("Logout could not be confirmed. Check the server connection.");
+      if (current === generation.current)
+        setError("Logout could not be confirmed. Check the server connection.");
     } finally {
       setPending(false);
     }
   }
 
-  return (
-    <main>
+  const content = (
+    <main id="main-content" tabIndex={-1}>
       <p className="eyebrow">CREATIDY / CONSOLE</p>
-      <h1>
-        {session?.authenticated
+      <h1 ref={heading} tabIndex={-1}>
+        {screen === "overview"
           ? "Your console"
-          : session?.configured
+          : screen === "login"
             ? "Sign in"
-            : "Set up your console"}
+            : screen === "setup"
+              ? "Set up your console"
+              : "Creatidy Console"}
       </h1>
-      {error && <p role="alert">{error}</p>}
+      <div id="session-error" role="alert">
+        {error}
+      </div>
+      <div role="status">
+        {sessionNotice ||
+          (!session && checking
+            ? "Checking the local application session."
+            : pending
+              ? session?.authenticated
+                ? "Signing out."
+                : "Submitting owner details."
+              : "")}
+      </div>
       {!session ? (
-        <div>
-          <p>Checking the local application session.</p>
-          <button type="button" onClick={() => void refresh()}>
-            Try again
-          </button>
-        </div>
+        <button
+          type="button"
+          aria-disabled={checking}
+          onClick={() => {
+            if (!checking) {
+              retryRequested.current = true;
+              void refresh();
+            }
+          }}
+        >
+          Try again
+        </button>
       ) : session.authenticated ? (
         <div className="operator-overview">
           <h2>Operator overview</h2>
@@ -157,10 +234,12 @@ export default function App() {
           </p>
           <nav aria-label="Operator views">
             <a href="#router-heading">Resources</a>
-            <a href="#kernel-snapshot-heading">Work and decisions</a>
-            <a href="#mi-snapshot-heading">Offline evidence</a>
             {!pending && (
-              <a href="#kernel-owner-heading">Proposal and command history</a>
+              <>
+                <a href="#kernel-snapshot-heading">Work and decisions</a>
+                <a href="#mi-snapshot-heading">Offline evidence</a>
+                <a href="#kernel-owner-heading">Proposal and command history</a>
+              </>
             )}
           </nav>
           <p>
@@ -187,7 +266,7 @@ export default function App() {
           )}
           <button
             type="button"
-            disabled={pending}
+            aria-disabled={pending}
             onClick={() => void logout()}
           >
             Log out
@@ -195,11 +274,7 @@ export default function App() {
         </div>
       ) : (
         <form onSubmit={(event) => void submit(event)}>
-          {session.configured && (
-            <p>
-              Sign in to continue. A session may have expired or been revoked.
-            </p>
-          )}
+          {session.configured && <p>Sign in to continue.</p>}
           {!session.configured && (
             <>
               <p>
@@ -233,6 +308,11 @@ export default function App() {
                 id="confirmation"
                 name="confirmation"
                 type="password"
+                ref={confirmation}
+                aria-invalid={confirmationMismatch || undefined}
+                aria-describedby={
+                  confirmationMismatch ? "session-error" : undefined
+                }
                 autoComplete="new-password"
                 minLength={12}
                 maxLength={1024}
@@ -240,7 +320,7 @@ export default function App() {
               />
             </>
           )}
-          <button type="submit" disabled={pending}>
+          <button type="submit" aria-disabled={pending}>
             {pending
               ? "Please wait"
               : session.configured
@@ -250,5 +330,13 @@ export default function App() {
         </form>
       )}
     </main>
+  );
+  return (
+    <>
+      <a ref={skipLink} className="skip-link" href="#main-content">
+        Skip to main content
+      </a>
+      {content}
+    </>
   );
 }

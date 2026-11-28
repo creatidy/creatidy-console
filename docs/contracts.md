@@ -162,6 +162,47 @@ link. The checked-in evidence is source and synthetic Console/browser evidence,
 not authorization for a live or remote browser exercise. No producer code was
 copied or dependency added.
 
+## Semantic Agreement for Delivered Views
+
+[Console #34](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/34#issuecomment-23515)
+remains the installed evidence at its recorded revisions. It compares Console
+with the Router observer HTTP cut, with overlapping Kernel CLI pages/records,
+and with Model Intelligence CLI/export at identical inputs. These receipts are
+not replaced by the #10 local browser checks.
+
+- **Kernel lineage (#4/#10):** A source-level check ran the unchanged
+  [descriptor CLI](https://forgejo.creatidy.com/Creatidy/creatidy-kernel/src/commit/70a86a4c3291342b3bd704b6e588c9dbd4c839e3/src/creatidy_kernel/adapters/served_client.py)
+  (`creatidy-kernel-client --fd <fd> snapshot --page 0` and `--page 1`) at
+  `70a86a4c3291342b3bd704b6e588c9dbd4c839e3` and the Console transport and
+  lineage render at `a21915b8d97e78baf843d05be214039fe1e25867`. Both consumed
+  the same two pages from one in-memory Kernel projection over disposable Unix
+  socket pairs. The harness allowed only four snapshot reads, with no network,
+  producer database, or commands. At the same epoch, sequence `0`, scope
+  `synthetic-console10-program`, aggregate revision `17`, and fixed synthetic
+  spec revision and policy inputs, the Program spec digest, exact WorkUnit and
+  Attempt parent links (including whitespace distinctions and a missing parent),
+  decision status and separate pending/historical/unknown applicability,
+  candidate head/scope, workspace reference, sampled coverage and oversized
+  record omissions agreed. Console does not expose the opaque runtime handle,
+  full commands or policy, infer an attempt's spec digest or claim a candidate
+  verdict, attachment, or effect. This adds evidence for the rendered bounded
+  lineage, not an installed reading of more pages or a command outcome.
+- **Router observer:** At `f23ac3569066e359bc0f7045631436a1eab64a6d`, the
+  [CLI dispatcher](https://forgejo.creatidy.com/Creatidy/scarcity-router/src/commit/f23ac3569066e359bc0f7045631436a1eab64a6d/scarcity_router/cli.py)
+  does not expose the same observer cut. Ordinary status can collect new facts;
+  `doctor` is distinct diagnostics. Use the accepted
+  [observer HTTP comparison](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/34#issuecomment-23448)
+  rather than treating a later status command as the same observation.
+- **MI offline inspector:** Reuse the
+  [CLI/export receipt](https://forgejo.creatidy.com/Creatidy/creatidy-console/issues/34#issuecomment-23495)
+  for identical evaluation instant, policy, checkpoint and exact file inputs at
+  `31a6001dbde987b722c2919cf16949fe2e7c6e5c`. The `/1` compatibility envelopes
+  were fixtures, not native exports. Displayed evaluation time is neither
+  acquisition time nor proof of freshness or publisher identity.
+
+Compare overlapping facts, not formatting. Keep independent observations and
+their timestamps distinct, and mark unsupported or unexposed values as such.
+
 ## Historical Integration Risks
 
 These are verified source gaps at the inspected revisions, not newly delivered

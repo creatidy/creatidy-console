@@ -898,7 +898,8 @@ function KernelApprovalPanel({
           </>
         )}
       </section>
-      <section aria-label="Command history">
+      <section aria-labelledby="kernel-command-history-heading">
+        <h3 id="kernel-command-history-heading">Command history</h3>
         <button
           type="button"
           disabled={pending}

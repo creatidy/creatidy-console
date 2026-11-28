@@ -12,7 +12,6 @@
 
 body {
   margin: 0;
-  min-width: 16rem;
 }
 
 main {
@@ -40,11 +39,9 @@ h1 {
 
 p {
   max-width: 60ch;
-  overflow-wrap: anywhere;
 }
 
-li,
-code {
+main {
   overflow-wrap: anywhere;
 }
 
@@ -66,13 +63,38 @@ a:hover {
   text-decoration-thickness: 0.15em;
 }
 
-a:focus-visible {
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+button:focus-visible,
+summary:focus-visible,
+[tabindex="-1"]:focus-visible {
   outline: 0.15rem solid #154f7c;
   outline-offset: 0.25rem;
 }
 
+.visually-hidden,
+.skip-link:not(:focus) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.skip-link {
+  position: absolute;
+  inset-block-start: 0.5rem;
+  inset-inline-start: 1rem;
+  padding: 0.25rem 0.5rem;
+  background: #edf3f8;
+}
+
 form {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.75rem;
   max-width: 30rem;
 }
@@ -80,8 +102,10 @@ label {
   font-weight: 650;
 }
 input,
+select,
 button {
   font: inherit;
+  max-width: 100%;
   padding: 0.6rem 0.8rem;
 }
 input {
@@ -97,15 +121,10 @@ button {
   color: white;
   cursor: pointer;
 }
-button:disabled {
-  opacity: 0.6;
-  cursor: wait;
-}
-input:focus-visible,
-button:focus-visible,
-summary:focus-visible {
-  outline: 0.15rem solid #154f7c;
-  outline-offset: 0.25rem;
+button:disabled,
+button[aria-disabled="true"] {
+  background: #4d6070;
+  cursor: default;
 }
 
 .operator-overview > section {

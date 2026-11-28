@@ -254,7 +254,9 @@ export default function KernelSnapshotPanel({
 
   return (
     <section aria-labelledby="kernel-snapshot-heading">
-      <h2 id="kernel-snapshot-heading">Kernel snapshot</h2>
+      <h2 id="kernel-snapshot-heading" tabIndex={-1}>
+        Kernel snapshot
+      </h2>
       <p>
         Forgejo candidate links are unavailable: this snapshot does not identify
         a Forgejo repository or pull request for the recorded candidate.
@@ -262,7 +264,11 @@ export default function KernelSnapshotPanel({
       <p role="status">
         {message ?? capabilityMessages[capability ?? "ready"]}
       </p>
-      <button type="button" disabled={loading} onClick={() => void refresh()}>
+      <button
+        type="button"
+        aria-disabled={loading}
+        onClick={() => void refresh()}
+      >
         Read snapshot
       </button>
       <button
