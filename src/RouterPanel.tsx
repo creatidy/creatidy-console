@@ -1,5 +1,6 @@
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import type { RouterView } from "../server/router.ts";
+import { useNavigationFocus } from "./useNavigationFocus.ts";
 
 const descriptions: Record<RouterView["status"], string> = {
   unconfigured:
@@ -26,6 +27,14 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
   const [refreshBusy, setRefreshBusy] = useState(false);
   const [factsOpen, setFactsOpen] = useState(false);
   const active = useRef<AbortController | null>(null);
+  const navigation = useNavigationFocus(
+    Boolean(
+      view &&
+      activity === null &&
+      !view.refreshUnconfirmed &&
+      view.adminDestination,
+    ),
+  );
   // Only a previously accepted observation can be mistaken for a new one.
   const uncertainObservation = useRef<string | null>(null);
 
@@ -58,6 +67,7 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
         if (!applicable()) return null;
         signal.throwIfAborted();
         if (response.status === 401) {
+          navigation.discard();
           setView(null);
           expired();
           controller.abort();
@@ -81,6 +91,7 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
         clearTimeout(timer);
       }
     };
+    navigation.remember();
     setActivity(refresh ? "refresh" : "read");
     try {
       if (refresh) {
@@ -99,6 +110,8 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
       if (!next || !applicable()) return;
       if (next.observation !== uncertainObservation.current)
         uncertainObservation.current = null;
+      if (!next.adminDestination || uncertainObservation.current !== null)
+        navigation.discard();
       setView({
         ...next,
         refreshUnconfirmed:
@@ -107,6 +120,7 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
       setReadFailed(false);
     } catch {
       if (applicable()) {
+        navigation.discard();
         setView(null);
         setReadFailed(true);
       }
@@ -132,6 +146,7 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
         reconcile(true);
         return;
       }
+      navigation.remember();
       active.current?.abort();
       active.current = null;
       setView(null);
@@ -156,7 +171,7 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
     view.status !== "unconfigured" &&
     view.status !== "configuration_error";
   return (
-    <section aria-labelledby="router-heading">
+    <section aria-labelledby="router-heading" ref={navigation.scope}>
       <h2 id="router-heading">Router observer</h2>
       {readFailed && (
         <p role="alert">
@@ -202,6 +217,7 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
             <p>
               <a
                 href={view.adminDestination}
+                data-navigation-focus={view.adminDestination}
                 target="_blank"
                 rel="noopener noreferrer"
               >

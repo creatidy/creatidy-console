@@ -1211,6 +1211,28 @@ it.skipIf(!existsSync(chrome))(
             getComputedStyle(link).outlineStyle !== "none",
         ),
       ).toBe(true);
+      let finishForgeCheck;
+      let forgeCheckStarted;
+      const forgeCheck = new Promise((resolve) => {
+        forgeCheckStarted = resolve;
+      });
+      const holdForgeCheck = new Promise((resolve) => {
+        finishForgeCheck = resolve;
+      });
+      await page.route("**/api/kernel/session-check", async (route) => {
+        forgeCheckStarted();
+        await holdForgeCheck;
+        await route.continue();
+      });
+      await page.clock.fastForward(10000);
+      await forgeCheck;
+      await forgeLink.waitFor({ state: "detached" });
+      finishForgeCheck();
+      await forgeLink.waitFor();
+      await page.waitForFunction(() =>
+        document.activeElement?.textContent?.includes("example/synthetic#17"),
+      );
+      await page.unroute("**/api/kernel/session-check");
       await context.route(forgeDestination, (route) =>
         route.fulfill({
           contentType: "text/html",
@@ -1227,7 +1249,35 @@ it.skipIf(!existsSync(chrome))(
       expect(
         await forgeTab.evaluate(() => [window.opener, document.referrer]),
       ).toEqual([null, ""]);
+      // Headless Chrome need not change document visibility on new-tab
+      // navigation. Exercise the background/foreground transition explicitly.
+      await page.evaluate(() => {
+        Object.defineProperty(document, "visibilityState", {
+          configurable: true,
+          value: "hidden",
+        });
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await forgeLink.waitFor({ state: "detached" });
       await forgeTab.close();
+      await page.evaluate(() => {
+        Object.defineProperty(document, "visibilityState", {
+          configurable: true,
+          value: "visible",
+        });
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await forgeLink.waitFor();
+      await page.waitForFunction(() =>
+        document.activeElement?.textContent?.includes("example/synthetic#17"),
+      );
+      await page.keyboard.press("Tab");
+      expect(
+        await page.evaluate(() => document.activeElement?.textContent),
+      ).toContain("Open recorded base");
+      await page.evaluate(() =>
+        Reflect.deleteProperty(document, "visibilityState"),
+      );
       await context.unroute(forgeDestination);
       await page.unroute("**/api/kernel/approval-scope");
       await page.route("**/api/kernel/approval-scope", (route) =>
@@ -1626,11 +1676,36 @@ it.skipIf(!existsSync(chrome))(
         `${routerOrigin}/admin`,
       );
       expect(adminRequests).toEqual([]);
+      await routerLink.focus();
+      let finishRouterRead;
+      let routerReadStarted;
+      const routerRead = new Promise((resolve) => {
+        routerReadStarted = resolve;
+      });
+      const holdRouterRead = new Promise((resolve) => {
+        finishRouterRead = resolve;
+      });
+      await page.route("**/api/router", async (route) => {
+        routerReadStarted();
+        await holdRouterRead;
+        await route.continue();
+      });
+      await page.clock.fastForward(10000);
+      await routerRead;
+      await routerLink.waitFor({ state: "detached" });
+      finishRouterRead();
+      await routerLink.waitFor();
+      await page.waitForFunction(() =>
+        document.activeElement?.textContent?.includes(
+          "Open Router administration",
+        ),
+      );
+      await page.unroute("**/api/router");
       // Use the browser's native navigation; neither Console nor observer
       // credentials may appear on the actual synthetic Router request.
       const [routerTab] = await Promise.all([
         context.waitForEvent("page"),
-        routerLink.press("Enter"),
+        page.keyboard.press("Enter"),
       ]);
       await routerTab
         .getByRole("heading", { name: "Synthetic Router sign-in required" })

@@ -4,6 +4,7 @@ import {
   MAX_FORGEJO_SUBJECTS,
   forgejoSubjectRoutes,
 } from "../server/forgejo-navigation.ts";
+import { useNavigationFocus } from "./useNavigationFocus.ts";
 
 type Proposal = {
   scope: string;
@@ -24,6 +25,11 @@ export default function KernelOwnerPanel({ expired }: { expired: () => void }) {
   >("checking");
   const [proposal, setProposal] = useState<Proposal>();
   const [visible, setVisible] = useState(false);
+  const disclosure = useRef<HTMLDetailsElement>(null);
+  const disclosureOpen = useRef(false);
+  const navigation = useNavigationFocus(
+    Boolean(proposal && status === "connected" && visible),
+  );
   const [canApprove, setCanApprove] = useState(false);
   const [approvalScope, setApprovalScope] = useState<{
     digest: string;
@@ -142,6 +148,8 @@ export default function KernelOwnerPanel({ expired }: { expired: () => void }) {
     let timer: ReturnType<typeof setTimeout> | undefined;
     let cached: (Proposal & { canApprove: boolean }) | undefined;
     const hide = () => {
+      if (disclosure.current) disclosureOpen.current = disclosure.current.open;
+      navigation.remember();
       generation++;
       controller?.abort();
       if (timer) clearTimeout(timer);
@@ -221,6 +229,8 @@ export default function KernelOwnerPanel({ expired }: { expired: () => void }) {
         if (current !== generation) return;
         if (signal.aborted) throw new Error();
         if (response.status === 401) {
+          navigation.discard();
+          disclosureOpen.current = false;
           expired();
           return;
         }
@@ -236,6 +246,8 @@ export default function KernelOwnerPanel({ expired }: { expired: () => void }) {
         timer = setTimeout(() => void check(), 10000);
       } catch {
         if (current === generation) {
+          navigation.discard();
+          disclosureOpen.current = false;
           setStatus("disconnected");
           if (cached && document.visibilityState === "visible")
             timer = setTimeout(() => void check(), 10000);
@@ -265,7 +277,7 @@ export default function KernelOwnerPanel({ expired }: { expired: () => void }) {
     }) ?? [];
 
   return (
-    <section aria-labelledby="kernel-owner-heading">
+    <section aria-labelledby="kernel-owner-heading" ref={navigation.scope}>
       <h2 id="kernel-owner-heading">Kernel owner actions</h2>
       <p role="status">
         {status === "checking"
@@ -297,8 +309,10 @@ export default function KernelOwnerPanel({ expired }: { expired: () => void }) {
             approval.
           </p>
           {forgejoLinks.length > 0 ? (
-            <details>
-              <summary>Forgejo proposal references</summary>
+            <details ref={disclosure} open={disclosureOpen.current}>
+              <summary data-navigation-focus="forgejo-references">
+                Forgejo proposal references
+              </summary>
               <p>
                 Destination: <code>{FORGEJO_ORIGIN}</code>. Up to{" "}
                 {MAX_FORGEJO_SUBJECTS} recorded subjects are linked. Opening a
@@ -312,6 +326,7 @@ export default function KernelOwnerPanel({ expired }: { expired: () => void }) {
                     <li key={`${issueHref}:${baseHref}`}>
                       <a
                         href={issueHref}
+                        data-navigation-focus={`${issueHref}:${baseHref}:issue`}
                         target="_blank"
                         rel="noopener noreferrer"
                       >
@@ -326,6 +341,7 @@ export default function KernelOwnerPanel({ expired }: { expired: () => void }) {
                           {"; "}
                           <a
                             href={baseHref}
+                            data-navigation-focus={`${issueHref}:${baseHref}:base`}
                             target="_blank"
                             rel="noopener noreferrer"
                           >
