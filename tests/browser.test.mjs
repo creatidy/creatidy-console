@@ -1648,6 +1648,14 @@ it.skipIf(!existsSync(chrome))(
       await receiptControl.waitFor();
       await page.unroute("**/api/kernel/session-check", holdHistoryCheck);
       expect(await hasFocus(receiptControl)).toBe(true);
+      // Do not let an unrelated history check erase a newer command outcome.
+      await reviewControl.press("Enter");
+      await page
+        .getByRole("button", { name: "Confirm approval" })
+        .press("Enter");
+      const unknownApproval = page.getByText(/Approval outcome is unknown/);
+      await unknownApproval.waitFor();
+      expect(approvals).toBe(3);
       for (const moveFocus of [false, true]) {
         const recheckStarted = Promise.withResolvers();
         const releaseRecheck = Promise.withResolvers();
@@ -1680,6 +1688,7 @@ it.skipIf(!existsSync(chrome))(
             })
             .waitFor({ timeout: 2000 });
           expect(await receiptControl.count()).toBe(0);
+          expect(await unknownApproval.count()).toBe(1);
           expect(
             await hasFocus(
               moveFocus
@@ -1696,6 +1705,32 @@ it.skipIf(!existsSync(chrome))(
         await journal.press("Enter");
         await receiptControl.waitFor();
       }
+      const cancelledJournalStarted = Promise.withResolvers();
+      const releaseCancelledJournal = Promise.withResolvers();
+      const delayedJournal = async (route) => {
+        cancelledJournalStarted.resolve();
+        await releaseCancelledJournal.promise;
+        await route.fallback().catch(() => {});
+      };
+      await page.route("**/api/kernel/owner-journal", delayedJournal);
+      try {
+        await journal.press("Enter");
+        await cancelledJournalStarted.promise;
+        await page.getByText("Reading command history.").waitFor();
+        await switchVisibility("hidden");
+        await switchVisibility("visible");
+        expect(await journal.isEnabled()).toBe(true);
+        expect(await receiptControl.count()).toBe(0);
+        expect(await page.getByText("Reading command history.").count()).toBe(
+          0,
+        );
+        expect(await unknownApproval.count()).toBe(1);
+      } finally {
+        releaseCancelledJournal.resolve();
+        await page.unroute("**/api/kernel/owner-journal", delayedJournal);
+      }
+      await journal.press("Enter");
+      await receiptControl.waitFor();
       const replayStarted = Promise.withResolvers();
       const releaseReplay = Promise.withResolvers();
       await page.route("**/api/kernel/owner-replay", async (route) => {

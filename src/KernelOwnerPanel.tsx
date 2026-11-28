@@ -448,6 +448,7 @@ function KernelApprovalPanel({
   }>();
   const [pending, setPending] = useState(false);
   const [history, setHistory] = useState<HistoryEntry[]>();
+  const [historyMessage, setHistoryMessage] = useState("");
   const confirmControl = useRef<HTMLButtonElement>(null);
   const [historyVisible, setHistoryVisible] = useState(false);
   const historyNavigation = useNavigationFocus(
@@ -465,6 +466,7 @@ function KernelApprovalPanel({
       setPending(false);
       setHistory(undefined);
       setHistoryVisible(false);
+      setHistoryMessage("");
     };
     const visibility = () => {
       if (document.visibilityState !== "visible") clear();
@@ -482,7 +484,9 @@ function KernelApprovalPanel({
     let deadline: ReturnType<typeof setTimeout> | undefined;
     const unavailable = () => {
       setHistory(undefined);
-      setMessage("Command history unavailable. Inspect command history again.");
+      setHistoryMessage(
+        "Command history unavailable. Inspect command history again.",
+      );
     };
     const timer = setTimeout(async () => {
       historyNavigation.remember();
@@ -683,7 +687,7 @@ function KernelApprovalPanel({
     const timeout = setTimeout(() => controller.abort(), 10000);
     setHistory(undefined);
     setReview(undefined);
-    setMessage("Reading command history.");
+    setHistoryMessage("Reading command history.");
     setPending(true);
     try {
       const response = await fetch("/api/kernel/owner-journal", {
@@ -819,12 +823,12 @@ function KernelApprovalPanel({
         return;
       setHistory(commands);
       setHistoryVisible(true);
-      setMessage(
+      setHistoryMessage(
         "Command history is local evidence, not proof of current authority or effects.",
       );
     } catch {
       if (current === generation.current)
-        setMessage("Command history unavailable.");
+        setHistoryMessage("Command history unavailable.");
     } finally {
       clearTimeout(timeout);
       if (current === generation.current) setPending(false);
@@ -839,6 +843,7 @@ function KernelApprovalPanel({
     if (pending || document.visibilityState !== "visible") return;
     if (document.activeElement === trigger) historyHeading.current?.focus();
     setHistory(undefined);
+    setHistoryMessage("");
     setPending(true);
     setMessage(
       readOnly
@@ -967,6 +972,7 @@ function KernelApprovalPanel({
           Inspect command history
         </button>
         <p role="status">{message}</p>
+        <p role="status">{historyMessage}</p>
         {history && historyVisible && (
           <ul>
             {history.map((entry) => (
