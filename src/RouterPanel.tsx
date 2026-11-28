@@ -159,7 +159,7 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
         : summaries[next.status];
       const stale = staleCount(next);
       announce(
-        `${summary}${stale ? " The sample includes resources reported stale." : ""}${next.gap ? " Router history has a gap." : ""}`,
+        `${summary}${stale ? " The sample includes resources reported stale." : ""}${next.gap ? ` ${next.gap}` : ""}`,
         JSON.stringify([summary, next.observation, next.gap, stale]),
       );
     } catch {

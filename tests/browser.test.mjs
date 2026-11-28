@@ -1771,8 +1771,11 @@ it.skipIf(!existsSync(chrome))(
               schema_version: 1,
               cursor: position,
               events: [],
-              resync: null,
-              resync_reason: null,
+              resync:
+                upstreamMode === "gap"
+                  ? { snapshot: fakeSnapshot, cursor: position }
+                  : null,
+              resync_reason: upstreamMode === "gap" ? "history_gap" : null,
               provenance_current: true,
             }),
           );
@@ -1817,6 +1820,16 @@ it.skipIf(!existsSync(chrome))(
       });
       await page.getByRole("button", { name: "Refresh Router" }).click();
       const routerObservation = page.getByText("Inspect Router observations");
+      const routerStatus = page
+        .getByRole("region", { name: "Router observer" })
+        .getByRole("status");
+      await routerStatus
+        .filter({
+          hasText:
+            "Earlier Router progress is unavailable; this snapshot does not reconstruct history.",
+        })
+        .waitFor();
+      expect(await routerStatus.textContent()).not.toContain("History gap:");
       await routerObservation.waitFor();
       await page
         .getByText(
@@ -1839,6 +1852,14 @@ it.skipIf(!existsSync(chrome))(
         )
         .waitFor();
       await page.getByText("m".repeat(64), { exact: false }).waitFor();
+      upstreamMode = "gap";
+      await page.getByRole("button", { name: "Refresh Router" }).press("Enter");
+      await routerStatus
+        .filter({
+          hasText: "History gap: history_gap. Snapshot resynchronized.",
+        })
+        .waitFor();
+      upstreamMode = "connected";
       await page.setViewportSize({ width: 390, height: 844 });
       const routerLink = page.getByRole("link", {
         name: /Open Router administration/,
@@ -2124,9 +2145,6 @@ it.skipIf(!existsSync(chrome))(
         await releaseRetry.promise;
         await route.abort("failed");
       });
-      const routerStatus = page
-        .getByRole("region", { name: "Router observer" })
-        .getByRole("status");
       await page
         .getByRole("button", { name: "Retry Router status" })
         .press("Enter");
@@ -2491,16 +2509,13 @@ it.skipIf(!existsSync(chrome))(
       await page.bringToFront();
       await page.reload();
       await page.getByText("synthetic-private-proposal").waitFor();
+      await page.getByRole("button", { name: "Log out" }).focus();
       await page.evaluate(() => {
         Object.defineProperty(document, "visibilityState", {
           configurable: true,
-          value: "visible",
+          value: "hidden",
         });
-        window.visibilityEvents = 0;
-        document.addEventListener(
-          "visibilitychange",
-          () => window.visibilityEvents++,
-        );
+        document.dispatchEvent(new Event("visibilitychange"));
       });
       await other.evaluate(() => {
         Object.defineProperty(document, "visibilityState", {
@@ -2563,7 +2578,13 @@ it.skipIf(!existsSync(chrome))(
         "You are signed out.",
       );
       expect(await page.locator("pre").count()).toBe(0);
-      expect(await page.evaluate(() => window.visibilityEvents)).toBe(0);
+      const signInHeading = page.getByRole("heading", { name: "Sign in" });
+      expect(await hasFocus(signInHeading)).toBe(false);
+      await switchVisibility("visible");
+      expect(await hasFocus(signInHeading)).toBe(true);
+      expect(await page.getByRole("status").textContent()).toBe(
+        "Your session expired or was revoked. Sign in again.",
+      );
       await other.close();
       await page.unroute("**/api/kernel/owner");
       await page.reload();

@@ -31,6 +31,9 @@ export default function App() {
   const invalidatedGeneration = useRef<number>(-1);
   const skipLink = useRef<HTMLAnchorElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
+  const main = useRef<HTMLElement>(null);
+  const focusedBeforeHide = useRef(false);
+  const deferredSignInFocus = useRef(false);
   const confirmation = useRef<HTMLInputElement>(null);
   const screen = !session
     ? "connection"
@@ -46,6 +49,11 @@ export default function App() {
   useLayoutEffect(() => {
     const before = previousScreen.current;
     previousScreen.current = screen;
+    deferredSignInFocus.current =
+      before === "overview" &&
+      screen === "login" &&
+      document.visibilityState !== "visible" &&
+      focusedBeforeHide.current;
     // Do not interrupt initial navigation or pull focus into an inactive tab.
     if (
       before !== screen &&
@@ -58,10 +66,37 @@ export default function App() {
     retryRequested.current = false;
   }, [screen]);
 
+  useEffect(() => {
+    const rememberFocus = () => {
+      focusedBeforeHide.current =
+        main.current?.contains(document.activeElement) ?? false;
+    };
+    const onVisibility = () => {
+      if (document.visibilityState !== "visible") {
+        rememberFocus();
+        return;
+      }
+      if (deferredSignInFocus.current) {
+        deferredSignInFocus.current = false;
+        if (document.activeElement === document.body) heading.current?.focus();
+      }
+      focusedBeforeHide.current = false;
+    };
+    // Capture before panels discard their transient controls on hide.
+    document.addEventListener("visibilitychange", onVisibility, true);
+    return () =>
+      document.removeEventListener("visibilitychange", onVisibility, true);
+  }, []);
+
   function invalidate(
     broadcast: boolean,
     notice = "Your session expired or was revoked. Sign in again.",
   ) {
+    if (
+      document.visibilityState !== "visible" &&
+      main.current?.contains(document.activeElement)
+    )
+      focusedBeforeHide.current = true;
     invalidatedGeneration.current = ++generation.current;
     setSession({ configured: true, authenticated: false });
     setChecking(false);
@@ -200,7 +235,7 @@ export default function App() {
   }
 
   const content = (
-    <main id="main-content" tabIndex={-1}>
+    <main id="main-content" ref={main} tabIndex={-1}>
       <p className="eyebrow">CREATIDY / CONSOLE</p>
       <h1 ref={heading} tabIndex={-1}>
         {screen === "overview"
