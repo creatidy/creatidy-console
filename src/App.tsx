@@ -18,6 +18,8 @@ type Session = {
   miInspectionOrigin?: string;
 };
 
+const signedOutNotice = "You are signed out.";
+
 export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [error, setError] = useState("");
@@ -64,7 +66,11 @@ export default function App() {
     setSession({ configured: true, authenticated: false });
     setChecking(false);
     setError("");
-    setSessionNotice(notice);
+    // A duplicate denial for the cleared session must not relabel confirmed
+    // logout. Starting a new session check or login clears this notice.
+    setSessionNotice((previous) =>
+      previous === signedOutNotice ? previous : notice,
+    );
     if (broadcast) {
       try {
         channel.current?.postMessage(null);
@@ -176,7 +182,7 @@ export default function App() {
         // A passive 401 may have already cleared this session and notified peers.
         // Confirm only locally, unless a newer session check has superseded it.
         if (response.ok && invalidatedGeneration.current === generation.current)
-          setSessionNotice("You are signed out.");
+          setSessionNotice(signedOutNotice);
         return;
       }
       if (response.status === 401) {
@@ -184,7 +190,7 @@ export default function App() {
         return;
       }
       if (!response.ok) throw new Error();
-      invalidate(true, "You are signed out.");
+      invalidate(true, signedOutNotice);
     } catch {
       if (current === generation.current)
         setError("Logout could not be confirmed. Check the server connection.");

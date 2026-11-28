@@ -2187,15 +2187,52 @@ it.skipIf(!existsSync(chrome))(
           .getByRole("button", { name: "Refresh Router" })
           .press("Enter");
         await routerStatus
-          .filter({ hasText: /did not queue a refresh.*Retry the refresh/ })
+          .filter({ hasText: /did not queue a refresh.*retry the refresh/ })
           .waitFor();
         if (failCache)
           expect(await routerStatus.textContent()).toContain(
             "Router status unavailable",
           );
       }
-      await page.unroute("**/api/router/refresh");
       await page.unroute("**/api/router");
+      await page.clock.fastForward(10000);
+      await page
+        .getByText(/Console could not confirm a new Router observation/)
+        .waitFor();
+      const busyCacheStarted = Promise.withResolvers();
+      const releaseBusyCache = Promise.withResolvers();
+      await page.route("**/api/router", async (route) => {
+        if (route.request().method() !== "GET") return route.fallback();
+        busyCacheStarted.resolve();
+        await releaseBusyCache.promise;
+        await route.abort("failed");
+      });
+      await page.getByRole("button", { name: "Refresh Router" }).press("Enter");
+      try {
+        await busyCacheStarted.promise;
+        await switchVisibility("hidden");
+        await page
+          .getByRole("button", { name: "Retry Router status" })
+          .waitFor();
+      } finally {
+        releaseBusyCache.resolve();
+      }
+      await page.unroute("**/api/router");
+      await switchVisibility("visible");
+      await routerStatus
+        .filter({ hasText: /did not queue a refresh.*retry the refresh/ })
+        .waitFor();
+      const quietCache = page.waitForResponse(`${origin}/api/router`);
+      await page.clock.fastForward(10000);
+      await quietCache;
+      await page
+        .getByText(/Console could not confirm a new Router observation/)
+        .waitFor();
+      expect(await routerStatus.textContent()).toBe("");
+      await page.evaluate(() =>
+        Reflect.deleteProperty(document, "visibilityState"),
+      );
+      await page.unroute("**/api/router/refresh");
       expect(calls).toBe(reconciledCalls);
       await page.route("**/api/router", (route) =>
         route.fulfill({ status: 401, json: { error: "expired" } }),
@@ -2438,6 +2475,17 @@ it.skipIf(!existsSync(chrome))(
         }),
       );
       const other = await page.context().newPage();
+      await other.addInitScript(() => {
+        window.peerInvalidations = 0;
+        window.BroadcastChannel = class extends BroadcastChannel {
+          set onmessage(handler) {
+            super.onmessage = (event) => {
+              handler(event);
+              if (event.data === null) window.peerInvalidations++;
+            };
+          }
+        };
+      });
       await other.goto(origin);
       await other.getByRole("heading", { name: "Your console" }).waitFor();
       await page.bringToFront();
@@ -2501,6 +2549,19 @@ it.skipIf(!existsSync(chrome))(
         await hasFocus(other.getByRole("heading", { name: "Sign in" })),
       ).toBe(true);
       await page.getByRole("heading", { name: "Sign in" }).waitFor();
+      const peerMessages = await other.evaluate(() => window.peerInvalidations);
+      await page.evaluate(() => {
+        const peer = new BroadcastChannel("creatidy-console-session-v1");
+        peer.postMessage(null);
+        peer.close();
+      });
+      await other.waitForFunction(
+        (previous) => window.peerInvalidations > previous,
+        peerMessages,
+      );
+      expect(await other.getByRole("status").textContent()).toBe(
+        "You are signed out.",
+      );
       expect(await page.locator("pre").count()).toBe(0);
       expect(await page.evaluate(() => window.visibilityEvents)).toBe(0);
       await other.close();

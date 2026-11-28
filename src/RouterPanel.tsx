@@ -31,7 +31,7 @@ const summaries: Record<RouterView["status"], string> = {
 };
 
 const busyInstruction =
-  "Router did not queue a refresh. Retry the refresh to read the new configuration.";
+  "Router did not queue a refresh. Check Router status if unavailable, then retry the refresh.";
 
 function staleCount(view: RouterView | null) {
   return (
@@ -49,6 +49,7 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
   const [refreshBusy, setRefreshBusy] = useState(false);
   const [factsOpen, setFactsOpen] = useState(false);
   const [announcement, setAnnouncement] = useState("");
+  const busyAnnouncementPending = useRef(false);
   const lastAnnouncement = useRef("");
   const active = useRef<AbortController | null>(null);
   const navigation = useNavigationFocus(activity === null);
@@ -63,7 +64,6 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
     active.current = controller;
     const applicable = () =>
       active.current === controller && document.visibilityState === "visible";
-    let busy = false;
     const request = async (post = false) => {
       const deadline = new AbortController();
       const timer = setTimeout(() => deadline.abort(), post ? 10000 : 5000);
@@ -93,7 +93,7 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
           return null;
         }
         if (post && response.status === 503) {
-          busy = true;
+          busyAnnouncementPending.current = true;
           setRefreshBusy(true);
           await response.body?.cancel();
           return null;
@@ -121,12 +121,17 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
     );
     setActivity(intent);
     const announce = (message: string, key = message) => {
-      if (intent !== "passive" || key !== lastAnnouncement.current)
-        setAnnouncement(busy ? `${busyInstruction} ${message}` : message);
+      if (busyAnnouncementPending.current) {
+        busyAnnouncementPending.current = false;
+        setAnnouncement(`${busyInstruction} ${message}`);
+      } else if (intent !== "passive" || key !== lastAnnouncement.current) {
+        setAnnouncement(message);
+      }
       lastAnnouncement.current = key;
     };
     try {
       if (refresh) {
+        busyAnnouncementPending.current = false;
         setRefreshBusy(false);
         // Keep the baseline even if the POST is interrupted, or the cache
         // cannot be read afterwards. Only producer evidence can resolve it.
@@ -225,7 +230,8 @@ export default function RouterPanel({ expired }: { expired: () => void }) {
       {refreshBusy && (
         <p>
           An earlier Router refresh is still finishing. Retry the refresh to
-          read the new configuration.
+          read the new configuration. If status is unavailable, check it before
+          trying the refresh again.
         </p>
       )}
       <button
