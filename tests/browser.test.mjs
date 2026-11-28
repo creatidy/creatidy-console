@@ -1663,12 +1663,51 @@ it.skipIf(!existsSync(chrome))(
       expect(await page.evaluate(() => document.activeElement?.id)).toBe(
         "kernel-owner-heading",
       );
-      await page.clock.fastForward(10000);
+      await page
+        .getByRole("button", { name: "Retry Kernel proposal" })
+        .press("Enter");
       await page.getByText(hostile, { exact: false }).first().waitFor();
+      expect(
+        await hasFocus(
+          page.getByRole("heading", { name: "Kernel owner actions" }),
+        ),
+      ).toBe(true);
       expect(checks).toBe(2);
       expect(proposalReads).toBe(2);
       expect(await forgeLink.isVisible()).toBe(false);
       await page.unroute("**/api/kernel/session-check");
+      const retryCacheRead = Promise.withResolvers();
+      const releaseRetryCacheRead = Promise.withResolvers();
+      let retryChecks = 0;
+      const failThenHold = async (route) => {
+        if (++retryChecks === 1) return route.abort("failed");
+        retryCacheRead.resolve();
+        await releaseRetryCacheRead.promise;
+        return route.continue();
+      };
+      await page.route("**/api/kernel/session-check", failThenHold);
+      await page.evaluate(() =>
+        document.dispatchEvent(new Event("visibilitychange")),
+      );
+      const cachedRetry = page.getByRole("button", {
+        name: "Retry Kernel proposal",
+      });
+      await cachedRetry.press("Enter");
+      const movedFocus = page.getByRole("button", {
+        name: "Inspect command history",
+      });
+      try {
+        await retryCacheRead.promise;
+        await cachedRetry.waitFor({ state: "detached" });
+        expect(await page.locator("pre").count()).toBe(0);
+        await movedFocus.focus();
+      } finally {
+        releaseRetryCacheRead.resolve();
+      }
+      await page.getByText(hostile, { exact: false }).first().waitFor();
+      expect(await hasFocus(movedFocus)).toBe(true);
+      expect(proposalReads).toBe(2);
+      await page.unroute("**/api/kernel/session-check", failThenHold);
       let releaseCheck;
       let checkStarted;
       const started = new Promise((resolve) => {

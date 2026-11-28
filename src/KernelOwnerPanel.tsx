@@ -161,9 +161,13 @@ export default function KernelOwnerPanel({ expired }: { expired: () => void }) {
       const active = controller;
       const signal = active.signal;
       const timeout = setTimeout(() => active.abort(), 11000);
+      setStatus((previous) =>
+        !cached || previous === "busy" || previous === "disconnected"
+          ? "checking"
+          : previous,
+      );
       try {
         if (!cached) {
-          setStatus("checking");
           const response = await fetch("/api/kernel/owner", {
             cache: "no-store",
             signal,
