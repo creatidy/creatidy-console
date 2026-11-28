@@ -1648,6 +1648,54 @@ it.skipIf(!existsSync(chrome))(
       await receiptControl.waitFor();
       await page.unroute("**/api/kernel/session-check", holdHistoryCheck);
       expect(await hasFocus(receiptControl)).toBe(true);
+      for (const moveFocus of [false, true]) {
+        const recheckStarted = Promise.withResolvers();
+        const releaseRecheck = Promise.withResolvers();
+        const failedRecheck = async (route) => {
+          recheckStarted.resolve();
+          await releaseRecheck.promise;
+          await route.abort("failed").catch(() => {});
+        };
+        await page.route("**/api/kernel/session-check", failedRecheck);
+        try {
+          await receiptControl.focus();
+          await page.clock.fastForward(10000);
+          await recheckStarted.promise;
+          await receiptControl.waitFor({ state: "detached" });
+          if (moveFocus) {
+            await journal.focus();
+            releaseRecheck.resolve();
+          } else {
+            await page.clock.fastForward(5000);
+          }
+          const historyRegion = page.getByRole("region", {
+            name: "Command history",
+            exact: true,
+          });
+          await historyRegion
+            .getByRole("status")
+            .filter({
+              hasText:
+                "Command history unavailable. Inspect command history again.",
+            })
+            .waitFor({ timeout: 2000 });
+          expect(await receiptControl.count()).toBe(0);
+          expect(
+            await hasFocus(
+              moveFocus
+                ? journal
+                : historyRegion.getByRole("heading", {
+                    name: "Command history",
+                  }),
+            ),
+          ).toBe(true);
+        } finally {
+          releaseRecheck.resolve();
+          await page.unroute("**/api/kernel/session-check", failedRecheck);
+        }
+        await journal.press("Enter");
+        await receiptControl.waitFor();
+      }
       const replayStarted = Promise.withResolvers();
       const releaseReplay = Promise.withResolvers();
       await page.route("**/api/kernel/owner-replay", async (route) => {
@@ -1673,9 +1721,13 @@ it.skipIf(!existsSync(chrome))(
       await page.getByText(/A historical receipt was returned/).waitFor();
       expect(await hasFocus(historyHeading)).toBe(true);
       await page.clock.fastForward(10000);
+      await page
+        .getByRole("button", { name: "Inspect approval scope" })
+        .click();
       await page.getByText(/Approval scope received/).waitFor();
       expect(await page.locator("pre").count()).toBe(2);
       let checks = 0;
+      if (!(await forgeLink.isVisible())) await forgeSummary.press("Enter");
       await forgeLink.focus();
       await page.route("**/api/kernel/session-check", (route) => {
         checks++;

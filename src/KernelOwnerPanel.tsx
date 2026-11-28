@@ -479,9 +479,18 @@ function KernelApprovalPanel({
   useEffect(() => {
     if (!history) return;
     const controller = new AbortController();
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    const unavailable = () => {
+      setHistory(undefined);
+      setMessage("Command history unavailable. Inspect command history again.");
+    };
     const timer = setTimeout(async () => {
       historyNavigation.remember();
       setHistoryVisible(false);
+      deadline = setTimeout(() => {
+        controller.abort();
+        unavailable();
+      }, 5000);
       try {
         const response = await fetch("/api/kernel/session-check", {
           cache: "no-store",
@@ -503,11 +512,14 @@ function KernelApprovalPanel({
           setHistory([...history]);
         }
       } catch {
-        if (!controller.signal.aborted) setHistory(undefined);
+        if (!controller.signal.aborted) unavailable();
+      } finally {
+        clearTimeout(deadline);
       }
     }, 10000);
     return () => {
       clearTimeout(timer);
+      clearTimeout(deadline);
       controller.abort();
     };
   }, [history, expired]);
