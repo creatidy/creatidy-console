@@ -731,9 +731,20 @@ it.skipIf(!existsSync(chrome))(
       expect(
         await page.getByText(`Receipt spec SHA-256: ${"c".repeat(64)}`).count(),
       ).toBe(1);
+      const commandHistory = page.getByRole("region", {
+        name: "Command history",
+        exact: true,
+      });
+      expect(await commandHistory.count()).toBe(1);
       expect(
-        await page.locator('[aria-label="Command history"] img').count(),
-      ).toBe(0);
+        await commandHistory
+          .getByText(
+            'Decision ID: <img src=x onerror="window.journalInjected=1">',
+            { exact: true },
+          )
+          .count(),
+      ).toBe(1);
+      expect(await commandHistory.locator("img").count()).toBe(0);
       expect(await page.evaluate(() => window.journalInjected)).toBeUndefined();
       expect(
         await page
@@ -1724,6 +1735,63 @@ it.skipIf(!existsSync(chrome))(
       expect(await hasFocus(movedFocus)).toBe(true);
       expect(proposalReads).toBe(3);
       await page.unroute("**/api/kernel/session-check", failThenHold);
+
+      // The first outage hides the evidence. Later passive checks must keep
+      // that same notice and control, even if the response is delayed.
+      const outage = page.getByText(/Kernel proposal unavailable/);
+      const failSessionCheck = (route) => route.abort("failed");
+      await page.route("**/api/kernel/session-check", failSessionCheck);
+      await page.clock.fastForward(10000);
+      await outage.waitFor();
+      await page.unroute("**/api/kernel/session-check", failSessionCheck);
+      await cachedRetry.focus();
+      const retryNode = await cachedRetry.elementHandle();
+      const outageNode = await outage.elementHandle();
+      for (const recover of [false, false, true]) {
+        const started = Promise.withResolvers();
+        const release = Promise.withResolvers();
+        const passiveCheck = async (route) => {
+          started.resolve();
+          await release.promise;
+          if (recover) return route.continue();
+          return route.abort("failed");
+        };
+        await page.route("**/api/kernel/session-check", passiveCheck);
+        const finished = recover
+          ? page.waitForResponse(`${origin}/api/kernel/session-check`)
+          : page.waitForEvent(
+              "requestfailed",
+              (request) =>
+                request.url() === `${origin}/api/kernel/session-check`,
+            );
+        try {
+          await page.clock.fastForward(10000);
+          await started.promise;
+          expect(
+            await retryNode.evaluate((node) => node === document.activeElement),
+          ).toBe(true);
+          expect(
+            await outageNode.evaluate(
+              (node) =>
+                node.isConnected &&
+                node.textContent.includes("Kernel proposal unavailable"),
+            ),
+          ).toBe(true);
+          expect(await page.locator("pre").count()).toBe(0);
+        } finally {
+          release.resolve();
+        }
+        await finished;
+        await page.unroute("**/api/kernel/session-check", passiveCheck);
+        if (!recover) await outage.waitFor();
+      }
+      await page.getByText(hostile, { exact: false }).first().waitFor();
+      expect(
+        await hasFocus(
+          page.getByRole("heading", { name: "Kernel owner actions" }),
+        ),
+      ).toBe(true);
+      expect(proposalReads).toBe(3);
       let releaseCheck;
       let checkStarted;
       const started = new Promise((resolve) => {

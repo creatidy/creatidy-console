@@ -39,6 +39,7 @@ export default function KernelOwnerPanel({ expired }: { expired: () => void }) {
   const scopeGeneration = useRef(0);
   const scopeRequest = useRef<AbortController | undefined>(undefined);
   const retryProposal = useRef<(() => void) | undefined>(undefined);
+  const retryButton = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     const hide = () => {
@@ -155,7 +156,7 @@ export default function KernelOwnerPanel({ expired }: { expired: () => void }) {
       if (timer) clearTimeout(timer);
       setVisible(false);
     };
-    const check = async () => {
+    const check = async (explicitRetry = false) => {
       hide();
       if (document.visibilityState !== "visible") return;
       const current = generation;
@@ -163,11 +164,8 @@ export default function KernelOwnerPanel({ expired }: { expired: () => void }) {
       const active = controller;
       const signal = active.signal;
       const timeout = setTimeout(() => active.abort(), 11000);
-      setStatus((previous) =>
-        !cached || previous === "busy" || previous === "disconnected"
-          ? "checking"
-          : previous,
-      );
+      // Keep the outage notice and Retry control stable during cached polls.
+      if (!cached || explicitRetry) setStatus("checking");
       try {
         if (!cached) {
           const response = await fetch("/api/kernel/owner", {
@@ -243,6 +241,9 @@ export default function KernelOwnerPanel({ expired }: { expired: () => void }) {
         if (current !== generation || document.visibilityState !== "visible")
           return;
         if (signal.aborted) throw new Error();
+        // A passive recovery removes Retry only once its check has succeeded.
+        if (document.activeElement === retryButton.current)
+          navigation.fallback.current?.focus();
         setProposal(cached);
         setCanApprove(cached.canApprove);
         setStatus("connected");
@@ -264,7 +265,7 @@ export default function KernelOwnerPanel({ expired }: { expired: () => void }) {
       else hide();
     };
     document.addEventListener("visibilitychange", visibility);
-    retryProposal.current = () => void check();
+    retryProposal.current = () => void check(true);
     void check();
     return () => {
       hide();
@@ -302,6 +303,7 @@ export default function KernelOwnerPanel({ expired }: { expired: () => void }) {
       {(status === "busy" || status === "disconnected") && (
         <button
           type="button"
+          ref={retryButton}
           data-navigation-focus="proposal-retry"
           onClick={() => retryProposal.current?.()}
         >
